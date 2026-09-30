@@ -7,6 +7,8 @@
 | Faizal Rahman | [@faizaljnu](https://github.com/faizaljnu) | fr2471 |
 | Debasmith Mandal | [@spexasroot](https://github.com/spexasroot) | dm412 |
 | Vikram Markali | [@vikram739](https://github.com/vikram739) | vrm9190 |
+| Darsh Shani | [@noobui-omen](https://github.com/noobui-omen) | ds8292 |
+| Prateek Saxena | [@prateeks99](https://github.com/prateeks99)| ps5838 |
 
 ## Contributing
 

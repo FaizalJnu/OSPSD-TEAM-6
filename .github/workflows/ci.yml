@@ -3,13 +3,23 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
 
 jobs:
   checks:
     runs-on: ubuntu-latest
     steps:
+      # By default a pull request run tests a temporary merge commit. Check out the
+      # pull request's own head commit instead, so the result belongs to the exact
+      # commit that was submitted. Pushes to main and release tags test their own commit.
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Show the commit under test
+        run: git log -1 --format='%H %s'
+
       - uses: astral-sh/setup-uv@v7
 
       - name: Install dependencies exactly as locked
@@ -20,6 +30,9 @@ jobs:
 
       - name: Check formatting
         run: uv run ruff format --check .
+
+      - name: Type check
+        run: uv run mypy
 
       - name: Fast tests (in-memory storage, no credentials needed)
         run: uv run pytest

@@ -38,7 +38,8 @@ router = APIRouter()
 
 def get_service(request: Request) -> FileService:
     """Hand each route the FileService that ``main.create_app`` stored on the app."""
-    return request.app.state.file_service
+    service: FileService = request.app.state.file_service
+    return service
 
 
 # Shorthand for route signatures: "this parameter is the FileService".

@@ -18,8 +18,15 @@ Team 6, OSPSD Fall 2026.
 
 ## Requirements
 
-* [uv](https://docs.astral.sh/uv/), which also installs the required Python version
+* [uv](https://docs.astral.sh/uv/)
+* Python 3.13, pinned in `.python-version`. uv downloads it automatically if
+  it is not installed.
 * For a real provider: an S3-compatible bucket and an access key pair
+
+Dependencies are locked in `uv.lock`, which is committed. `uv sync` installs
+exactly those versions into `.venv`. CI runs `uv sync --locked`, which fails if
+`pyproject.toml` and `uv.lock` disagree. To add or upgrade a dependency, use
+`uv add <package>` (or `uv add --dev <package>`) and commit both files.
 
 ## Quick start (no provider needed)
 
@@ -42,7 +49,18 @@ server stops.
 3. Generate S3 credentials under Profile > your user > **Customer secret keys** >
    Generate secret key. The secret is shown only once, so copy it immediately.
    The access key is listed after the key is created.
-4. Copy `.env.example` to `.env` and fill in the values:
+4. Make sure that user is allowed to use the bucket. A customer secret key acts
+   with the permissions of the user who owns it. Tenancy administrators already
+   have access. Any other user needs to be in a group with this policy:
+
+   ```text
+   Allow group <group> to read buckets in compartment <compartment> where target.bucket.name = '<bucket>'
+   Allow group <group> to manage objects in compartment <compartment> where target.bucket.name = '<bucket>'
+   ```
+
+   The service reads, writes, lists, and deletes objects in that one bucket. It
+   never creates or deletes buckets.
+5. Copy `.env.example` to `.env` and fill in the values:
 
    ```bash
    cp .env.example .env
@@ -54,7 +72,7 @@ server stops.
    # S3_SECRET_KEY=<secret key>
    ```
 
-5. Start the server with the S3 backend:
+6. Start the server with the S3 backend:
 
    ```bash
    uv run --env-file .env uvicorn storage_service.main:create_app --factory --reload
@@ -109,12 +127,34 @@ include control characters.
 uv run pytest                                        # fast tests, in-memory, no network
 uv run --env-file .env pytest                        # also runs the S3 contract tests
 uv run ruff check . && uv run ruff format --check .  # lint and formatting
+uv run mypy                                          # type check (strict on src/)
 ```
+
+CI runs the lint, format, type, and fast test checks on every pull request,
+every push to `main`, and every release tag. All of them must pass before a
+merge or a release.
 
 `tests/test_storage_contract.py` runs the same tests against every storage
 backend to check that the in-memory test double behaves like the real provider.
 When run against a real bucket, these tests write under `contract-tests/` and
 delete their files afterwards.
+
+## Clean up
+
+* Stop the server with Ctrl+C. With the `memory` backend, this also deletes
+  every stored file.
+* Files uploaded to a real bucket stay there until you delete them, either
+  with `curl -X DELETE $B/files/<key>` or in the OCI Console. The contract tests
+  remove their own files. If a test run is interrupted, delete anything left
+  under `contract-tests/`.
+* If the server stops during a large upload, the bucket can keep an unfinished
+  multipart upload. Remove it in the OCI Console under the bucket's
+  **Multipart uploads**.
+* When you no longer need provider access, delete `.env`, then delete the
+  customer secret key in the OCI Console (Profile > your user > Customer secret
+  keys). Delete the bucket too if it was only for this project. It must be empty
+  first.
+* `rm -rf .venv` removes the local environment. `uv sync` recreates it.
 
 ## Design notes
 
@@ -152,6 +192,8 @@ delete their files afterwards.
 - Open an issue using the [bug report](.github/ISSUE_TEMPLATE/bug_report.md) or [feature request](.github/ISSUE_TEMPLATE/feature_request.md) template.
 - Link every pull request to an issue and complete the [PR template](.github/pull_request_template.md) checklist.
 - Read [AGENTS.md](AGENTS.md) for the code map, architecture rules, and check commands.
+- Read [CONTRIBUTING.md](CONTRIBUTING.md) for how the team works: task ownership,
+  review and merge rules, versioning, releases, and fixing a bad release.
 
 ## License
 

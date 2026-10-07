@@ -38,15 +38,19 @@ tests/
 uv sync                                    # install exactly what uv.lock says
 uv run pytest                              # fast tests, no network
 uv run --env-file .env pytest              # include real-provider contract tests
+uv run mypy                                # type check (strict on src/)
 uv run ruff check --fix . && uv run ruff format .
 ```
 
-CI runs lint, the format check, and the fast tests on every push and pull request.
+CI runs lint, the format check, the type check, and the fast tests on every pull
+request, every push to `main`, and every release tag. All must pass to merge.
 
 ## Contribution rules
 
 * Small pull requests with one purpose, linked to an issue. At least one human
-  review before merging.
+  review before merging. Task ownership, merge rules, versioning, and releases
+  are in `CONTRIBUTING.md`.
+* Annotate every function in `src/`. mypy runs in strict mode there.
 * New behavior comes with tests. A bug fix starts with a failing test.
 * Say in the pull request if code was written with an AI assistant. The person
   who opens the pull request must be able to explain every line.

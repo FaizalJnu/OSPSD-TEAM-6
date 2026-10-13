@@ -124,29 +124,33 @@ include control characters.
 ## Tests
 
 ```bash
-uv run pytest                                        # fast tests, in-memory, no network
-uv run --env-file .env pytest                        # also runs the S3 contract tests
+uv run pytest                                        # fast tests: no network, no credentials
+uv run --env-file .env pytest -m provider            # only the tests that use your real bucket
 uv run ruff check . && uv run ruff format --check .  # lint and formatting
 uv run mypy                                          # type check (strict on src/)
 ```
 
 CI runs the lint, format, type, and fast test checks on every pull request,
 every push to `main`, and every release tag. All of them must pass before a
-merge or a release.
+merge or a release. CI has no provider credentials, so the `provider` tests
+never run there. Run them yourself before a release.
+
+Tests that need a real bucket are marked `provider` and are left out of the
+fast suite. With `-m provider`, they fail (rather than skip) if `.env` does not
+configure `STORAGE_BACKEND=s3`. They write only under `contract-tests/` and
+`api-tests/` and delete their files afterwards.
 
 `tests/test_storage_contract.py` runs the same tests against every storage
 backend to check that the in-memory test double behaves like the real provider.
-When run against a real bucket, these tests write under `contract-tests/` and
-delete their files afterwards.
 
 ## Clean up
 
 * Stop the server with Ctrl+C. With the `memory` backend, this also deletes
   every stored file.
 * Files uploaded to a real bucket stay there until you delete them, either
-  with `curl -X DELETE $B/files/<key>` or in the OCI Console. The contract tests
-  remove their own files. If a test run is interrupted, delete anything left
-  under `contract-tests/`.
+  with `curl -X DELETE $B/files/<key>` or in the OCI Console. The provider
+  tests remove their own files. If a test run is interrupted, delete anything
+  left under `contract-tests/` or `api-tests/`.
 * If the server stops during a large upload, the bucket can keep an unfinished
   multipart upload. Remove it in the OCI Console under the bucket's
   **Multipart uploads**.

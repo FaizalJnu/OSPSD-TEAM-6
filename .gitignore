@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Course handouts and the team's work plan: shared outside the repository.
+docs/*.txt
+instructions.md

@@ -3,13 +3,144 @@
 Bugs found while running the service against OCI Object Storage (bucket in
 `us-ashburn-1`, boto3 1.43). All three are confirmed with the observed output
 below. Each fix goes in its own PR, starting with a test that fails because of
-the bug (see "Bug tasks: shared process" in `instructions.md`).
+the bug.
 
 | ID | Problem | Impact | Owner | Reviewer |
 |---|---|---|---|---|
 | FIX-1 | OCI rejects every upload | Blocks everyone using OCI | Faizal | Debasmith |
-| FIX-2 | A missing bucket is reported as a missing file | Misleading 404s | Darsh (BUG-BUCKET) | Faizal |
-| FIX-3 | A malformed list cursor returns 502 on OCI and 200 in memory | Wrong error for a caller mistake | Prateek (BUG-CURSOR) | Vikram |
+| FIX-2 | A missing bucket is reported as a missing file | Misleading 404s | Darsh | Faizal |
+| FIX-3 | A malformed list cursor returns 502 on OCI and 200 in memory | Wrong error for a caller mistake | Prateek | Vikram |
+
+## How to work on a fix
+
+### Before you start
+
+* Read `README.md`, `AGENTS.md`, and `CONTRIBUTING.md`. `AGENTS.md` has the code
+  map and the architecture rules every fix must keep.
+* Install uv (`brew install uv`), then run `uv sync` and `uv run pytest`. Every
+  test should pass.
+* Use your own S3-compatible bucket and keys in `.env`. The README walks through
+  OCI. Never commit `.env`, and never paste keys into Slack, issues, or PRs. On
+  OCI, add the two FIX-1 lines below to your `.env` until FIX-1 is merged.
+* Branch from the latest `main` once the test-foundation PR (which adds the
+  fixtures below) is merged.
+
+### Tests and fixtures
+
+| Command | Runs |
+|---|---|
+| `uv run pytest` | Fast suite: no network, no credentials. CI runs this. |
+| `uv run --env-file .env pytest -m provider` | Only the tests marked `provider`, against your bucket |
+| `uv run ruff check --fix . && uv run ruff format . && uv run mypy` | Lint, format, type check |
+
+Fixtures in `tests/conftest.py`:
+
+* `client`: the HTTP API over in-memory storage.
+* `stubbed_s3`: the real `S3Storage` with botocore's `Stubber` in front of its
+  client. Queue responses with `stubber.add_response(...)` or
+  `stubber.add_client_error(...)`. A call with nothing queued fails instead of
+  reaching the network.
+* `provider_client` and `provider_prefix`: the HTTP API wired like production,
+  against your bucket. Mark these tests `@pytest.mark.provider`. Everything under
+  `provider_prefix` is deleted afterwards.
+
+`tests/test_delete.py` has one example test for `stubbed_s3` and one for
+`provider_client`.
+
+### Steps
+
+1. Open an issue with the bug report template and assign yourself. Record:
+   * the expected and observed behavior (copy them from this file, adding your
+     provider)
+   * the smallest reproduction
+   * the cause, and the evidence for it
+2. Create a branch named `<issue-number>-<short-name>`.
+3. **Write the failing test first.** Run it, and keep the failing output for the
+   PR. The failure must show the wrong behavior; a syntax or import error doesn't
+   count.
+4. Fix the bug, keeping provider details inside `storage/s3.py`. Run the test
+   again and keep the passing output.
+5. Run every check in the table above.
+6. Open a PR with `Closes #<issue>`. Make the title the behavior change, for
+   example "Return 400 for malformed list cursors", because it becomes the
+   squash commit message.
+7. Merge after the reviewer approves, CI is green, every comment is resolved, and
+   the branch is up to date with `main`. Squash and merge, then delete the
+   branch.
+
+If the bug does **not** reproduce on your provider, record what you observed
+(provider, request, response) in the issue and close it without a fix.
+
+### PR description
+
+Write it yourself. An agent can collect the facts for you, but the explanation
+must be yours.
+
+```markdown
+## Which issue does this PR close?
+Closes #
+
+## Problem and resulting behavior
+What was wrong and what the service does now. Show before and after: request,
+status, body.
+
+## Approach and why
+Why this fix. Alternatives you considered. Assumptions. Compatibility
+consequences (if this breaks the API, add the `breaking change` label).
+
+## What changed
+One line per changed file, naming the responsibility that required the change.
+
+## How it was verified
+- Failing test output before the fix, and passing output after.
+- Fast checks: commands and results.
+- Real-provider check: provider, request, expected result, observed result
+  (no keys in the output).
+
+## Status
+- What works:
+- What remains / known gaps:
+- Blocked on:
+
+## AI assistance
+Which tool you used and what it produced. "I reviewed every line and can explain it."
+
+## Checklist
+- [ ] Linked to an issue, one purpose
+- [ ] ruff check, ruff format --check, mypy, and pytest pass locally; CI is green
+- [ ] The fix starts with a failing test
+- [ ] Docs updated where behavior or setup changed
+- [ ] No .env, keys, or other secrets committed
+- [ ] I reviewed my own diff
+```
+
+### Reviewing
+
+Check out the branch and run the fast checks. Then run the PR's provider tests
+against **your own** bucket. Confirm that the new test fails without the fix
+(revert the fix locally) and passes with it. In your approval, say what you
+checked and what you observed. Label each comment as **blocking**, **design
+concern**, **question**, or **suggestion**.
+
+### Using a coding agent
+
+```text
+Read AGENTS.md, README.md, CONTRIBUTING.md, and fixesRequired.md. I own <FIX-n> in
+fixesRequired.md. Do only that fix.
+
+Before changing anything, tell me the test you will write first and what it
+asserts, then the files you will change. Wait for my OK.
+
+Write the failing test, run it, and show me the failure before fixing anything.
+Keep provider details inside storage/s3.py. Don't edit CI or the test, lint, or
+type configuration. Don't add dependencies. Never print or commit .env.
+
+Before saying you are done, run
+  uv run ruff check --fix . && uv run ruff format . && uv run mypy && uv run pytest
+and show me the output.
+```
+
+You are responsible for every line the agent writes.
 
 ## FIX-1: OCI rejects every upload
 
@@ -48,7 +179,8 @@ value set in `Config` takes precedence over the environment variables, so:
 
 **Tradeoff to state in the PR.** On AWS, uploads no longer carry the extra CRC
 checksum by default. TLS still protects the transfer. The setting stays inside
-`s3.py`, which is where provider quirks belong (grading 8.2).
+`s3.py`, which is where provider quirks belong (course grading rubric, section
+8.2).
 
 **Regression test.** The provider tests are the real check. Remove the two lines
 from your `.env`, run `uv run --env-file .env pytest -m provider`, and paste the
@@ -141,6 +273,6 @@ cursor, plus an HTTP test in `test_list.py` that expects 400.
 
 Every expected provider failure above writes a full traceback of about 60 lines
 to the server log. The log also includes the provider's raw message, which names
-the OCI namespace and bucket. Level 5 (section 5.5) and grading 9.3 ask for
-concise, sanitized failure logs. Handle this when we design the Level 5 error
+the OCI namespace and bucket. The course's Level 5 spec (section 5.5) and grading
+rubric (section 9.3) ask for concise, sanitized failure logs. Handle this when we design the Level 5 error
 model.

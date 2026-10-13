@@ -1,0 +1,113 @@
+1. Testing and debugging
+Your tests should show that your service meets its public contract, handles failures predictably, and preserves the state it promises to preserve. Write tests as you build each feature. Use them to check your assumptions, investigate failures, and make changes with confidence.
+Keep a short testing strategy beside your tests or in TESTING.md. Another developer should be able to understand what you tested, why those cases matter, and how to run them.
+1.1. Choose cases from the specification
+Before implementing a behavior, identify the situations that require different results. Divide inputs into meaningful categories, choose representative cases, and check the boundaries between them.
+For example, an operation with a maximum file size should have tests for an ordinary file, a file exactly at the limit, and a file just beyond it.
+Use the following questions to guide your choices:
+Area
+Questions to ask
+Inputs
+Which categories require different behavior? Where are the boundaries?
+Outputs
+Which results, errors, and side effects does the contract permit?
+State and history
+How do earlier operations affect this one?
+Interactions
+Which combinations of inputs or conditions could expose a defect?
+Dependencies
+What happens when a provider rejects a request, times out, or loses a response?
+Time and concurrency
+Where do deadlines, cancellation, or overlapping operations affect correctness?
+
+These areas are a starting point. Select those that apply to your service, and add others when needed. Testing each category separately may miss defects caused by their interaction. For example, pagination may work without a filter but skip records when filtering is enabled.
+For each important behavior, your testing strategy should identify:
+The contract being checked.
+The cases, boundaries, and properties you selected.
+The expected results and relevant side effects.
+Links to the tests.
+Significant gaps or limitations.
+You may group related operations. A separate report for every function is unnecessary.
+Test invalid public inputs that your API promises to reject. Internal helpers may rely on documented preconditions; their tests should respect those preconditions. Avoid inventing requirements that the specification does not impose.
+Worked example: collection traversal
+Suppose your API accepts a page limit L > 1. Let n be the number of matching records in an unchanged collection.
+Partition
+What it checks
+n = 0
+Empty results and completion behavior.
+0 < n < L
+A collection smaller than the requested limit.
+n = L
+Behavior exactly at the limit.
+n > L
+Traversal across multiple responses.
+
+Include cases such as n = L - 1 and n = L + 1. Test the smallest supported limit separately. Also check invalid limits and requests with absent, valid, and malformed continuation information.
+Where your contract supports them, include filters, equal sort keys, and continuation tokens used with the wrong collection or filter.
+For a fixed collection, follow the documented continuation rule until completion. Verify that:
+Every eligible record appears exactly once.
+No ineligible record appears.
+Record identities and contents are correct.
+Results follow the documented ordering and tie handling.
+Each response respects the requested limit.
+For example, create seven records and request at most three per response. The combined results should contain all seven exactly once. Do not require exactly three responses if your contract allows shorter pages.
+Compute the expected result independently from the fixture and specification. Reusing the traversal implementation to calculate the answer can reproduce the same bug in both places.
+A short or empty provider response may still contain continuation information. Include this case if your provider allows it. For changes between requests, test your documented consistency guarantee; a continuation token does not automatically provide a snapshot.
+This worked example may not be applicable to what you’ll be working on. However, it demonstrates the type of thinking required to test a piece of code. This kind of forethought helps you design better systems and avoid nasty bugs. 
+1.2. Test at useful boundaries
+Choose the test boundary according to the behavior you need to verify.
+Boundary
+What to test
+Application logic
+Validation rules, limits, transformations, and decisions that can run without HTTP or external I/O.
+HTTP API
+Request parsing, response models, status codes, errors, access rules, and observable effects through FastAPI.
+Local dependencies
+Database queries, constraints, transactions, and other behavior that depends on a real dependency.
+Real provider
+Authentication, SDK behavior, pagination, error translation, and other assumptions about the provider’s API.
+
+Keep product decisions separate from external I/O where practical. A file-size rule should be testable without uploading a file. API and integration tests should then verify that the service applies that rule correctly.
+Organize tests around meaningful behavior. A behavior may involve several functions or classes. Nontrivial internal algorithms can also deserve focused tests; there is no required ratio of unit tests to integration tests.
+Assert observable results and meaningful effects. A test should continue to pass after a refactor that preserves the contract. Avoid checking private helper names, incidental call order, or internal data structures.
+Check internal interactions when they establish a requirement. For example, verifying that an invalid request caused no provider write is useful. So is checking that a retry did not duplicate an externally visible action.
+Use small fakes or mocks to control provider responses and reproduce failures. Document their important assumptions, and verify those assumptions through separately runnable tests against the real provider.
+When correctness depends on database constraints or transactions, test with the database engine your service uses. An in-memory SQLite database is appropriate only when its behavior is sufficient for the contract being tested.
+1.3. Test workflows and failure paths
+Test sequences of operations as well as individual requests. Earlier actions often determine whether a later result is correct.
+Include the following where your service supports them:
+Create and retrieve. Create a resource, retrieve it using the returned identifier, and verify its contents.
+Update. Change selected fields and verify that fields omitted from a partial update remain unchanged.
+Reject an invalid change. Submit locally checkable invalid input and verify both the documented error and the absence of a provider write.
+Delete and repeat. Verify deletion behavior and the documented result of repeating it.
+Repeat other writes. Check whether repetition preserves the result, produces a conflict, or creates another effect, according to your contract.
+Traverse collections. Follow continuation information through completion and verify the combined results.
+Enforce access restrictions. Where your policy distinguishes allowed and denied requests, test both. A denied request must not trigger an unauthorized provider operation.
+Exercise provider rejection, unavailability or timeout, and an uncertain write outcome using controlled substitutes. These tests must run without waiting for a real outage.
+For an uncertain write, simulate a provider accepting the operation and then losing the response. Check what the caller receives, whether a retry occurs, and whether the service follows its documented policy for investigating the outcome. A timeout alone does not establish that the write had no effect.
+Control time and concurrency explicitly. Use a controlled clock for expiry, record retry delays without actually waiting, and use events or barriers to coordinate overlapping operations.
+For the service responsiveness requirement, run one server worker and hold a provider operation open with a controlled substitute. Wait for a signal that the operation has started, then show that an unrelated lightweight request completes before releasing it. Use a separate client connection where needed, and release the blocked operation during cleanup. An arbitrary sleep is not sufficient evidence of the intended ordering.
+1.4. Keep tests repeatable and easy to run
+The fast test suite must run without cloud credentials or live network access. Keep tests involving local dependencies and real providers clearly identified, with documented commands for running them.
+Use scoped pytest fixtures to make setup, dependencies, and cleanup explicit. Each test should start from a known state and remain independent of test execution order. Clean up files, database records, provider resources, and background tasks even when a test fails.
+Keep feedback fast enough that teammates can run relevant tests during development. Separate slow checks when necessary, and document when they should run.
+The following tools are optional:
+Testcontainers can provide disposable instances of real dependencies, such as PostgreSQL, for integration tests. Use it when those dependencies’ behavior matters to correctness.
+Hypothesis can generate inputs to check properties across many cases. For example, varying a valid page limit should preserve the set of records returned by a complete traversal of an unchanged collection. Keep explicit examples for important boundaries and known bugs.
+pytest-xdist can distribute tests across worker processes. Use parallel execution when it improves feedback time, and ensure workers do not interfere through shared files, ports, or database state. Choose a worker count appropriate for your dependencies and machine.
+Run automated tests, linting, and type checking in CI. Document equivalent local commands, along with any prerequisites for integration tests. Make live-provider tests explicitly selectable and keep credentials outside the repository.
+Your final release must pass the required checks. Report checks that could not run and the resulting gaps. Coverage reports can help locate untested code, but your testing strategy must explain which behaviors the tests establish.
+1.5. Show that a test detects a defect
+For one important behavior, demonstrate that a test catches a plausible mistake. Examples include omitting the last record during traversal, accepting an invalid update, or retrying a write that creates a duplicate.
+An actual bug and its regression test can satisfy this requirement.
+Record the defect and failing assertion in the relevant pull request. The failure should expose the incorrect behavior; a syntax error or broken test setup does not demonstrate that the test checks the contract.
+If you temporarily introduce a defect, restore the correct implementation before merging and confirm that the test passes again. Evaluate tests produced by coding agents using the same standard.
+1.6. Investigate bugs with evidence
+For a substantive bug you fix, record the following in its issue or pull request:
+Expected and observed behavior. What should have happened, and what happened instead?
+A reproduction. Provide the smallest input or sequence of actions you found that exposes the problem.
+The cause and evidence. Explain which assumption failed and what distinguishes this explanation from other possibilities.
+The fix and verification. Explain why the change addresses the cause, and include a regression test when feasible.
+Reduce failing inputs and action sequences. Preserve relevant random seeds, provider responses, and concurrent ordering so another developer can reproduce the failure.
+Use tracebacks, a debugger, logs, profiling, or Git history to answer a specific question. Form a hypothesis, gather evidence, and revise your explanation when the evidence disagrees.
+Verify that the regression test fails with the original defect and passes after the fix. If reproducing or testing the failure is difficult, explain the obstacle and the evidence you used instead.

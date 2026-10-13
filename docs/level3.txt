@@ -1,0 +1,123 @@
+Level 3: Define the Provider-Independent Interface
+Your service now talks to a real provider. At this point, provider-specific behavior may be mixed into the rest of your application.
+Now define the boundary between your service and the provider.
+3.1. Your goal
+Create a provider-independent interface that describes what your application needs from the external system.
+The interface should represent your service's domain rather than the SDK or API of the provider you chose.
+For example, your application might need an operation conceptually like:
+getResource(id)
+The exact name, parameters, and return type are up to your team.
+The important part is that application code should be able to understand and use the interface without knowing which provider implements it.
+3.2. What should happen?
+Your current integration may conceptually look like this:
+HTTP request
+    ↓
+application code
+    ↓
+provider SDK
+    ↓
+real provider
+
+
+
+
+By the end of this level, you should be able to identify a clear boundary:
+HTTP request
+    ↓
+application code
+    ↓
+provider-independent interface
+    ↓
+provider-specific code
+    ↓
+real provider
+
+For example, suppose your provider returns an object like:
+ProviderResource {
+    provider_id
+    display_name
+    owner_data
+    provider_metadata
+    ...
+}
+Your application may only need:
+Resource {
+    id
+    name
+}
+The provider-specific implementation is responsible for translating between those representations.
+These examples describe responsibilities, not required classes or types.
+3.3. Specification
+Define an interface for the provider behavior required by the operation you have already implemented.
+Your interface must:
+express the operation in terms of your service's domain;
+include only the behavior your application currently needs;
+avoid exposing provider SDK types;
+avoid requiring callers to understand provider-specific request or response structures;
+make the inputs and outputs of the operation explicit.
+The interface should be small.
+Do not copy the provider's entire SDK into your own abstraction.
+If your current application only requires one provider operation, an interface containing one operation may be sufficient.
+3.4. What you need to think about
+Before implementing, agree as a team on:
+What behavior does your application actually need from the provider?
+Which parts of the provider API are relevant to that behavior?
+Which provider details should remain hidden behind the boundary?
+What should the interface accept as input?
+What should it return?
+Who is responsible for translating provider-specific data into your domain model?
+Are you introducing an abstraction because your application needs it, or merely because the provider SDK contains it?
+Keep the interface centered on the needs of your service.
+A good interface should make the application easier to understand without requiring knowledge of the provider's documentation.
+3.5. Define the contract
+Document the interface your team chooses.
+For each operation, describe:
+its purpose;
+its inputs;
+its return value;
+whether it reads or changes external state;
+any assumptions the caller is allowed to make.
+For example:
+getResource(id)
+
+Given a valid resource identifier, return the representation of that
+resource needed by the application.
+This is only an example.
+Use names and semantics appropriate for your service.
+Do not specify failure behavior beyond what you currently understand. Failure semantics will be made explicit at a later level.
+3.6. Design and testing
+Refactor the provider integration from Level 2 so that provider-specific behavior is grouped behind the interface you defined.
+Your existing public operation should continue to behave exactly as it did before the refactor.
+Keep your existing tests passing.
+Add tests where useful to verify translation between provider-specific data and your service's domain representation.
+At this stage, tests may still require the real provider in some cases. You will make this boundary substitutable in the next level.
+3.7. Team integration
+The provider boundary is a shared design decision.
+Review it as a team before treating this level as complete.
+Your team should be able to explain:
+what belongs inside the provider boundary;
+what belongs outside it;
+which code knows about the provider SDK;
+which code operates only on your service's domain;
+why each operation exists in the interface.
+If only one teammate understands the abstraction, it is not yet a useful team interface.
+3.8. You don't need these yet
+You are not required to:
+support multiple real providers;
+make providers interchangeable at runtime;
+inject the provider implementation;
+create test doubles or fake providers;
+design a large hierarchy of interfaces;
+abstract every provider-specific type in the codebase;
+define final error semantics;
+support collections or pagination.
+Define only the boundary your current operation requires.
+3.9. When you're done
+This level is complete when:
+your provider-independent interface is documented;
+the interface expresses your service's domain rather than the provider SDK;
+provider-specific request and response handling is kept behind that boundary;
+your existing public operation still works against the real provider;
+your team can explain which parts of the codebase are provider-specific and which are not.
+In the next level, you will make the concrete provider implementation replaceable.
+

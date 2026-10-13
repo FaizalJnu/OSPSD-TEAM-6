@@ -1,0 +1,128 @@
+1. Resources and Getting Help
+1.1. Getting Support with Assignments
+Post general questions in #help. Include what you expected, what happened, and a small reproduction. Check #resources for more supporting material.
+Office hours are available Sundays, 8:00–9:00 p.m. ET, on request. DM the TA to arrange hands-on support, request an extension, or discuss a sensitive concern. Slack is preferred to email so general questions and answers can benefit the class.
+Ask early. Students balance other classes, work, and life. Seeking help, revising estimates, and choosing what to defer are part of responsible engineering.
+1.2. Advice and other resources:
+Spend time understanding the problem before committing to an implementation. Good design comes from clear requirements, small experiments, and feedback from working code. Choose languages and tools that support those goals, and investigate their finer details when the problem requires it.
+1. Clarify the problem before solving it
+Identify what the user needs to accomplish, what inputs are available, and what a successful result looks like. Write down assumptions and work through a few concrete examples.
+Ask questions when a requirement introduces substantial complexity. Sometimes a small change in scope removes an entire category of implementation work.
+Explain the tradeoff and agree on the behavior with the people affected. This is part of engineering: finding a useful solution includes deciding which problem is worth solving.
+2. Build a small version that works end to end
+Start with the smallest complete path through the system. Accept an input, perform the essential operation, and return a useful result.
+For a backend service, this might mean handling one request, calling one provider operation, and returning one documented response.
+Use this version to uncover constraints you could not resolve through planning alone. When an unfamiliar library or integration is the main uncertainty, write a small experiment to investigate it. Give the experiment a specific question to answer and be prepared to discard its implementation.
+Once the path works, improve the design and add the remaining behavior in small steps.
+3. Write for the next reader
+Code is read repeatedly during implementation, review, debugging, and maintenance. Organize it so another developer can follow the important decisions without reconstructing your thought process.
+Choose names that explain purpose. Keep functions focused and make control flow easy to trace.
+Prefer ten straightforward lines to one compressed expression that takes several minutes to understand. Remove unnecessary code and abstractions, but preserve the structure that makes the program clear.
+Small code is useful because there is less to maintain. Brevity is valuable when it also improves understanding.
+4. Separate decisions from actions
+When a workflow has side effects, consider separating the decision about what should happen from the code that performs it.
+For example, one function might determine which resource fields need updating and return a description of those changes. A separate component applies them through the provider API.
+This lets you test the decision using ordinary inputs and outputs. You can then test execution separately, including provider failures and partial completion.
+Use this approach where it makes a complex workflow easier to understand. Keep the representation of an action simple and explicit.
+5. Treat code review as shared problem-solving
+Your code is a proposal that the team can examine and improve. A question about an implementation is an opportunity to explain its reasoning or discover a better approach.
+Keep feedback specific to behavior, evidence, and tradeoffs. Explain the problem you see and why it matters.
+When receiving feedback, investigate the concern before defending the implementation. When reviewing someone else’s work, distinguish required corrections from suggestions and personal preferences.
+Be willing to replace code you spent time writing. The time already invested does not determine whether the design should remain.
+6. Use AI tools to strengthen your understanding
+Use coding assistants to explore alternatives, question assumptions, suggest test cases, or explain unfamiliar code. Ask them to identify edge cases and explain the consequences of a design.
+Treat generated code as work that still needs review. Before accepting it, make sure you can explain its behavior, dependencies, side effects, and failure cases. Verify unfamiliar claims against documentation and tests.
+When the goal is learning, try implementing the idea yourself before comparing it with a suggested solution. Typing generated code manually is useful only if it helps you understand the decisions.
+Your team remains responsible for the code it submits, including code produced by an assistant. Follow the course’s tool-use and attribution policies.
+7. Debug by testing a hypothesis
+Read the complete error message and relevant traceback before changing code. Identify what failed, where it failed, and which expectation was violated.
+Write a specific hypothesis. For example:
+The continuation token is being reused with a different filter, causing the provider to reject the request.
+Then choose an observation that would support or contradict it.
+Learn to use a debugger to inspect state and control flow. Use logs or traces when you need to understand behavior across requests, components, or time. Choose the tool that answers the question.
+If a local fix keeps producing new failures, step back and reconsider your model of the system.
+8. Narrow the search systematically
+For a failure that passes through several stages, identify where the observed behavior first diverges from the expected behavior.
+In a straightforward pipeline, inspect a meaningful checkpoint near the middle. Use what you find to decide whether to examine earlier or later stages, then repeat.
+The checkpoint must tell you something relevant. A successful function return does not necessarily mean the data is correct, and intermittent or concurrent failures may require several observations.
+Once you isolate the problem, create the smallest reproducible example you can. Keep a regression test when it captures behavior the system must preserve.
+9. Compare working and failing cases
+When something works in one environment but fails in another, record the differences before changing either environment.
+Compare the relevant details:
+Input data and request parameters.
+Configuration and permissions.
+Dependency and runtime versions.
+Startup commands and enabled features.
+External service behavior.
+Reduce the differences systematically. Change one relevant factor at a time where practical, and record the result.
+A small, reproducible difference is easier to investigate than a collection of guesses about the entire environment.
+10. Make deliberate changes during an incident
+When a running system fails, establish what is affected and whether there is a known way to restore service. A safe rollback or other established recovery step may be appropriate before the full cause is understood.
+Preserve useful evidence where practical. Record the symptoms, relevant logs, recent changes, and your current hypothesis. A few sentences in an incident note are sufficient.
+Make changes with a clear purpose and an expected result. Prefer small, reversible actions, and verify their effects before proceeding.
+After service is restored, investigate the cause, add useful tests or diagnostics, and document what would make the next incident easier to handle.
+
+Python-specific advice
+Your code should be easy for another developer to understand, test, and change. Use the following guidelines as you build your service.
+1. Make interfaces explicit
+Define what an operation accepts, what it returns, and how it can fail. Use type annotations for function signatures and explicit models for data passed between components.
+When several implementations need to support the same operations, use a small interface such as typing.Protocol or an abstract base class. Keep it focused on what your application needs. Provider-specific objects and exceptions should stay inside the provider implementation.
+Type annotations help tools find mistakes, but Python does not enforce them at runtime. Validate external input separately.
+2. Make the code easy to navigate
+Group related behavior together. Choose names that explain the role of a function, variable, or module. A name should be descriptive enough to understand in context; making it longer does not necessarily make it clearer.
+Use docstrings to explain an operation’s contract: its inputs, results, side effects, and expected failures. Use inline comments to explain decisions that the code cannot communicate, such as a provider limitation or a business rule.
+For example, a comment explaining why an upload must be validated before contacting the provider is useful. A comment announcing that the next line calls a function usually adds little.
+3. Model the states your program actually supports
+Use small data types with meaningful fields. A dataclass is often sufficient.
+If an operation can succeed or fail, consider separate result types for those outcomes. This is easier to reason about than one large object whose fields are all optional and whose valid combinations are unclear.
+Use frozen=True when fields should remain unchanged after construction. Remember that this prevents ordinary field reassignment; it does not make nested lists or dictionaries immutable.
+Use match/case when it makes the alternatives easier to follow. Cover every supported case explicitly; writing a match statement alone does not guarantee exhaustive handling.
+4. Define contracts and handle failures deliberately
+State the conditions an operation requires and the conditions a successful result guarantees.
+For example:
+A page limit must be a positive integer within the supported range.
+A resource’s size cannot be negative.
+An event’s end time must follow its start time.
+A rejected, locally invalid update must leave the resource unchanged.
+Check these conditions at the appropriate boundary. Keep the rules testable without external I/O. A contract library such as deal can help organize checks, but ordinary validation and tests are often sufficient.
+Choose a consistent way to represent failure. Use specific exceptions or explicit result types that callers can handle. Returning None is reasonable when absence is an expected, documented result. It should not conceal an error or force callers to guess what happened.
+5. Keep state changes easy to follow
+Prefer functions that receive data, perform a clear operation, and return a result. Keep calculations and validation separate from network requests, database access, and other side effects.
+Use classes when they give related behavior or state a clear owner. Start with simple composition and introduce inheritance or factories when a concrete need appears.
+Comprehensions and ordinary loops are both useful. Choose the form that makes the transformation easiest to read. Use map, filter, reduce, or functools.partial when they clarify the code.
+Favor immutable values where they simplify reasoning. When mutation is appropriate, make ownership and side effects explicit.
+6. Test behavior that matters to callers
+Write tests around observable requirements. For example:
+When a caller requests a resource that does not exist, the service returns the documented missing-resource error.
+Use small unit tests for rules and transformations. Add integration tests for the HTTP layer, application logic, and provider boundary. Tests should continue to pass when you reorganize the implementation without changing its behavior.
+Use fakes or mocks where you need control over an external dependency. Avoid tests that depend on every internal helper being called in a particular order.
+Keep test data isolated. Use fixtures, temporary directories, and disposable databases, and clean up resources after each test. Tests should run independently and in any order.
+Tests against a real provider should use a dedicated test account and run through an explicit command. Simulate timeouts, rejections, and lost responses with controlled substitutes so those tests do not depend on a live outage.
+7. Automate routine checks
+Configure the project so everyone can run the same checks:
+Ruff for linting and formatting.
+One type checker, such as mypy or ty.
+pytest for automated tests.
+Document the commands and run them in continuous integration. A local commit hook can provide earlier feedback.
+Choose lint rules deliberately and understand the warnings they produce. Ruff’s ALL setting also enables newly added rules when Ruff is upgraded, so use it with care. Review automated fixes as you would any other code change.
+8. Choose dependencies deliberately
+Learn the standard library. Modules such as pathlib, collections, itertools, functools, and dataclasses already solve many common problems.
+Before adding a dependency, identify the problem it solves and consider its maintenance, documentation, and integration cost. A well-maintained library can save substantial work; a package that replaces a few straightforward lines may add little value.
+Use ordinary dictionaries for ordinary mappings. Consider persistent collections when your application needs to preserve multiple versions of a data structure.
+MappingProxyType provides a read-only view of a mapping. It does not create an immutable snapshot: changes to the underlying mapping remain visible through the view.
+9. Give resources clear owners
+Make it clear who creates and closes each provider client, connection, file, and background task. Supply configuration explicitly and initialize shared resources through the application lifecycle.
+Keep blocking work off an asynchronous event loop. Choose an asynchronous client, an appropriate synchronous handler, or an explicit execution boundary that fits your framework.
+For streamed responses, account for incomplete transfers, caller cancellation, and cleanup. A generator is useful only when the surrounding code also consumes and sends data incrementally.
+10. Measure before optimizing
+Begin with a clear implementation. Measure representative workloads before changing the design for speed or memory use.
+Once you identify a bottleneck, choose an optimization that addresses it:
+Many small objects: Consider dataclass(slots=True) or __slots__ to reduce per-instance overhead.
+Repeated binary copies: Consider memoryview where the surrounding APIs support it.
+Serialization costs: Evaluate tools such as msgspec against your actual data and framework requirements.
+Large transfers: Use bounded buffers or streaming, with explicit limits and cleanup.
+Repeated work: Consider caching, with clear rules for keys, invalidation, size, and lifetime.
+High request volume: Consider batching or queues when the workflow can tolerate their effects on latency, ordering, and failures.
+Use your framework’s routing and concurrency mechanisms as the starting point. Custom dispatch tables, ring buffers, and lock-free queues require a demonstrated benefit and careful testing.
+After an optimization, rerun the behavior tests and measurements. Keep the change when it improves the measured problem while preserving the service’s contract.
+

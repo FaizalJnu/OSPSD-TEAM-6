@@ -90,7 +90,8 @@ and nothing else:
 Everything provider-specific stays behind it: the endpoint, bucket, and credentials;
 path-style addressing; retries and timeouts; multipart uploads; ETag quoting; S3's
 continuation tokens; and the provider's error codes, which become `FileNotFound`,
-`ProviderError`, or `ProviderUnavailable`.
+`ProviderError`, or `ProviderUnavailable`. One known exception, an error while a
+download is being read, is listed under [Known limits](#known-limits).
 
 ## Wiring
 
@@ -133,7 +134,7 @@ Replacing S3 with another provider means one new module in `storage/` that imple
 |---|---|---|
 | boto3 client | `S3Storage` | Created once by `build_storage`, lives as long as the app. |
 | Upload contents | FastAPI | Starlette spools each upload to a `SpooledTemporaryFile` (in memory up to 1 MiB, then on disk). FastAPI closes it when the request finishes. |
-| Download stream | `S3Storage.get` | `_read_in_chunks` closes the provider stream when the chunks are exhausted or closed, once reading has started. A download dropped before its first chunk is not closed by our code: [#15](https://github.com/FaizalJnu/OSPSD-TEAM-6/issues/15). |
+| Download stream | `S3Storage.get` | Opened by `get_object`. `_read_in_chunks` closes it when the chunks are exhausted, when reading fails, or when the chunks are closed after reading has started. A download dropped before its first chunk is not closed by our code: [#15](https://github.com/FaizalJnu/OSPSD-TEAM-6/issues/15). |
 | `FileService` | The app | Lives as long as the app. Holds only the backend and the size limit; it stores no file data. |
 | Files and their info | The provider | The bucket is the only copy. There is no database. |
 | `InMemoryStorage` dict | The backend | Lives as long as the app, so everything is lost on restart. Each test gets a fresh one. |
@@ -146,3 +147,7 @@ Replacing S3 with another provider means one new module in `storage/` that imple
   [README](../README.md#known-limitations).
 * A provider failure after a download's headers are sent cuts the body off instead of
   returning an error. See the Download gaps in [TESTING.md](../TESTING.md#download).
+* When the connection drops while a download is being read, botocore's
+  `ResponseStreamingError` escapes `S3Storage` instead of becoming
+  `ProviderUnavailable`, against the `get` contract in `storage/base.py`:
+  [#26](https://github.com/FaizalJnu/OSPSD-TEAM-6/issues/26).

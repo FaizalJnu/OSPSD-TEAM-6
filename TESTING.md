@@ -134,6 +134,89 @@ the OCI namespace and the bucket name.
 
 Gaps that belong to one operation go in that operation's section.
 
+## Missing-bucket regression (FIX-2)
+
+Owner: **Darsh Shani**. Tests: [test_bucket_errors.py](tests/test_bucket_errors.py).
+This regression spans metadata and the shared existence check used by create,
+replace, and delete, so it has a separate test file rather than duplicating
+the same provider setup in each operation's tests.
+
+### Expected behavior and cause
+
+A HEAD object response can represent a missing key and a missing bucket with
+the same generic 404. Previously, every such response became `FileNotFound`,
+so a broken bucket configuration incorrectly produced HTTP 404 for metadata,
+delete, and replace. The regression test reproduced metadata returning 404
+when its expected status was 502, without network or credentials.
+
+`S3Storage.stat` now probes `head_bucket` only after ambiguous 404/NotFound
+object errors. A successful probe confirms the bucket is accessible and the
+original error becomes `FileNotFound`. A failed probe is translated as
+`ProviderError` or `ProviderUnavailable`, never as a missing file. A failed
+probe does not establish whether the bucket is absent or access is denied.
+
+The change stays in [storage/s3.py](src/storage_service/storage/s3.py).
+`service.py`, startup wiring, and the shared error translator are unchanged.
+Compared with a startup check, the probe keeps startup free of network calls
+and handles bucket failures discovered after startup. It costs an extra SDK
+call on each ambiguous miss and needs bucket-read permissions. Separate HEAD
+calls are not an atomic snapshot.
+
+### Verification
+
+Offline cases cover both generic error codes, accessible versus missing or
+denied buckets, probe connection failure, and unchanged successful metadata,
+explicit `NoSuchKey`, and object permission-denial paths. HTTP tests check
+GET metadata, DELETE, PUT, and POST return 502 before a write; only HEAD calls
+are queued in Stubber, so an attempted upload or delete fails the test.
+
+```bash
+uv run pytest tests/test_bucket_errors.py
+uv run --env-file .env pytest -m provider tests/test_bucket_errors.py
+```
+
+The provider suite uses a unique bucket name that is never created to check
+metadata, delete, and replace errors. A second test checks a missing file in
+the configured real bucket still returns 404. It does not modify the configured
+bucket or its contents.
+
+### Real-provider evidence and gaps
+
+Run from Darsh's Windows checkout with Codex assistance on **2026-10-14**,
+against OCI Object Storage in **us-ashburn-1**, using Darsh's own private test
+bucket and keys from the ignored local `.env`.
+
+Before the fix, source commit `0453b66` (metadata branch, unchanged S3 adapter)
+was exercised through `TestClient(create_app(build_service(settings)))` with
+the bucket changed only in memory to a unique nonexistent name. Observed:
+
+| Request | Expected | Observed before the fix |
+|---|---|---|
+| `GET /metadata/missing.txt` | 502 `ProviderError` | 404 `FileNotFound` |
+| `DELETE /files/missing.txt` | 502 `ProviderError` | 404 `FileNotFound` |
+| `PUT /files/missing.txt` with a file form field | 502 `ProviderError` | 404 `FileNotFound` |
+
+All three returned `{"error": "FileNotFound", "detail": "no file named 'missing.txt'"}`.
+The original `.env` was unchanged, and no bucket was created or modified.
+
+After the fix, source commit `e487ada`, the command
+`uv run --locked --env-file ../../../OSPSD-TEAM-6/.env pytest -m provider
+tests/test_bucket_errors.py --tb=short --show-capture=no -p no:cacheprovider`
+observed **2 passed, 13 deselected**. The env-file path refers to the existing
+configuration in the main checkout; credentials were not copied or displayed.
+The normal command in a single checkout remains `uv run --env-file .env pytest
+-m provider tests/test_bucket_errors.py`.
+
+`test_nonexistent_real_bucket_is_a_provider_error` observed 502 `ProviderError`
+with the public error shape for all three requests above. It used a unique
+bucket name that was never created. `test_missing_file_in_real_bucket_remains_404`
+observed 404 `FileNotFound` for a unique nonexistent key in the accessible test
+bucket. Both checks passed; the provider fixture also completed cleanup.
+
+No objects were written by these checks. Provider tests remain explicitly
+selectable and fail rather than skip if configuration is missing. Human review
+and a second person's independent verification by Faizal remain pending.
+
 ## Filling in an operation section
 
 * **Contract checked:** which promises in [docs/API.md](docs/API.md) the tests

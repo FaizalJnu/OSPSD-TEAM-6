@@ -73,7 +73,16 @@ class S3Storage:
 
     def stat(self, key: str) -> FileInfo:
         with _translate_errors(key):
-            response = self._client.head_object(Bucket=self._bucket, Key=key)
+            try:
+                response = self._client.head_object(Bucket=self._bucket, Key=key)
+            except ClientError as err:
+                # A HEAD error has no body: 404/NotFound may mean the bucket,
+                # not the key. Only report a missing file if the bucket is
+                # accessible. Bucket failures are translated without a key.
+                if err.response.get("Error", {}).get("Code") in {"404", "NotFound"}:
+                    with _translate_errors():
+                        self._client.head_bucket(Bucket=self._bucket)
+                raise
         return _info_from_response(key, response)
 
     def list_files(self, prefix: str, limit: int, cursor: str | None) -> FilePage:

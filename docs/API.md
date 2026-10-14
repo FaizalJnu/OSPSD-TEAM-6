@@ -122,12 +122,23 @@ Invalid input that FastAPI catches first, such as `limit=abc` or a missing `file
 uses our format: 400 `InvalidInput`, with the field name at the start of `detail`.
 Moving the three responses above to our format is tracked as a follow-up.
 
+### Bucket checks
+
+After an ambiguous S3 HEAD 404/NotFound, Metadata and the existence checks for
+Create, Replace, and Delete probe the bucket before reporting a missing file.
+An accessible bucket preserves 404 `FileNotFound`; a missing or denied bucket
+returns 502 `ProviderError`. A connection failure during the probe returns
+503 `ProviderUnavailable`. Create, Replace, and Delete stop before writing if
+this check fails.
+
+The probe adds one SDK call per ambiguous miss and requires bucket-read
+permissions. It does not lock the bucket against concurrent changes. Successful
+reads and explicit `NoSuchKey` responses do not need the probe.
+
 ### Known bugs
 
-On OCI, two cases currently return a different response than the table above says:
+On OCI, the remaining known error-mapping bug is:
 
-* A missing bucket is reported as 404 `FileNotFound` by Metadata, Replace, and Delete.
-  See [FIX-2](../fixesRequired.md#fix-2-a-missing-bucket-is-reported-as-a-missing-file).
 * A malformed list cursor returns 502 `ProviderError`. See
   [FIX-3](../fixesRequired.md#fix-3-a-malformed-list-cursor-returns-the-wrong-error).
 

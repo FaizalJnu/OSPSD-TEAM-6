@@ -6,8 +6,8 @@ one owner, who keeps it in agreement with the code and the tests.
 
 The running service also serves interactive docs at `/docs` and the schema at
 `/openapi.json`. Both are generated from the code. They show the routes, inputs, and
-response fields, but list only the success status and a 422 for every route, so use
-this page for errors.
+response fields, but list only the success status and a 422 for every route. The service
+never returns 422 (invalid input is a 400 `InvalidInput`), so use this page for errors.
 
 Examples assume the server runs locally, as in the README:
 
@@ -90,7 +90,7 @@ Every error the service reports itself has this JSON body:
 
 | `error` | Status | When it happens | Does retrying help? |
 |---|---|---|---|
-| `InvalidInput` | 400 | A key breaks a [key rule](#keys), or the List `prefix` is longer than 1024 bytes. | No. Change the input. |
+| `InvalidInput` | 400 | A key breaks a [key rule](#keys), the List `prefix` is longer than 1024 bytes, the List `limit` is not a whole number from 1 to 1000, or Create or Replace is missing the `file` form field. | No. Change the input. |
 | `FileNotFound` | 404 | No file exists under the key (Download, Metadata, Replace, Delete). | Not until a file is created under that key. |
 | `FileAlreadyExists` | 409 | Create was called for a key that already has a file. | No. Use Replace, or Delete the file first. |
 | `FileTooLarge` | 413 | The upload to Create or Replace is larger than `MAX_UPLOAD_BYTES` (default 1 GiB). | No, not with the same file. |
@@ -112,20 +112,15 @@ above:
 
 | Status | When | Body |
 |---|---|---|
-| 422 | Create or Replace without the `file` form field. List with a `limit` that is not a whole number, or is outside 1 to 1000. | `{"detail": [...]}`, a list of the problems FastAPI found |
 | 404 | The path matches no route, for example `GET /nothing`. | `{"detail": "Not Found"}` |
 | 405 | The path exists but not for that method, for example `POST /files`. | `{"detail": "Method Not Allowed"}` |
 | 500 | An unexpected failure inside the service. | Plain text: `Internal Server Error` |
 
 A 404 without an `error` field means the path is wrong, not that the file is missing.
 
-The 422 responses are a **known inconsistency**: they report invalid input, which this
-API otherwise reports as 400 `InvalidInput`. A planned change (ERR-400) will return
-400 `InvalidInput` for them instead. Until then, a missing `file` field returns:
-
-```json
-{"detail": [{"type": "missing", "loc": ["body", "file"], "msg": "Field required", "input": null}]}
-```
+Invalid input that FastAPI catches first, such as `limit=abc` or a missing `file` field,
+uses our format: 400 `InvalidInput`, with the field name at the start of `detail`.
+Moving the three responses above to our format is tracked as a follow-up.
 
 ### Known bugs
 

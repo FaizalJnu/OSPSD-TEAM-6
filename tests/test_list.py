@@ -19,5 +19,5 @@ def test_list_pages_through_files_with_a_cursor(client):
 
 
 def test_list_rejects_an_out_of_range_limit(client):
-    assert client.get("/files", params={"limit": 0}).status_code == 422
-    assert client.get("/files", params={"limit": 1001}).status_code == 422
+    assert client.get("/files", params={"limit": 0}).status_code == 400
+    assert client.get("/files", params={"limit": 1001}).status_code == 400

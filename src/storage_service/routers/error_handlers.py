@@ -8,6 +8,7 @@ registers the handlers.
 import logging
 
 from fastapi import Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from storage_service.errors import (
@@ -46,4 +47,15 @@ def storage_error_handler(request: Request, exc: Exception) -> JSONResponse:
         logger.error("%s %s failed", request.method, request.url.path, exc_info=exc)
     return JSONResponse(
         status_code=status, content={"error": type(exc).__name__, "detail": str(exc)}
+    )
+
+
+def validation_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    """FastAPI rejected the input before our code ran. Report it like any other bad input."""
+    assert isinstance(exc, RequestValidationError)
+    problem = exc.errors()[0]  # e.g. {"loc": ("query", "limit"), "msg": "Input should be ..."}
+    field = problem["loc"][-1]  # "limit", "file", ...
+    return JSONResponse(
+        status_code=_STATUS_FOR_ERROR[InvalidInput],
+        content={"error": InvalidInput.__name__, "detail": f"{field}: {problem['msg']}"},
     )

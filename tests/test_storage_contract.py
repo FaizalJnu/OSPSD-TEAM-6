@@ -93,3 +93,15 @@ def test_list_is_sorted_paginated_and_has_no_content_type(storage, prefix):
     assert [f.key for f in second.files] == [prefix + "c"]
     assert second.next_cursor is None
     assert all(f.content_type is None for f in first.files + second.files)
+
+
+def test_list_matches_the_prefix_as_text_at_every_depth_in_byte_order(storage, prefix):
+    for name in ("docs/é.txt", "docs/sub/b.txt", "docs2/c.txt", "docs/a.txt", "docs/B.txt"):
+        put_bytes(storage, prefix + name)
+
+    page = storage.list_files(prefix + "docs/", 10, None)
+
+    # docs2/ is a look-alike, not a match. Uppercase sorts before lowercase, and
+    # non-ASCII after ASCII.
+    expected = ("docs/B.txt", "docs/a.txt", "docs/sub/b.txt", "docs/é.txt")
+    assert [f.key for f in page.files] == [prefix + name for name in expected]

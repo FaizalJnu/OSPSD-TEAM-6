@@ -234,20 +234,131 @@ yet.
 
 ## List
 
-`GET /files`. Owner: **Prateek Saxena**. Not written yet.
+`GET /files`. Owner: **Prateek Saxena**.
 
 ### Meaning
 
+Returns one page of the files whose keys start with a prefix, sorted by key. Following
+`next_cursor` from page to page lists every matching file. It only reads: nothing in the
+bucket changes.
+
 ### Request
+
+`GET /files`, with no body. Every query parameter is optional.
+
+| Parameter | Default | Constraints | Meaning |
+|---|---|---|---|
+| `prefix` | `""`, which lists every file | At most 1024 bytes as UTF-8. The [key rules](#keys) do not apply. | Only keys that start with exactly this text are listed. It is plain text, not a folder: `docs` matches `docs/a.txt`, `docs2/b.txt`, and `docsx.txt`. Use `docs/` to list only what is under `docs/`. |
+| `limit` | `100` | A whole number from 1 to 1000. | The most files this page may hold. |
+| `cursor` | none, which starts at the first page | A `next_cursor` from an earlier response with the same `prefix`, unchanged. | Where to continue. |
+
+Percent-encode `prefix` and `cursor` in the URL. `curl -G --data-urlencode` does this
+for you, as in the example below.
 
 ### Success
 
+Status **200**, with this JSON object:
+
+| Field | JSON type | Meaning |
+|---|---|---|
+| `files` | array of [file info](#file-info) | The files on this page, sorted by key. At most `limit` of them, and possibly none. `content_type` is always `null`. |
+| `next_cursor` | string or null | `null` when there are no more files. Otherwise, send it back as `cursor`, with the same `prefix`, to get the next page. It is opaque: do not parse, build, or compare cursors. |
+
+What callers can rely on:
+
+* **Order.** Keys are sorted by their UTF-8 bytes. Uppercase comes before lowercase
+  (`B.txt` before `a.txt`), `.` before `/` (`a.txt` before `a/x.txt`), and non-ASCII
+  after ASCII (`é.txt` after `z.txt`).
+* **Depth.** Keys at every depth under the prefix are included. There is no grouping
+  into folders: `docs/` lists both `docs/a.txt` and `docs/sub/b.txt`.
+* **Completeness.** To read every matching file, keep sending `next_cursor` back until
+  it is `null`. Across those pages, every file that exists for the whole traversal
+  appears exactly once, and no file outside the prefix appears.
+* **Page size.** A page can hold fewer than `limit` files, even none, and still have a
+  `next_cursor`. Only a `null` cursor means the end. (S3 allows short pages. On OCI,
+  every page before the last was full in our runs.)
+* **No matches** is not an error: the response is 200 with
+  `{"files": [], "next_cursor": null}`.
+
 ### Side effects
+
+None.
 
 ### Errors
 
+The body uses the [error format](#error-format).
+
+| Status | `error` | When |
+|---|---|---|
+| 400 | `InvalidInput` | `limit` is not a whole number from 1 to 1000 (for example `0`, `1001`, or `abc`), or `prefix` is longer than 1024 bytes. The provider is not contacted. |
+| 502 | `ProviderError` | The provider refused the request, for example bad credentials, a denied permission, or a missing bucket. |
+| 503 | `ProviderUnavailable` | The provider could not be reached or timed out. |
+
+A cursor this API did not produce should be 400 `InvalidInput`. Today it gives 200 with
+an empty page on the in-memory backend, and 502 `ProviderError` on OCI. See
+[Known bugs](#known-bugs).
+
 ### Retry
+
+List only reads, so repeating any request is safe. After a 503, retry later with the
+same parameters, including the same `cursor`: on OCI, sending a cursor a second time
+returned the same page again. After a 400 or 502, retrying the same request gives the
+same result until the input or the configuration changes.
 
 ### Assumptions
 
+* **No snapshot.** Each page is read from the bucket as it is at that moment. A file
+  created or deleted while a caller is paging may or may not appear.
+* **Cursors belong to one prefix.** Send a cursor back only with the `prefix` it came
+  with. What happens with another prefix is not settled yet (BUG-CURSOR). How long a
+  cursor stays usable has not been tested.
+* **Cursor strings change.** On OCI, two requests for the same page return different
+  `next_cursor` strings, and both work. Compare pages by their files, not by cursor.
+* **`content_type` is `null`**, because the S3 list call does not return it. Use
+  [Metadata](#metadata) for one file's type.
+* For an unchanged file, `key`, `size`, and `etag` are the same as in the Metadata and
+  Create or Replace responses. OCI reports `last_modified` in whole seconds.
+* The 1000 maximum for `limit` is S3's maximum number of keys per list call.
+
 ### Example
+
+Pick a prefix nobody else uses, for example `examples/list-demo/`, and check that it is
+empty first. Create three files, list them two per page, follow the cursor, then delete
+them. On macOS or Linux:
+
+```bash
+B=http://127.0.0.1:8000
+P=examples/list-demo/
+curl -s -G $B/files --data-urlencode "prefix=$P"
+printf 'x' > x.txt
+for name in c a b; do curl -s -o /dev/null -w '%{http_code}\n' -F "file=@x.txt" "$B/files/$P$name.txt"; done
+curl -s -G $B/files --data-urlencode "prefix=$P" --data-urlencode "limit=2"
+```
+
+The first listing returns `{"files":[],"next_cursor":null}`, and each create prints
+`201`. The two-file page, from OCI (your `etag`, `last_modified`, and cursor will
+differ):
+
+```json
+{"files":[{"key":"examples/list-demo/a.txt","size":1,"content_type":null,"etag":"9dd4e461268c8034f5c8564e155c67a6","last_modified":"2026-10-14T20:31:34Z"},{"key":"examples/list-demo/b.txt","size":1,"content_type":null,"etag":"9dd4e461268c8034f5c8564e155c67a6","last_modified":"2026-10-14T20:31:34Z"}],"next_cursor":"1:OsT0j2SY..."}
+```
+
+Send `next_cursor` back to get the last page:
+
+```bash
+curl -s -G $B/files --data-urlencode "prefix=$P" --data-urlencode "limit=2" --data-urlencode "cursor=<next_cursor>"
+```
+
+```json
+{"files":[{"key":"examples/list-demo/c.txt","size":1,"content_type":null,"etag":"9dd4e461268c8034f5c8564e155c67a6","last_modified":"2026-10-14T20:31:34Z"}],"next_cursor":null}
+```
+
+Clean up, then check that the prefix is empty again:
+
+```bash
+for name in a b c; do curl -s -o /dev/null -w '%{http_code}\n' -X DELETE "$B/files/$P$name.txt"; done
+curl -s -G $B/files --data-urlencode "prefix=$P"
+rm x.txt
+```
+
+Each delete prints `204`, and the listing returns `{"files":[],"next_cursor":null}`.

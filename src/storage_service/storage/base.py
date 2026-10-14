@@ -36,7 +36,28 @@ class StorageClient(Protocol):
         ...
 
     def list_files(self, prefix: str, limit: int, cursor: str | None) -> FilePage:
-        """Return up to ``limit`` files whose keys start with ``prefix``."""
+        """Return one page of the files whose keys start with ``prefix``. Only reads.
+
+        ``prefix`` is plain text compared with the start of each key, not a folder: keys
+        at every depth under it match, and ``""`` matches every file. ``limit`` is from 1
+        to 1000; the service checks it before calling. ``cursor`` is None for the first
+        page, or a ``next_cursor`` this backend returned for the same ``prefix``.
+
+        Returns a ``FilePage`` with at most ``limit`` files, sorted by the UTF-8 bytes of
+        their keys. Each has ``content_type`` None (S3 listings do not include it) and an
+        ``etag`` without quotes. ``next_cursor`` is None when no files are left. A page
+        can be shorter than ``limit``, even empty, and still have a ``next_cursor``, so
+        callers continue until it is None. Cursors are opaque: the backend picks their
+        format, and callers only pass them back unchanged.
+
+        Following the cursors over files that do not change returns each matching file
+        exactly once. Pages are not a snapshot: a file created or deleted between calls
+        may or may not appear.
+
+        Raises ``ProviderError`` or ``ProviderUnavailable`` if the provider fails. No
+        matches is an empty page, not an error. What happens with a cursor this backend
+        did not produce is not settled yet (BUG-CURSOR in fixesRequired.md, FIX-3).
+        """
         ...
 
     def delete(self, key: str) -> None:

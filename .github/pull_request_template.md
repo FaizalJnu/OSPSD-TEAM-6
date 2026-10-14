@@ -1,36 +1,39 @@
 ## Which issue does this PR close?
-<!-- Link the issue this PR resolves, e.g. `Closes #123`. -->
+Closes #
 
-- Closes #
+## Problem and resulting behavior
+What was missing or wrong, and what the service does now. For a change to existing
+behavior, show before and after: request, status, body.
 
-## Rationale for this change
-<!--
-Why is this change needed? If the linked issue already explains it clearly,
-this section can be brief.
--->
+## Approach and why
+Why this approach. Alternatives you considered. Assumptions you made. Compatibility
+consequences (if this breaks the API, add the `breaking change` label).
 
-## What changes are included in this PR?
-<!-- Summarize the individual changes. No need to repeat the issue description. -->
+## What changed
+One line per changed file, naming the responsibility that required the change. If you
+extended a teammate's code, say which module or interface changed and why the change
+spread to other files.
 
-## Are these changes tested?
-<!--
-Describe the tests added or updated. If no tests are included, explain why
-(e.g. already covered by existing tests).
--->
+## How it was verified
+- Fast checks: commands run and results (for example, `uv run pytest`: 41 passed).
+- Tests added or changed, and what each one asserts.
+- Real-provider check: provider, request, expected result, observed result (paste the
+  output, with no keys in it).
+- Bug fixes: the failing test output before the fix, and the passing output after it.
 
-## Are there any user-facing or breaking changes?
-<!--
-Note any changes to behavior, configuration, or public APIs.
-If this introduces a breaking change, add the `breaking change` label.
--->
+## Status
+- What works:
+- What remains / known gaps:
+- Who owns the next steps:
+- Blocked on:
+
+## AI assistance
+Which tool you used and what it produced. "I reviewed every line and can explain it."
 
 ## Checklist
-- [ ] PR is linked to an issue and scoped to a single concern.
-- [ ] Code follows project style; lint, format, and type checks pass.
-- [ ] Tests are added or updated and pass locally and in CI.
-- [ ] Public functions and classes are documented; docs are updated where needed.
-- [ ] No secrets, credentials, or sensitive data are committed.
-- [ ] I have self-reviewed the diff.
-
-## Additional Notes
-<!-- Any other context, screenshots, or information for reviewers. -->
+- [ ] Linked to an issue, one purpose
+- [ ] ruff check, ruff format --check, mypy, and pytest pass locally; CI is green
+- [ ] Tests cover the new behavior; a bug fix starts with a failing test
+- [ ] docs/API.md, TESTING.md, and README updated where behavior or setup changed
+- [ ] No .env, keys, or other secrets committed
+- [ ] I reviewed my own diff

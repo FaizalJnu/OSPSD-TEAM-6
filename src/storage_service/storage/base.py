@@ -67,7 +67,20 @@ class StorageClient(Protocol):
         ...
 
     def stat(self, key: str) -> FileInfo:
-        """Return a file's info without reading its contents."""
+        """Read metadata for the exact key without downloading or changing its contents.
+
+        The service validates the key before calling this method; the backend
+        uses it unchanged. Return a FileInfo with the byte size, stored content
+        type (None if unavailable), an opaque ETag without surrounding quotes,
+        and the provider's timezone-aware UTC modification time. For an unchanged
+        file, key, size, and ETag agree with list_files; timestamp precision may
+        differ between provider operations.
+
+        This only reads provider state. Raise FileNotFound for a missing file,
+        ProviderError for provider rejection, or ProviderUnavailable when the
+        provider cannot be reached. Provider SDK objects and exceptions stay
+        inside the backend. A read does not lock the file against concurrent writes.
+        """
         ...
 
     def list_files(self, prefix: str, limit: int, cursor: str | None) -> FilePage:

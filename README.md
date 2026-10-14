@@ -131,6 +131,10 @@ Add `-i` to any command to show the status code and response headers.
 The key rules, response fields, statuses, and errors are in
 [docs/API.md](docs/API.md).
 
+Metadata's complete contract and example are in
+[docs/API.md](docs/API.md#metadata); verification is recorded in
+[TESTING.md](TESTING.md#metadata).
+
 ## Tests
 
 ```bash

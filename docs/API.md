@@ -6,8 +6,9 @@ one owner, who keeps it in agreement with the code and the tests.
 
 The running service also serves interactive docs at `/docs` and the schema at
 `/openapi.json`. Both are generated from the code. They show the routes, inputs, and
-response fields, but list only the success status and a 422 for every route. The service
-never returns 422 (invalid input is a 400 `InvalidInput`), so use this page for errors.
+response fields. Metadata also lists its expected error statuses. Other routes may
+still advertise 422, although invalid input returns 400 `InvalidInput`; use this page
+for their error contracts.
 
 Examples assume the server runs locally, as in the README:
 
@@ -343,23 +344,79 @@ now returns `404` with `{"error":"FileNotFound",...}`. On macOS or Linux, use
 
 ## Metadata
 
-`GET /metadata/{key}`. Owner: **Darsh Shani**. Not written yet.
+`GET /metadata/{key}`. Owner: **Darsh Shani**.
 
 ### Meaning
 
+Read metadata for one file without downloading its contents.
+
 ### Request
+
+The required path `key` is the full, decoded file name, including folder-like
+prefixes: `/metadata/docs/report.pdf` refers to `docs/report.pdf`. It follows
+the shared [key rules](#keys), including the 1024 UTF-8 byte limit. There is no
+request body or operation-specific query parameter. Invalid keys are rejected
+before storage is called.
 
 ### Success
 
+**200**, with all five [file info fields](#file-info): `key` (the exact full
+key), `size` (integer bytes), `content_type` (stored MIME type or `null`),
+`etag` (opaque and unquoted), and `last_modified` (UTC ISO 8601 timestamp).
+The key can be reused for download, replace, or delete.
+
 ### Side effects
+
+None. Reading metadata changes neither the contents nor the stored metadata.
 
 ### Errors
 
+Responses use the shared [error format](#error-format):
+
+| Status | Error | When |
+|---|---|---|
+| 400 | `InvalidInput` | The decoded key breaks a key rule. |
+| 404 | `FileNotFound` | No file exists under the key. |
+| 502 | `ProviderError` | The provider rejects the request, including configuration or permission problems. |
+| 503 | `ProviderUnavailable` | The provider cannot be reached. |
+
+The missing-bucket error mapping is implemented separately in #22.
+
 ### Retry
+
+Repeating this read is safe. Correct invalid input or provider configuration
+before retrying; a missing file must be created first. Retrying later may help
+after a 503. Another caller's write can change the result between reads.
 
 ### Assumptions
 
+For an unchanged file, Metadata and List agree on `key`, `size`, and `etag`.
+List always returns `content_type: null`; this does not mean the stored MIME
+type is missing. Files uploaded externally retain the provider's content type.
+Treat ETags as opaque, rather than assuming MD5. HEAD and LIST timestamps may
+differ in precision. Separate reads do not establish a snapshot during
+concurrent writes.
+
 ### Example
+
+With the memory backend or a configured test bucket, choose a unique key:
+
+```bash
+B=http://127.0.0.1:8000
+K="metadata-demo-$(date +%s)-$$/report.txt"
+printf 'hello' > metadata-sample.txt
+curl -i -F 'file=@metadata-sample.txt' "$B/files/$K"   # 201
+curl -i "$B/metadata/$K"                             # 200
+curl -i -X DELETE "$B/files/$K"                     # 204
+curl -i "$B/metadata/$K"                             # 404 FileNotFound
+rm metadata-sample.txt
+```
+
+The 200 body contains `key` equal to `$K`, `size: 5`,
+`content_type: "text/plain"`, an unquoted `etag`, and a UTC `last_modified`.
+ETag and timestamp values come from the provider. DELETE cleans up the sample;
+the final read returns `{"error":"FileNotFound","detail":"no file named '<key>'"}`.
+See [Metadata in TESTING.md](../TESTING.md#metadata) for recorded responses.
 
 ## Delete
 

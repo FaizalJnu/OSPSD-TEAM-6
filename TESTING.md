@@ -217,16 +217,259 @@ Tests: [tests/test_delete.py](tests/test_delete.py). Not written yet.
 ## List
 
 Owner: **Prateek Saxena**. Contract: [docs/API.md](docs/API.md#list).
-Tests: [tests/test_list.py](tests/test_list.py). Not written yet.
+Tests: [tests/test_list.py](tests/test_list.py).
 
 ### Contract checked
 
+* A 200 returns exactly `files` and `next_cursor`, and each file has exactly the five
+  [file info](docs/API.md#file-info) fields: `content_type` is `null`, `etag` has no
+  quotes and equals the Create response's `etag`, and `last_modified` is UTC.
+* Following `next_cursor` until it is `null` returns every matching file exactly once,
+  sorted by UTF-8 bytes. No page holds more than `limit` files, and no file outside the
+  prefix appears.
+* The prefix is plain text matched at the start of the key, at every depth.
+* `limit` from 1 to 1000 and a `prefix` of up to 1024 bytes are accepted. The values
+  just outside are 400 `InvalidInput`.
+* A file that exists for the whole traversal appears once, even when other files are
+  created between pages.
+* The service makes exactly one storage call per request, with `prefix`, `limit`, and
+  `cursor` passed through unchanged, and returns storage's page unchanged. Invalid
+  input never reaches storage. A `ProviderError` or `ProviderUnavailable` from storage
+  becomes 502 or 503 in the [error format](docs/API.md#error-format).
+* The `list_files` contract in
+  [storage/base.py](src/storage_service/storage/base.py) holds for `S3Storage`: a
+  `list_objects_v2` answer becomes a `FilePage` with ETag quotes stripped,
+  `content_type` `None`, and `NextContinuationToken` as `next_cursor`, and provider
+  errors become `ProviderError` or `ProviderUnavailable`. Both backends match the prefix
+  as text, at every depth, in UTF-8 byte order.
+
 ### Cases and boundaries
+
+These follow the collection traversal example in `docs/testing.txt`. Expected keys are
+written out by hand, not computed with the code under test.
+
+* **Collection size against the limit.** With `limit=3`: n = 0, n = 2 (below the
+  limit), n = 3 (at it), and n = 4 (one above it). The smallest limit, 1, with three
+  files. Seven files at three per page, which takes at least three pages.
+* **Prefix.** Neighbors just before and just after the prefix in sort order
+  (`seven.txt` and `seven2/h.txt` around `seven/`). Look-alikes `docs2/c.txt`,
+  `docsx.txt`, and `other/docs/d.txt`. A nested key, `docs/sub/b.txt`. The same files
+  listed with `docs` instead of `docs/`.
+* **Order.** Keys uploaded out of order, with uppercase, `.` against `/`, and a
+  non-ASCII character.
+* **Limits.** `limit` of 1 and 1000 are accepted; 0, 1001, and `abc` are rejected. A
+  `prefix` of exactly 1024 bytes is accepted and 1025 bytes is rejected. It is built
+  from `é`, two bytes each, to show that the limit counts bytes, not characters.
+* **Changes between pages.** After the first page, one file is created before the
+  position reached so far and one after it.
+* **What storage answers (controlled storage).** A page with a cursor, given the
+  caller's own cursor; the default parameters; each kind of invalid input; and each of
+  the two provider errors.
+* **What the provider answers (translation).** A page with more to come, with a plain
+  MD5 ETag and a multipart ETag (`-2` suffix), and provider-only fields such as the
+  storage class. The last page, without `NextContinuationToken`. No matches, where S3
+  leaves out `Contents` entirely. Keys sent URL-encoded. `AccessDenied` (403) and
+  `NoSuchBucket` (404): List names no file, so even a 404 must not become
+  `FileNotFound`. A connection failure.
+
+The tests follow the cursor until it is `null` and never require a particular number of
+pages, because the contract allows short pages. The traversal helper fails after 50
+pages, so a cursor that never runs out fails the test instead of hanging it.
 
 ### Tests
 
+The tests reach storage in four ways, from fastest to slowest:
+
+* **In-memory storage** (`client`): the API's behavior over a small real collection.
+* **Controlled storage** (Level 4): `controlled_storage` is
+  `create_autospec(StorageClient, instance=True, spec_set=True)`. It has exactly
+  `StorageClient`'s methods and signatures, so a call with the wrong arguments fails,
+  and it does only what a test tells it to. `controlled_client` passes it to
+  `FileService` and then `create_app(service)`, the same path production uses with
+  the `S3Storage` that `main.build_storage` creates. It does not imitate S3 at all.
+  It shows what the service sends to storage and how storage's answers and failures
+  reach the caller. It needs only the standard library, so these tests do not depend
+  on `tests/fakes.py` (L4-FAKE), which records only the prefix of a List call.
+* **Translation** (`stubbed_s3`, Level 3): the real `S3Storage` over a stubbed boto3
+  client. The Stubber checks the request parameters and the response shape against
+  the S3 API model.
+* **Real provider** (`provider_client`): the whole path against a bucket.
+
+None of the first three need network access or credentials.
+
+HTTP behavior, on the in-memory backend through `create_app(service)`:
+
+* [`test_list_returns_every_promised_field`](tests/test_list.py): 200; the body has
+  exactly `files` and `next_cursor`; the file has exactly the five fields, with the
+  right key and size, `content_type` `null`, the Create `etag` without quotes, and a
+  UTC `last_modified` ending in `Z`.
+* [`test_list_of_empty_storage_with_default_parameters_is_one_empty_page`](tests/test_list.py):
+  `GET /files` with no parameters on empty storage returns
+  `{"files": [], "next_cursor": null}`.
+* [`test_traversal_returns_every_file_once_in_order`](tests/test_list.py), for n = 0,
+  n < limit, n = limit, n = limit + 1, and limit = 1: following the cursor lists
+  exactly the expected keys, in order, with no page over the limit and a file outside
+  the prefix left out.
+* [`test_seven_files_three_per_page_each_appear_once_in_order`](tests/test_list.py):
+  all seven keys exactly once, in order, without the neighbors on either side.
+* [`test_list_sorts_keys_by_their_utf8_bytes`](tests/test_list.py):
+  `B.txt`, `a.txt`, `a/x.txt`, `b.txt`, `é.txt`.
+* [`test_prefix_is_plain_text_matched_at_the_start_of_the_key`](tests/test_list.py):
+  `docs/` lists only the two keys under it, nested one included; `docs` also lists
+  `docs2/c.txt` and `docsx.txt`; `other/docs/d.txt` never appears.
+* [`test_largest_limit_is_accepted`](tests/test_list.py): `limit=1000` returns 200.
+* [`test_prefix_of_1024_bytes_is_accepted_and_1025_is_400`](tests/test_list.py): 200,
+  then 400 `InvalidInput`.
+* [`test_files_present_for_the_whole_traversal_appear_once_despite_changes`](tests/test_list.py):
+  the three original files appear exactly once each.
+* [`test_list_pages_through_files_with_a_cursor`](tests/test_list.py) and
+  [`test_list_rejects_an_out_of_range_limit`](tests/test_list.py), from before this
+  section: two pages with a prefix; `limit` 0 and 1001 return 400. The error body for
+  `limit` 0, 1001, and `abc` is checked in
+  [tests/test_invalid_input.py](tests/test_invalid_input.py).
+
+HTTP behavior over controlled storage:
+
+* [`test_list_returns_the_page_storage_gives_and_passes_the_cursor_through`](tests/test_list.py):
+  storage's page comes back as JSON unchanged, `next_cursor` included, and the only
+  storage call is `list_files("docs/", 5, "cursor-from-caller")`.
+* [`test_list_defaults_reach_storage_as_every_file_100_per_page`](tests/test_list.py):
+  `GET /files` calls `list_files("", 100, None)`.
+* [`test_invalid_list_input_never_reaches_storage`](tests/test_list.py), for `limit`
+  0, 1001, and `abc`, and a 1025-byte prefix: 400 `InvalidInput`, and no storage call
+  at all.
+* [`test_list_reports_storage_failures_in_our_error_format`](tests/test_list.py):
+  `ProviderError` gives 502 and `ProviderUnavailable` gives 503, each with exactly
+  `error` and `detail`.
+
+Translation, with `stubbed_s3` (no network):
+
+* [`test_s3_list_translates_a_provider_page_into_a_file_page`](tests/test_list.py):
+  `list_objects_v2` is called with the bucket, prefix, and `MaxKeys`, and no
+  `ContinuationToken`. The answer becomes exactly the expected `FilePage`: quotes
+  stripped from both ETags, `content_type` `None`, `NextContinuationToken` as
+  `next_cursor`, and the provider-only fields left out.
+* [`test_s3_list_sends_the_cursor_as_the_continuation_token`](tests/test_list.py):
+  the cursor is sent as `ContinuationToken`; an answer without
+  `NextContinuationToken` gives `next_cursor` `None`.
+* [`test_s3_list_with_no_matches_is_an_empty_page`](tests/test_list.py): an answer
+  without `Contents` gives an empty page, not an error.
+* [`test_s3_list_returns_keys_decoded_when_the_provider_sends_them_url_encoded`](tests/test_list.py):
+  boto3 asks for `EncodingType=url` and decodes the keys itself, so
+  `docs/r%C3%A9sum%C3%A9.pdf` reaches callers as `docs/résumé.pdf`.
+* [`test_s3_list_rejected_by_the_provider_raises_provider_error`](tests/test_list.py):
+  `AccessDenied` and `NoSuchBucket` both become `ProviderError`.
+* [`test_s3_list_that_cannot_reach_the_provider_raises_provider_unavailable`](tests/test_list.py):
+  a connection failure becomes `ProviderUnavailable`. The Stubber cannot simulate one,
+  so the test replaces the boto3 call. It also checks that the cause is the
+  connection error. Without that check it could pass by mistake, because an unstubbed
+  call ends as `ProviderUnavailable` too (the Stubber's error is a `BotoCoreError`).
+
+Every backend, in
+[tests/test_storage_contract.py](tests/test_storage_contract.py) (in-memory in the fast
+suite, S3 with `-m provider`):
+
+* `test_list_matches_the_prefix_as_text_at_every_depth_in_byte_order`: `docs/` lists
+  `docs/B.txt`, `docs/a.txt`, `docs/sub/b.txt`, and `docs/é.txt`, in that order, and
+  not `docs2/c.txt`.
+
+Real provider (marked `provider`):
+
+* [`test_list_pages_through_the_real_provider`](tests/test_list.py): seven files with
+  uppercase, nested, and non-ASCII keys, listed three per page. At least three pages;
+  the keys in UTF-8 byte order; `size` and `etag` equal to the Create response;
+  `content_type` `null`; UTC `last_modified`. With `limit=7` (n = limit), the same
+  seven keys.
+
+**A test that detects a defect** (`docs/testing.txt` section 1.5). The in-memory backend
+was changed to end the listing one file early whenever the last page would hold exactly
+one file (`len(keys) > limit + 1` instead of `len(keys) > limit`). Five tests failed,
+among them `test_traversal_returns_every_file_once_in_order[n=limit+1]`, which got
+`p/a.txt` to `p/c.txt` instead of `p/a.txt` to `p/d.txt`, and
+`test_seven_files_three_per_page_each_appear_once_in_order`, which was missing
+`seven/g.txt`. The change was reverted, and all List tests pass again.
+
+Two more changes were tried and reverted the same way. With the service passing `None`
+instead of the caller's cursor, six tests failed. The controlled-storage test showed the
+wrong call, and the traversal tests stopped at the 50-page limit instead of hanging.
+With `S3Storage` keeping the ETag quotes in listings, the page translation test failed.
+
 ### Real-provider verification
+
+#### Run by Faizal Rahman, with Claude Code (covering for Prateek)
+
+- Provider: OCI Object Storage, us-ashburn-1
+- Date: 2026-10-14
+- Commit: b95bf89, plus this branch's changes (List tests, docs, and the `/docs`
+  description)
+- Request: seven one-byte files `a.txt` to `g.txt`, uploaded in the order g, c, e, a, f,
+  b, d, under `P=api-tests/manual-list-72a78e9ab397440b8fae69f043abde02/`. Also one
+  neighbor, `api-tests/manual-list-72a78e9ab397440b8fae69f043abde02-other/h.txt`,
+  which sorts just before `P`. Then, with each cursor percent-encoded:
+  ```bash
+  curl -s "$B/files?prefix=$P&limit=3"
+  curl -s "$B/files?prefix=$P&limit=3&cursor=<page 1 next_cursor>"
+  curl -s "$B/files?prefix=$P&limit=3&cursor=<page 1 next_cursor>"   # the same cursor again
+  curl -s "$B/files?prefix=$P&limit=3&cursor=<page 2 next_cursor>"
+  curl -s "$B/files?prefix=$P&limit=7"
+  ```
+- Expected: 200 every time. Pages `a`–`c`, `d`–`f`, and `g`, with `next_cursor`
+  `null` only on the last. The neighbor never appears. Repeating a cursor returns the
+  same page. With `limit=7`, all seven files and `next_cursor` `null`.
+- Observed (keys shortened to `P/`, cursors shortened):
+  ```text
+  page 1          200  P/a.txt P/b.txt P/c.txt   next_cursor "1:n3txocCZ..." (110 characters)
+  page 2          200  P/d.txt P/e.txt P/f.txt   next_cursor "1:4cV6sgeJ..."
+  page 2 again    200  P/d.txt P/e.txt P/f.txt   next_cursor "1:rnvcKuLw..."
+  page 3          200  P/g.txt                   next_cursor null
+  limit=7         200  P/a.txt ... P/g.txt       next_cursor null
+  ```
+  Page 3 in full:
+  ```json
+  {"files":[{"key":"api-tests/manual-list-72a78e9ab397440b8fae69f043abde02/g.txt","size":1,"content_type":null,"etag":"9dd4e461268c8034f5c8564e155c67a6","last_modified":"2026-10-14T20:30:21Z"}],"next_cursor":null}
+  ```
+  Every file had `"size":1`, `"content_type":null`, and the same `etag`. The
+  `last_modified` values were `20:30:21Z` or `20:30:22Z`.
+  `uv run --env-file .env pytest -m provider`: `8 passed, 50 deselected`. After the
+  Level 3 and 4 changes on this branch, the same command gave `9 passed, 66 deselected`
+  (the new contract test runs on S3 too).
+- Cleanup: all eight deletes returned 204, and
+  `GET /files?prefix=api-tests/manual-list-72a78e9ab397440b8fae69f043abde02` (no
+  trailing slash, so the neighbor is included) returned `{"files":[],"next_cursor":null}`.
+
+The example in [docs/API.md](docs/API.md#list) was also run as written against the
+same bucket. Its output is the one shown there, and its prefix was empty afterwards.
 
 ### Provider observations
 
+* **Cursor format.** OCI cursors are `1:` followed by about 108 base64url characters,
+  sometimes ending in `=`. They worked both percent-encoded and not, but callers should
+  encode them, as the API docs say.
+* **A new cursor string on every request.** Asking for the same page twice gave two
+  different `next_cursor` strings, and both continued correctly. Nothing may compare
+  cursor strings. This is now in the List assumptions in [docs/API.md](docs/API.md#list).
+* **No cursor with an empty page.** With n = limit (seven files, `limit=7`), and on the
+  last page of 3 + 3 + 1, OCI returned `next_cursor: null`. Every page before the last
+  was full. The contract still allows short or empty pages with a cursor, and the tests
+  rely on neither.
+* **Order.** In the provider test, `C.txt`, `a.txt`, `a/x.txt`, `b.txt`, `e.txt`,
+  `g.txt`, and `é.txt` came back in UTF-8 byte order, the same as the in-memory backend.
+* **Timestamps.** OCI's `last_modified` has whole seconds; the in-memory backend has
+  microseconds.
+
 ### Gaps
+
+* **A second person's provider run.** Only Faizal has run List against a real provider.
+  Level 2 needs two people, so the reviewer should run
+  `uv run --env-file .env pytest -m provider -k list` against their own bucket and add a
+  record above.
+* **Malformed cursors**, and cursors reused with another prefix, belong to BUG-CURSOR
+  ([FIX-3](fixesRequired.md#fix-3-a-malformed-list-cursor-returns-the-wrong-error)).
+* **The Stubber checks shapes, not real answers.** Whether OCI really sends what the
+  translation tests feed in is shown only by the provider tests.
+* **Connection failures are simulated by replacing the boto3 call**, so botocore's own
+  retries (up to 3 attempts) are not exercised.
+* **Changes between pages** are tested only on the in-memory backend.
+* **Short or empty pages that still have a cursor** never happened on OCI, so the
+  "continue until `null`" rule was exercised only with full pages.
+* **Cursor lifetime** and **more than 1000 matching files** are not tested.

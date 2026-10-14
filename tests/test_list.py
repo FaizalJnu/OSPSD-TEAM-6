@@ -1,6 +1,54 @@
-"""List: GET /files. Owner: Prateek Saxena."""
+"""List: GET /files. Owner: Prateek Saxena.
 
-from tests.conftest import send_file
+The traversal tests follow the collection example in docs/testing.txt. Expected keys
+are written out by hand, never computed with the code under test.
+"""
+
+from datetime import UTC, datetime, timedelta
+from typing import Any
+from unittest.mock import call, create_autospec
+
+import pytest
+from botocore.exceptions import EndpointConnectionError
+from fastapi.testclient import TestClient
+
+from storage_service.errors import ProviderError, ProviderUnavailable
+from storage_service.main import create_app
+from storage_service.models import FileInfo, FilePage
+from storage_service.service import FileService
+from storage_service.storage.base import StorageClient
+from tests.conftest import MAX_UPLOAD_BYTES, send_file
+
+# Stops a traversal whose cursor never runs out, instead of looping forever.
+MAX_PAGES = 50
+
+
+def list_pages(
+    client: TestClient, prefix: str = "", limit: int = 100, cursor: str | None = None
+) -> list[dict[str, Any]]:
+    """Follow next_cursor until it is null, as docs/API.md tells callers to.
+
+    Returns every page's body. Fails if a response is not 200 or has more than
+    ``limit`` files.
+    """
+    pages = []
+    for _ in range(MAX_PAGES):
+        params: dict[str, str | int] = {"prefix": prefix, "limit": limit}
+        if cursor is not None:
+            params["cursor"] = cursor
+        response = client.get("/files", params=params)
+        assert response.status_code == 200
+        page = response.json()
+        assert len(page["files"]) <= limit
+        pages.append(page)
+        cursor = page["next_cursor"]
+        if cursor is None:
+            return pages
+    pytest.fail(f"next_cursor was still set after {MAX_PAGES} pages")
+
+
+def listed_keys(pages: list[dict[str, Any]]) -> list[str]:
+    return [item["key"] for page in pages for item in page["files"]]
 
 
 def test_list_pages_through_files_with_a_cursor(client):
@@ -21,3 +69,391 @@ def test_list_pages_through_files_with_a_cursor(client):
 def test_list_rejects_an_out_of_range_limit(client):
     assert client.get("/files", params={"limit": 0}).status_code == 400
     assert client.get("/files", params={"limit": 1001}).status_code == 400
+
+
+def test_list_returns_every_promised_field(client):
+    created = send_file(client, "POST", "photos/cat.jpg", b"meow").json()
+
+    response = client.get("/files", params={"prefix": "photos/"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {"files", "next_cursor"}
+    assert body["next_cursor"] is None
+    [item] = body["files"]
+    assert set(item) == {"key", "size", "content_type", "etag", "last_modified"}
+    assert item["key"] == "photos/cat.jpg"
+    assert item["size"] == 4
+    assert item["content_type"] is None  # the S3 list call does not return it
+    assert item["etag"] == created["etag"]
+    assert not item["etag"].startswith('"')
+    assert item["last_modified"].endswith("Z")
+    assert datetime.fromisoformat(item["last_modified"]).utcoffset() == timedelta(0)
+
+
+def test_list_of_empty_storage_with_default_parameters_is_one_empty_page(client):
+    response = client.get("/files")
+
+    assert response.status_code == 200
+    assert response.json() == {"files": [], "next_cursor": None}
+
+
+@pytest.mark.parametrize(
+    ("names", "limit"),
+    [
+        pytest.param([], 3, id="n=0"),
+        pytest.param(["a", "b"], 3, id="n<limit"),
+        pytest.param(["a", "b", "c"], 3, id="n=limit"),
+        pytest.param(["a", "b", "c", "d"], 3, id="n=limit+1"),
+        pytest.param(["a", "b", "c"], 1, id="limit=1"),
+    ],
+)
+def test_traversal_returns_every_file_once_in_order(client, names, limit):
+    # Upload in reverse, so the order of the result comes from the listing.
+    for name in reversed(names):
+        send_file(client, "POST", f"p/{name}.txt", b"x")
+    send_file(client, "POST", "q/outside.txt", b"x")
+
+    pages = list_pages(client, prefix="p/", limit=limit)
+
+    assert listed_keys(pages) == [f"p/{name}.txt" for name in names]
+
+
+def test_seven_files_three_per_page_each_appear_once_in_order(client):
+    for name in ("g", "c", "e", "a", "f", "b", "d"):
+        send_file(client, "POST", f"seven/{name}.txt", b"x")
+    # Neighbors just before and after the prefix in sort order.
+    for key in ("seven.txt", "seven2/h.txt"):
+        send_file(client, "POST", key, b"x")
+
+    pages = list_pages(client, prefix="seven/", limit=3)
+
+    assert listed_keys(pages) == [
+        "seven/a.txt",
+        "seven/b.txt",
+        "seven/c.txt",
+        "seven/d.txt",
+        "seven/e.txt",
+        "seven/f.txt",
+        "seven/g.txt",
+    ]
+
+
+def test_list_sorts_keys_by_their_utf8_bytes(client):
+    for key in ("é.txt", "b.txt", "a/x.txt", "B.txt", "a.txt"):
+        send_file(client, "POST", key, b"x")
+
+    # Uppercase before lowercase, "." (0x2E) before "/" (0x2F), non-ASCII last.
+    assert listed_keys(list_pages(client)) == ["B.txt", "a.txt", "a/x.txt", "b.txt", "é.txt"]
+
+
+def test_prefix_is_plain_text_matched_at_the_start_of_the_key(client):
+    for key in ("docs/a.txt", "docs/sub/b.txt", "docs2/c.txt", "docsx.txt", "other/docs/d.txt"):
+        send_file(client, "POST", key, b"x")
+
+    assert listed_keys(list_pages(client, prefix="docs/")) == ["docs/a.txt", "docs/sub/b.txt"]
+    assert listed_keys(list_pages(client, prefix="docs")) == [
+        "docs/a.txt",
+        "docs/sub/b.txt",
+        "docs2/c.txt",
+        "docsx.txt",
+    ]
+
+
+def test_largest_limit_is_accepted(client):
+    send_file(client, "POST", "a.txt", b"x")
+
+    assert listed_keys(list_pages(client, limit=1000)) == ["a.txt"]
+
+
+def test_prefix_of_1024_bytes_is_accepted_and_1025_is_400(client):
+    at_limit = "é" * 512  # 2 bytes each in UTF-8
+    assert client.get("/files", params={"prefix": at_limit}).status_code == 200
+
+    response = client.get("/files", params={"prefix": at_limit + "a"})
+    assert response.status_code == 400
+    assert response.json()["error"] == "InvalidInput"
+
+
+def test_files_present_for_the_whole_traversal_appear_once_despite_changes(client):
+    for name in ("b", "d", "f"):
+        send_file(client, "POST", f"live/{name}.txt", b"x")
+    first = client.get("/files", params={"prefix": "live/", "limit": 2}).json()
+
+    # Changes between pages, on both sides of the position reached so far.
+    send_file(client, "POST", "live/a.txt", b"x")
+    send_file(client, "POST", "live/e.txt", b"x")
+    rest = list_pages(client, prefix="live/", limit=2, cursor=first["next_cursor"])
+
+    keys = listed_keys([first, *rest])
+    for key in ("live/b.txt", "live/d.txt", "live/f.txt"):
+        assert keys.count(key) == 1
+
+
+# Controlled storage (Level 4): the app as tests build it, over a StorageClient whose
+# answers each test sets. No network and no credentials.
+
+MODIFIED = datetime(2026, 10, 14, 12, 0, tzinfo=UTC)
+
+
+@pytest.fixture
+def controlled_storage():
+    """A stand-in with StorageClient's methods and signatures, and no behavior of its own."""
+    return create_autospec(StorageClient, instance=True, spec_set=True)
+
+
+@pytest.fixture
+def controlled_client(controlled_storage):
+    service = FileService(controlled_storage, max_upload_bytes=MAX_UPLOAD_BYTES)
+    return TestClient(create_app(service))
+
+
+def test_list_returns_the_page_storage_gives_and_passes_the_cursor_through(
+    controlled_storage, controlled_client
+):
+    controlled_storage.list_files.return_value = FilePage(
+        files=[
+            FileInfo(
+                key="docs/a.txt",
+                size=5,
+                content_type=None,
+                etag="opaque-tag-1",
+                last_modified=MODIFIED,
+            )
+        ],
+        next_cursor="cursor-from-storage",
+    )
+
+    params = {"prefix": "docs/", "limit": 5, "cursor": "cursor-from-caller"}
+    response = controlled_client.get("/files", params=params)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "files": [
+            {
+                "key": "docs/a.txt",
+                "size": 5,
+                "content_type": None,
+                "etag": "opaque-tag-1",
+                "last_modified": "2026-10-14T12:00:00Z",
+            }
+        ],
+        "next_cursor": "cursor-from-storage",
+    }
+    # One storage call, with the caller's values unchanged.
+    assert controlled_storage.mock_calls == [call.list_files("docs/", 5, "cursor-from-caller")]
+
+
+def test_list_defaults_reach_storage_as_every_file_100_per_page(
+    controlled_storage, controlled_client
+):
+    controlled_storage.list_files.return_value = FilePage(files=[], next_cursor=None)
+
+    assert controlled_client.get("/files").status_code == 200
+    assert controlled_storage.mock_calls == [call.list_files("", 100, None)]
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        pytest.param({"limit": 0}, id="limit=0"),
+        pytest.param({"limit": 1001}, id="limit=1001"),
+        pytest.param({"limit": "abc"}, id="limit=abc"),
+        pytest.param({"prefix": "a" * 1025}, id="prefix-1025-bytes"),
+    ],
+)
+def test_invalid_list_input_never_reaches_storage(controlled_storage, controlled_client, params):
+    response = controlled_client.get("/files", params=params)
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "InvalidInput"
+    assert controlled_storage.mock_calls == []
+
+
+@pytest.mark.parametrize(
+    ("error", "status"),
+    [
+        (ProviderError("storage provider rejected the request (AccessDenied)"), 502),
+        (ProviderUnavailable("could not reach the storage provider"), 503),
+    ],
+)
+def test_list_reports_storage_failures_in_our_error_format(
+    controlled_storage, controlled_client, error, status
+):
+    controlled_storage.list_files.side_effect = error
+
+    response = controlled_client.get("/files", params={"prefix": "docs/"})
+
+    assert response.status_code == status
+    assert response.json() == {"error": type(error).__name__, "detail": str(error)}
+
+
+# Translation (Level 3): S3Storage over a stubbed boto3 client. No network.
+
+LIST_PARAMS = {"Bucket": "test-bucket", "Prefix": "docs/", "MaxKeys": 2}
+
+
+def test_s3_list_translates_a_provider_page_into_a_file_page(stubbed_s3):
+    storage, stubber = stubbed_s3
+    stubber.add_response(
+        "list_objects_v2",
+        {
+            "Name": "test-bucket",
+            "Prefix": "docs/",
+            "KeyCount": 2,
+            "MaxKeys": 2,
+            "IsTruncated": True,
+            "NextContinuationToken": "token-2",
+            "Contents": [
+                {
+                    "Key": "docs/a.txt",
+                    "Size": 5,
+                    "ETag": '"0cc175b9c0f1b6a831c399e269772661"',
+                    "LastModified": MODIFIED,
+                    "StorageClass": "STANDARD",
+                },
+                {
+                    "Key": "docs/b.bin",
+                    "Size": 0,
+                    "ETag": '"d41d8cd98f00b204e9800998ecf8427e-2"',
+                    "LastModified": MODIFIED,
+                    "StorageClass": "STANDARD",
+                },
+            ],
+        },
+        LIST_PARAMS,
+    )
+
+    page = storage.list_files("docs/", 2, None)
+
+    # Quotes stripped, no content type, the provider's token as the cursor, and the
+    # provider-only fields (bucket name, counts, storage class) left behind.
+    assert page == FilePage(
+        files=[
+            FileInfo(
+                key="docs/a.txt",
+                size=5,
+                content_type=None,
+                etag="0cc175b9c0f1b6a831c399e269772661",
+                last_modified=MODIFIED,
+            ),
+            FileInfo(
+                key="docs/b.bin",
+                size=0,
+                content_type=None,
+                etag="d41d8cd98f00b204e9800998ecf8427e-2",
+                last_modified=MODIFIED,
+            ),
+        ],
+        next_cursor="token-2",
+    )
+
+
+def test_s3_list_sends_the_cursor_as_the_continuation_token(stubbed_s3):
+    storage, stubber = stubbed_s3
+    stubber.add_response(
+        "list_objects_v2",
+        {
+            "IsTruncated": False,
+            "Contents": [
+                {"Key": "docs/c.txt", "Size": 1, "ETag": '"etag-c"', "LastModified": MODIFIED}
+            ],
+        },
+        {**LIST_PARAMS, "ContinuationToken": "token-2"},
+    )
+
+    page = storage.list_files("docs/", 2, "token-2")
+
+    assert [info.key for info in page.files] == ["docs/c.txt"]
+    assert page.next_cursor is None
+
+
+def test_s3_list_with_no_matches_is_an_empty_page(stubbed_s3):
+    storage, stubber = stubbed_s3
+    # S3 leaves Contents out entirely when nothing matches.
+    stubber.add_response("list_objects_v2", {"IsTruncated": False, "KeyCount": 0}, LIST_PARAMS)
+
+    assert storage.list_files("docs/", 2, None) == FilePage(files=[], next_cursor=None)
+
+
+def test_s3_list_returns_keys_decoded_when_the_provider_sends_them_url_encoded(stubbed_s3):
+    storage, stubber = stubbed_s3
+    # boto3 asks for EncodingType=url and decodes the keys itself, so S3Storage
+    # and its callers only ever see real keys.
+    stubber.add_response(
+        "list_objects_v2",
+        {
+            "EncodingType": "url",
+            "IsTruncated": False,
+            "Contents": [
+                {
+                    "Key": "docs/r%C3%A9sum%C3%A9.pdf",
+                    "Size": 1,
+                    "ETag": '"etag"',
+                    "LastModified": MODIFIED,
+                }
+            ],
+        },
+        LIST_PARAMS,
+    )
+
+    assert [info.key for info in storage.list_files("docs/", 2, None).files] == ["docs/résumé.pdf"]
+
+
+@pytest.mark.parametrize(("code", "status"), [("AccessDenied", 403), ("NoSuchBucket", 404)])
+def test_s3_list_rejected_by_the_provider_raises_provider_error(stubbed_s3, code, status):
+    storage, stubber = stubbed_s3
+    # List names no file, so even a 404 is a provider problem, never FileNotFound.
+    stubber.add_client_error(
+        "list_objects_v2",
+        service_error_code=code,
+        http_status_code=status,
+        expected_params=LIST_PARAMS,
+    )
+
+    with pytest.raises(ProviderError, match=code):
+        storage.list_files("docs/", 2, None)
+
+
+def test_s3_list_that_cannot_reach_the_provider_raises_provider_unavailable(
+    stubbed_s3, monkeypatch
+):
+    storage, _ = stubbed_s3
+
+    def unreachable(**kwargs):
+        raise EndpointConnectionError(endpoint_url="https://s3.example.invalid")
+
+    # The Stubber cannot simulate a connection failure, so replace the call itself.
+    monkeypatch.setattr(storage._client, "list_objects_v2", unreachable)
+
+    with pytest.raises(ProviderUnavailable) as raised:
+        storage.list_files("docs/", 2, None)
+    # An unstubbed call also ends as ProviderUnavailable (the Stubber's error is a
+    # BotoCoreError), so check the cause to be sure this is the connection failure.
+    assert isinstance(raised.value.__cause__, EndpointConnectionError)
+
+
+@pytest.mark.provider
+def test_list_pages_through_the_real_provider(provider_client, provider_prefix):
+    names = ("g.txt", "C.txt", "e.txt", "a/x.txt", "é.txt", "b.txt", "a.txt")
+    created = {}
+    for name in names:
+        response = send_file(provider_client, "POST", provider_prefix + name, name.encode())
+        assert response.status_code == 201
+        created[response.json()["key"]] = response.json()
+
+    pages = list_pages(provider_client, prefix=provider_prefix, limit=3)
+
+    assert len(pages) >= 3
+    expected = ("C.txt", "a.txt", "a/x.txt", "b.txt", "e.txt", "g.txt", "é.txt")
+    assert listed_keys(pages) == [provider_prefix + name for name in expected]
+    for item in (item for page in pages for item in page["files"]):
+        assert item["size"] == created[item["key"]]["size"]
+        assert item["etag"] == created[item["key"]]["etag"]
+        assert item["content_type"] is None
+        assert datetime.fromisoformat(item["last_modified"]).utcoffset() == timedelta(0)
+
+    # n = limit: the whole prefix fits in one page.
+    assert listed_keys(list_pages(provider_client, prefix=provider_prefix, limit=7)) == [
+        provider_prefix + name for name in expected
+    ]

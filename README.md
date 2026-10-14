@@ -95,7 +95,7 @@ curl -F "file=@cat.jpg" $B/files/photos/cat.jpg             # again   -> 409
 curl $B/metadata/photos/cat.jpg                             # info    -> 200
 curl -o back.jpg $B/files/photos/cat.jpg                    # download
 cmp cat.jpg back.jpg && echo "identical"
-curl "$B/files?prefix=photos/&limit=10"                     # list
+curl "$B/files?prefix=photos/&limit=10"                     # list    -> 200
 curl -X PUT -F "file=@other.jpg" $B/files/photos/cat.jpg    # replace -> 200
 curl -i -X DELETE $B/files/photos/cat.jpg                   # delete  -> 204
 ```

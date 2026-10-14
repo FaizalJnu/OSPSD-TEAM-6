@@ -8,11 +8,12 @@ This is the only place that decides which storage backend gets used. Run with:
 from importlib.metadata import version
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 
 from storage_service.config import Settings, load_settings
 from storage_service.errors import StorageError
 from storage_service.routers import delete, download, listing, metadata, upload
-from storage_service.routers.error_handlers import storage_error_handler
+from storage_service.routers.error_handlers import storage_error_handler, validation_error_handler
 from storage_service.service import FileService
 from storage_service.storage.base import StorageClient
 from storage_service.storage.memory import InMemoryStorage
@@ -35,6 +36,7 @@ def create_app(service: FileService | None = None) -> FastAPI:
     app.include_router(delete.router)
     app.include_router(metadata.router)
     app.add_exception_handler(StorageError, storage_error_handler)
+    app.add_exception_handler(RequestValidationError, validation_error_handler)
     return app
 
 

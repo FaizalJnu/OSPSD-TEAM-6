@@ -166,19 +166,145 @@ Tests: [tests/test_upload.py](tests/test_upload.py). Not written yet.
 ## Download
 
 Owner: **Vikram Markali**. Contract: [docs/API.md](docs/API.md#download).
-Tests: [tests/test_download.py](tests/test_download.py). Not written yet.
+Tests: [tests/test_download.py](tests/test_download.py).
 
 ### Contract checked
 
+* A 200 returns the exact stored bytes with every promised header: `Content-Type`,
+  `Content-Length`, the quoted `ETag`, `Content-Disposition`, and
+  `X-Content-Type-Options`.
+* The header values agree with the file's info: the `ETag` is the Metadata `etag` in
+  quotes, and `Content-Length` is the size.
+* An invalid key returns 400 `InvalidInput`, and a missing file returns 404
+  `FileNotFound`, both in the error format.
+* The `get` contract in `storage/base.py` holds for `S3Storage`: a `get_object` answer
+  becomes `FileInfo` plus chunks, provider errors become our errors, and the provider
+  stream is closed after reading.
+
 ### Cases and boundaries
+
+* **Key shape:** a key with a folder and non-ASCII characters (`docs/résumé.pdf`),
+  because `Content-Disposition` drops the folder and percent-encodes the name. An
+  invalid key (`a//b.txt`) and a missing key cover the two rejections.
+* **Content type:** a known binary type (`.pdf`), a text type (`.txt`, which gains
+  `; charset=utf-8`), and an unknown extension (falls back to
+  `application/octet-stream`).
+* **Size:** small files in the fast tests, and 10 bytes read with a 4-byte chunk size to
+  check that the download is split into chunks, including a short last one. On the real
+  provider, 5 MiB, to check a multi-megabyte round trip.
+* **Provider errors:** `NoSuchKey` (404) and `AccessDenied` (403), one for each of the
+  two translations in `_translate_errors`.
+* **Stream cleanup:** a body read to the end, and a body closed after the first chunk.
 
 ### Tests
 
+HTTP behavior, on the in-memory backend through `create_app(service)`:
+
+* [`test_download_returns_the_bytes_and_every_promised_header`](tests/test_download.py):
+  identical bytes; `application/pdf`; `Content-Length` equals the size; `ETag` equals
+  the Metadata `etag` in quotes; `Content-Disposition` is
+  `attachment; filename*=UTF-8''r%C3%A9sum%C3%A9.pdf`; `nosniff`.
+* [`test_download_content_type_comes_from_the_extension`](tests/test_download.py):
+  `notes.txt` gives `text/plain; charset=utf-8`, and `blob.unknownext` gives
+  `application/octet-stream`.
+* [`test_download_with_an_invalid_key_is_400`](tests/test_download.py): 400, a body
+  with exactly `error` and `detail`, and `InvalidInput`.
+* [`test_download_of_a_missing_file_is_404`](tests/test_download.py): 404, a body with
+  exactly `error` and `detail`, and `FileNotFound`.
+
+Translation, with `stubbed_s3` (no network):
+
+* [`test_s3_get_translates_the_response_into_file_info_and_chunks`](tests/test_download.py):
+  `get_object` is called with the right bucket and key; the answer becomes the expected
+  `FileInfo` (ETag quotes stripped), and the chunks join to the original bytes.
+* [`test_s3_get_of_a_missing_key_raises_file_not_found`](tests/test_download.py):
+  `NoSuchKey` becomes `FileNotFound`.
+* [`test_s3_get_closes_the_provider_stream`](tests/test_download.py): the provider
+  stream is closed after every chunk is read, and after a caller closes the chunks
+  following the first one.
+* [`test_s3_get_streams_in_chunks`](tests/test_download.py): with the chunk size set to
+  4 bytes, a 10-byte file arrives as chunks of 4, 4, and 2 bytes, so the backend streams
+  instead of reading the whole file at once.
+* [`test_s3_get_rejected_by_the_provider_raises_provider_error`](tests/test_download.py):
+  `AccessDenied` becomes `ProviderError`.
+
+Real provider (marked `provider`):
+
+* [`test_download_of_a_multi_megabyte_file_from_the_real_provider`](tests/test_download.py):
+  5 MiB of random bytes come back identical, with the right `Content-Length` and the
+  Metadata `etag` in quotes.
+
 ### Real-provider verification
+
+#### Run by Vikram Markali
+
+- Provider: OCI Object Storage, us-ashburn-1
+- Date: 2026-10-14
+- Commit: b95bf89, plus this branch's changes (docs, tests, and the `/docs` description)
+- Request:
+  ```bat
+  curl.exe -s -F "file=@hello.txt" %B%/files/examples/hello.txt
+  curl.exe -s -D - -o back.txt %B%/files/examples/hello.txt
+  fc /b hello.txt back.txt
+  ```
+- Expected: 200 with the stored bytes and every header promised in
+  [docs/API.md](docs/API.md#download); `fc /b` finds no differences.
+- Observed:
+  ```text
+  HTTP/1.1 200 OK
+  date: Wed, 14 Oct 2026 18:48:55 GMT
+  server: uvicorn
+  content-length: 33
+  content-disposition: attachment; filename*=UTF-8''hello.txt
+  etag: "d5dd2e893e86e4e636ad6261081837ed"
+  x-content-type-options: nosniff
+  content-type: text/plain; charset=utf-8
+
+  Comparing files hello.txt and BACK.TXT
+  FC: no differences encountered
+  ```
+  `uv run --env-file .env pytest -m provider`: `8 passed, 45 deselected`.
+- Cleanup: `curl.exe -i -X DELETE %B%/files/examples/hello.txt` returned
+  `204 No Content`, and a following `GET` returned `404` `FileNotFound`.
 
 ### Provider observations
 
+* **Files uploaded outside the service keep the type the provider stored.** On OCI
+  (us-ashburn-1, 2026-10-14), a 38-byte `.txt` file uploaded through the OCI Console as
+  `console-check/sample.txt` downloaded through the API with `200` and
+  `content-type: text/plain; charset=utf-8`. Metadata reported `"content_type":
+  "text/plain"` with the same size and etag. Who chose `text/plain` (the console or the
+  browser) was not checked. The service does not recompute the type at download, so a
+  tool that stores another type is served with that type. This matches the contract in
+  the Download assumptions in [docs/API.md](docs/API.md#download), so no bug issue was opened.
+* **No stored type means no `Content-Type` header.** Checked with a test double, not on
+  a provider: when `content_type` is `None`, the response has no `Content-Type` header
+  and still sends `X-Content-Type-Options: nosniff`. Not observed on OCI.
+* Cleanup: `DELETE /files/console-check/sample.txt` returned `204`, then
+  `GET /files/console-check/sample.txt` returned `404` `FileNotFound`, and
+  `GET /files?prefix=console-check/` returned `{"files":[],"next_cursor":null}`.
+
 ### Gaps
+
+* **A provider failure mid-stream cuts the body off.** Once the 200 headers are sent,
+  the status can no longer change. Verified with a test double whose chunks raise
+  `ProviderUnavailable` after 11 of 100 bytes, served by uvicorn: curl received
+  `200`, `content-length: 100`, then 11 bytes, and exited with code 18 (partial file);
+  there was no error body. The server logged `Exception in ASGI application`. Callers
+  can detect the cut by comparing the received size with `Content-Length`. Not covered
+  by an automated test.
+* **`S3Storage` lets a mid-stream SDK error escape.** When the connection drops while
+  chunks are being read, botocore's `ResponseStreamingError` leaves the backend instead
+  of becoming `ProviderUnavailable`, which breaks the `get` contract and the AGENTS.md
+  rule. Tracked in [#26](https://github.com/FaizalJnu/OSPSD-TEAM-6/issues/26).
+* **A download dropped before its first chunk does not close the provider stream.**
+  `S3Storage` closes the stream in a generator's `finally`, which only runs once the
+  generator has started. Tracked in [#15](https://github.com/FaizalJnu/OSPSD-TEAM-6/issues/15).
+* **`ProviderUnavailable` from `get` is not tested here.** The Stubber can only queue
+  answers and client errors, not connection failures. L4-FAKE adds an HTTP test for a
+  503.
+* **Client disconnects are not tested.** When Starlette stops reading the chunks after
+  a client disconnects, and whether it closes them, is not established here.
 
 ## Metadata
 

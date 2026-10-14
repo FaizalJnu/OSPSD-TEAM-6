@@ -100,6 +100,21 @@ curl -X PUT -F "file=@other.jpg" $B/files/photos/cat.jpg    # replace -> 200
 curl -i -X DELETE $B/files/photos/cat.jpg                   # delete  -> 204
 ```
 
+The same steps in Windows `cmd.exe`:
+
+```bat
+set B=http://127.0.0.1:8000
+
+curl.exe -F "file=@cat.jpg" %B%/files/photos/cat.jpg            & rem create: 201
+curl.exe -F "file=@cat.jpg" %B%/files/photos/cat.jpg            & rem again: 409
+curl.exe %B%/metadata/photos/cat.jpg                            & rem info: 200
+curl.exe -o back.jpg %B%/files/photos/cat.jpg                   & rem download
+fc /b cat.jpg back.jpg                                          & rem "no differences"
+curl.exe "%B%/files?prefix=photos/&limit=10"                    & rem list
+curl.exe -X PUT -F "file=@other.jpg" %B%/files/photos/cat.jpg   & rem replace: 200
+curl.exe -i -X DELETE %B%/files/photos/cat.jpg                  & rem delete: 204
+```
+
 Add `-i` to any command to show the status code and response headers.
 
 ## API

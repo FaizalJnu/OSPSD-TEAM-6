@@ -1,27 +1,23 @@
 """Contract tests: every storage backend must pass these same tests.
 
-They check the rules written in ``storage/base.py``. The in-memory backend
-always runs. The S3 backend runs only when real credentials are configured,
-for example:
+They check the rules written in ``storage/base.py``. The in-memory backend runs
+in the fast suite. The S3 backend is marked ``provider`` and runs against the
+bucket in ``.env`` only when asked for:
 
-    uv run --env-file .env pytest tests/test_storage_contract.py
+    uv run --env-file .env pytest -m provider
 """
 
 import io
-import os
 import uuid
 from collections.abc import Iterator
 
 import pytest
 
-from storage_service.config import load_settings
 from storage_service.errors import FileNotFound
 from storage_service.main import build_storage
 from storage_service.storage.base import StorageClient
 from storage_service.storage.memory import InMemoryStorage
-
-S3_CONFIGURED = os.environ.get("STORAGE_BACKEND") == "s3"
-needs_s3 = pytest.mark.skipif(not S3_CONFIGURED, reason="set STORAGE_BACKEND=s3 and S3_* settings")
+from tests.conftest import load_provider_settings
 
 
 @pytest.fixture
@@ -30,9 +26,12 @@ def prefix() -> str:
     return f"contract-tests/{uuid.uuid4().hex}/"
 
 
-@pytest.fixture(params=["memory", pytest.param("s3", marks=needs_s3)])
+@pytest.fixture(params=["memory", pytest.param("s3", marks=pytest.mark.provider)])
 def storage(request, prefix) -> Iterator[StorageClient]:
-    backend = InMemoryStorage() if request.param == "memory" else build_storage(load_settings())
+    if request.param == "memory":
+        backend: StorageClient = InMemoryStorage()
+    else:
+        backend = build_storage(load_provider_settings())
     yield backend
     # Clean up whatever the test wrote. This matters for the real provider.
     for info in backend.list_files(prefix, 1000, None).files:

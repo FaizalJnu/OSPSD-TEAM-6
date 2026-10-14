@@ -25,6 +25,11 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Tests that need a real bucket are opt-in: `uv run --env-file .env pytest -m provider`.
+# A later -m on the command line replaces the one here. --strict-markers turns a
+# misspelled marker into an error instead of a test that silently runs in the fast suite.
+addopts = "-m 'not provider' --strict-markers"
+markers = ["provider: needs a real S3-compatible bucket configured in .env"]
 
 [tool.ruff]
 line-length = 100

@@ -103,10 +103,9 @@ issue. The release manager:
    pull requests going into the release.
 2. Opens a pull request that bumps the version. It goes through normal review.
 3. After it merges, confirms that CI passed on that exact commit on `main`.
-4. Runs the full test suite against the real provider:
-   `uv run --env-file .env pytest`. CI has no provider credentials, so this is
-   the only check against real storage. Nothing should be skipped. Note the
-   result for the release notes.
+4. Runs the real-provider tests: `uv run --env-file .env pytest -m provider`.
+   CI has no provider credentials, so this is the only check against real
+   storage. Every test must pass. Note the result for the release notes.
 5. Tags that commit and pushes the tag. CI runs again on the tag.
 
    ```bash

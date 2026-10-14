@@ -122,6 +122,15 @@ def test_s3_get_streams_in_chunks(stubbed_s3, monkeypatch):
     assert [len(chunk) for chunk in storage.get("a.pdf").chunks] == [4, 4, 2]
 
 
+def test_s3_get_closes_the_provider_stream_when_no_chunk_was_read(stubbed_s3):
+    storage, stubber = stubbed_s3
+    raw = queue_get_object(stubber, "a.pdf", b"data")
+
+    storage.get("a.pdf").chunks.close()
+
+    assert raw.closed
+
+
 def test_s3_get_rejected_by_the_provider_raises_provider_error(stubbed_s3):
     storage, stubber = stubbed_s3
     stubber.add_client_error(

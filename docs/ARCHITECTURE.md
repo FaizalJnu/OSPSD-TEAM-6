@@ -134,7 +134,7 @@ Replacing S3 with another provider means one new module in `storage/` that imple
 |---|---|---|
 | boto3 client | `S3Storage` | Created once by `build_storage`, lives as long as the app. |
 | Upload contents | FastAPI | Starlette spools each upload to a `SpooledTemporaryFile` (in memory up to 1 MiB, then on disk). FastAPI closes it when the request finishes. |
-| Download stream | `S3Storage.get` | Opened by `get_object`. `_read_in_chunks` closes it when the chunks are exhausted, when reading fails, or when the chunks are closed after reading has started. A download dropped before its first chunk is not closed by our code: [#15](https://github.com/FaizalJnu/OSPSD-TEAM-6/issues/15). |
+| Download stream | `S3Storage.get` | Opened by `get_object`. `_ChunkReader` closes it when the chunks are exhausted, when reading fails, or when its `close()` is called, even before the first chunk. The download route never calls `close()` (Starlette does not either), so a response that stops early, for example after a client disconnects, leaves it open until garbage collection. |
 | `FileService` | The app | Lives as long as the app. Holds only the backend and the size limit; it stores no file data. |
 | Files and their info | The provider | The bucket is the only copy. There is no database. |
 | `InMemoryStorage` dict | The backend | Lives as long as the app, so everything is lost on restart. Each test gets a fresh one. |

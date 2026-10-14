@@ -351,6 +351,9 @@ Translation, with `stubbed_s3` (no network):
 * [`test_s3_get_streams_in_chunks`](tests/test_download.py): with the chunk size set to
   4 bytes, a 10-byte file arrives as chunks of 4, 4, and 2 bytes, so the backend streams
   instead of reading the whole file at once.
+* [`test_s3_get_closes_the_provider_stream_when_no_chunk_was_read`](tests/test_download.py):
+  the provider stream is closed when a caller closes the chunks before reading any
+  (regression test for [#15](https://github.com/FaizalJnu/OSPSD-TEAM-6/issues/15)).
 * [`test_s3_get_rejected_by_the_provider_raises_provider_error`](tests/test_download.py):
   `AccessDenied` becomes `ProviderError`.
 
@@ -423,9 +426,6 @@ Real provider (marked `provider`):
   chunks are being read, botocore's `ResponseStreamingError` leaves the backend instead
   of becoming `ProviderUnavailable`, which breaks the `get` contract and the AGENTS.md
   rule. Tracked in [#26](https://github.com/FaizalJnu/OSPSD-TEAM-6/issues/26).
-* **A download dropped before its first chunk does not close the provider stream.**
-  `S3Storage` closes the stream in a generator's `finally`, which only runs once the
-  generator has started. Tracked in [#15](https://github.com/FaizalJnu/OSPSD-TEAM-6/issues/15).
 * **`ProviderUnavailable` from `get` is not tested here.** The Stubber can only queue
   answers and client errors, not connection failures. L4-FAKE adds an HTTP test for a
   503.

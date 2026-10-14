@@ -27,7 +27,27 @@ from storage_service.models import FileDownload, FileInfo, FilePage
 
 class StorageClient(Protocol):
     def put(self, key: str, stream: BinaryIO, content_type: str) -> FileInfo:
-        """Store everything readable from ``stream`` under ``key``, replacing any old file."""
+        """Store everything readable from ``stream`` under ``key`` and return its info.
+
+        Changes provider state: creates the file, or replaces it if ``key`` already
+        exists. Deciding between create and replace is the service's job, not the
+        backend's.
+
+        Inputs:
+
+        * ``key``: used exactly as given. The service has already validated it.
+        * ``stream``: read from its current position to the end. It may be empty,
+          because 0-byte files are allowed. Backends read it in parts, so a large
+          file never has to fit in memory.
+        * ``content_type``: stored with the file and reported by later ``get`` and
+          ``stat`` calls. The service picks it; backends store it unchanged.
+
+        Returns the stored file's info as the provider reports it after the write,
+        so ``size``, ``etag``, and ``last_modified`` describe what was actually
+        stored. The S3 backend reads them back with a follow-up ``stat``.
+
+        If it raises, the write may or may not have happened.
+        """
         ...
 
     def get(self, key: str) -> FileDownload:

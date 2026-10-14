@@ -174,19 +174,120 @@ Gaps that belong to one operation go in that operation's section.
 ## Create and Replace
 
 Owner: **Debasmith Mandal**. Contract: [docs/API.md](docs/API.md#create-and-replace).
-Tests: [tests/test_upload.py](tests/test_upload.py). Not written yet.
+Tests: [tests/test_upload.py](tests/test_upload.py).
 
 ### Contract checked
 
+On the in-memory backend, through HTTP: the success statuses (201 and 200), all five
+file info fields and their formats, that Metadata afterwards agrees with the write,
+every error status that bad input can cause (400, 404, 409, 413), that rejected
+requests change nothing, and that the server, not the client, picks `content_type`.
+Without network, through `stubbed_s3`: how `S3Storage.put` turns the provider's replies
+into `FileInfo` and its rejections into `ProviderError`.
+
 ### Cases and boundaries
+
+* Size: 0 bytes (allowed), exactly the limit (accepted), one byte over (413). The test
+  app's limit is 1024 bytes, so these files stay small.
+* Existence: Create on a free key and on a taken key; Replace on an existing key and on
+  a missing one.
+* Rejected requests: an invalid key stores nothing; a 413 on Replace keeps the old
+  contents and info.
+* Content type: a `.png` key sent as `text/html` is stored and served as `image/png`.
+* Provider boundary: a successful upload with its follow-up `head_object`, and an
+  upload the provider rejects.
 
 ### Tests
 
+All in [tests/test_upload.py](tests/test_upload.py):
+
+* `test_upload_then_download_returns_identical_bytes`: the bytes survive a round trip.
+* `test_create_returns_every_field_and_metadata_agrees`: 201, all five fields with
+  their formats, and Metadata returns the same info.
+* `test_create_refuses_to_overwrite`: 409, and the first contents stay.
+* `test_replace_overwrites_an_existing_file`: 200, and the new contents download.
+* `test_replace_changes_etag_and_size`: new `size` and `etag`, and Metadata agrees.
+* `test_replace_of_a_missing_file_is_404`
+* `test_upload_of_exactly_the_limit_is_accepted`
+* `test_upload_over_the_limit_is_413`: and nothing is stored.
+* `test_replace_over_the_limit_keeps_the_old_contents`
+* `test_empty_file_is_allowed`: 201, size 0, and an empty download.
+* `test_invalid_key_is_400`: and nothing is stored.
+* `test_client_content_type_is_ignored`
+* `test_s3_put_returns_the_info_from_its_follow_up_stat`: also checks that ETag quotes
+  are stripped.
+* `test_s3_put_turns_a_provider_rejection_into_provider_error`
+* `test_create_and_replace_against_the_real_provider` (`provider`): Create, Replace, a
+  download, and Metadata against a real bucket.
+* `test_multipart_upload_round_trips_against_the_real_provider` (`provider`): a 9 MiB
+  upload, which takes the multipart path, downloads byte-identical.
+
 ### Real-provider verification
+
+#### Run by Debasmith Mandal: multipart Create
+
+- Provider: OCI Object Storage, us-ashburn-1 (team test bucket), with the FIX-1 checksum
+  settings in `.env`
+- Date: 2026-10-14
+- Commit: `b95bf89`
+- Request: 12 MiB of random bytes (`head -c 12M /dev/urandom > big.bin`), uploaded with
+  `curl -F "file=@big.bin" $B/files/manual-debasmith/big.bin`, then downloaded, compared,
+  checked with Metadata, and deleted.
+- Expected: 201 with `size` 12582912 and `content_type` `application/octet-stream`
+  (unknown extension); a byte-identical download; Metadata returning the same info; 204
+  on delete, then 404.
+- Observed:
+  ```text
+  POST            201 {"size":12582912,"content_type":"application/octet-stream","etag":"fcfc631d29e14c4a4c16d95db5adc40c-2",...}
+  cmp             byte-identical
+  sha256          9de6a5528d329354a431bc33a6bbc01514d302729a6efbf0d602cbe0c393cdbe for both files
+  GET /metadata   200, same info as the POST response
+  DELETE          204
+  GET /metadata   404 {"error":"FileNotFound","detail":"no file named 'manual-debasmith/big.bin'"}
+  ```
+- Cleanup: deleted through the API; the final 404 confirms it. Local files removed.
+
+#### Run by Debasmith Mandal: Replace
+
+- Provider: OCI Object Storage, us-ashburn-1 (team test bucket), with the FIX-1 checksum
+  settings in `.env`
+- Date: 2026-10-14
+- Commit: `b95bf89`
+- Request: Create `manual-debasmith/notes.txt` containing `first`, Replace it with
+  `second, longer` (`curl -X PUT -F "file=@b.txt" ...`), download it, delete it.
+- Expected: Create returns 201 with size 5; Replace returns 200 with size 14 and a new
+  `etag`; the download returns `second, longer`; Delete returns 204.
+- Observed (statuses from the server log; repeated twice with the same results):
+  ```text
+  POST    201 {"size":5,"content_type":"text/plain","etag":"8b04d5e3775d298e78455efc5ca404d5","last_modified":"2026-10-14T20:40:45Z"}
+  PUT     200 {"size":14,"content_type":"text/plain","etag":"db68a5436e7587753f2f604eb05707b5","last_modified":"2026-10-14T20:40:45Z"}
+  GET     second, longer
+  DELETE  204
+  ```
+- Cleanup: deleted through the API (204). Local files removed.
 
 ### Provider observations
 
+- OCI returns AWS-style multipart ETags: a 12 MiB upload came back as `<hash>-2`, two
+  parts at boto3's 8 MB part size.
+- Single-part ETags are the MD5 of the contents (`8b04d5...` is the MD5 of `first`);
+  multipart ETags are not.
+- `last_modified` has one-second precision: a Create and a Replace in the same second both
+  reported `20:40:45Z`. Compare `etag`, not `last_modified`, to detect a change.
+- Uploads to OCI need the FIX-1 checksum settings until FIX-1 merges; without them every
+  upload returns 502.
+
 ### Gaps
+
+* Level 2 asks for two people per operation. Replace has only been run on OCI by its
+  owner so far; Create was also exercised in Darsh's metadata run.
+* Error cases (409, 413) and files near the 1 GiB limit have not been run on OCI.
+* The race between the existence check and the write is documented in
+  [docs/API.md](docs/API.md#create-and-replace) but not tested.
+* The multipart path is covered only by the `provider` test and the manual run, not by
+  the fast suite.
+* The stub test does not pin the upload's parameters, because boto3 adds a checksum
+  parameter that FIX-1 changes.
 
 ## Download
 

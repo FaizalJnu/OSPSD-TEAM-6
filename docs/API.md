@@ -153,24 +153,91 @@ above instead of repeating them.
 
 ## Create and Replace
 
-`POST /files/{key}` and `PUT /files/{key}`. Owner: **Debasmith Mandal**. Not written
-yet.
+`POST /files/{key}` and `PUT /files/{key}`. Owner: **Debasmith Mandal**.
 
 ### Meaning
 
+Create stores a new file under a key that is not taken yet. Replace overwrites the
+contents of a file that already exists. Both change stored files.
+
 ### Request
+
+* `POST /files/{key}` (Create) or `PUT /files/{key}` (Replace). The key follows the
+  [key rules](#keys).
+* Body: `multipart/form-data` with one required form field named `file`, holding the
+  contents. Any size from 0 bytes up to `MAX_UPLOAD_BYTES` (default 1 GiB). Empty files
+  are allowed.
+* The filename and content type the client sends with the file are ignored.
 
 ### Success
 
+* Create returns `201 Created`. Replace returns `200 OK`.
+* The body is the stored file's [file info](#file-info): `key` is the key from the URL,
+  `size` is the number of bytes received, `content_type` is picked from the key's
+  extension, `etag` is the provider's fingerprint of the new contents, and
+  `last_modified` is when the provider stored them.
+* A Metadata request right afterwards returns the same file info.
+
 ### Side effects
+
+* Create: a file now exists under the key.
+* Replace: the old contents are gone. `size`, `etag`, and `last_modified` describe the
+  new contents.
+* A request that fails with a 4xx status changes nothing: after a failed Create the key
+  is still free, and after a failed Replace the old contents are still there.
 
 ### Errors
 
+| Status | `error` | When |
+|---|---|---|
+| 400 | `InvalidInput` | The key breaks a [key rule](#keys), or the `file` form field is missing. |
+| 404 | `FileNotFound` | Replace only: no file exists under the key. |
+| 409 | `FileAlreadyExists` | Create only: a file already exists under the key. |
+| 413 | `FileTooLarge` | The upload is larger than `MAX_UPLOAD_BYTES`. |
+| 502 | `ProviderError` | The provider refused the write, usually because of configuration. |
+| 503 | `ProviderUnavailable` | The provider could not be reached. |
+
 ### Retry
+
+* After a success, repeating Create returns 409. Repeating Replace with the same
+  contents is safe: the contents and `etag` stay the same, and `last_modified` moves
+  to the time of the latest write (OCI stores it to the second).
+* After a 400, 404, 409, or 413, change the request first. Repeating it unchanged fails
+  the same way.
+* After a 502 or 503, the write may or may not have happened (see
+  [After a failed write](#after-a-failed-write)). Check with Metadata before retrying.
 
 ### Assumptions
 
+* The server picks `content_type` from the key's extension (`application/octet-stream`
+  when the extension is unknown) and ignores what the client claims.
+* The size limit is checked after the whole upload has arrived in a temp file on the
+  server, so an oversized upload uses bandwidth and temp space before it is rejected.
+* Create and Replace check whether the key exists and then write, in two separate
+  provider calls. Two clients racing on the same key can both pass the check, and the
+  last write wins.
+* For uploads larger than 8 MB, the S3 backend uses a multipart upload, and `etag` is
+  not an MD5 of the file.
+
 ### Example
+
+Use a key under a prefix of your own, such as `demo/<your-name>/`, so cleanup is easy.
+
+```bash
+B=http://127.0.0.1:8000
+printf 'hello' > hello.txt
+curl -s -F "file=@hello.txt" $B/files/demo/me/hello.txt           # 201
+curl -s -F "file=@hello.txt" $B/files/demo/me/hello.txt           # 409 FileAlreadyExists
+printf 'hello again' > hello2.txt
+curl -s -X PUT -F "file=@hello2.txt" $B/files/demo/me/hello.txt   # 200, size 11, new etag
+curl -s -X DELETE $B/files/demo/me/hello.txt                      # clean up: 204
+```
+
+The Create response looks like this (`etag` and `last_modified` will differ):
+
+```json
+{"key": "demo/me/hello.txt", "size": 5, "content_type": "text/plain", "etag": "5d41402abc4b2a76b9719d911017c592", "last_modified": "2026-10-14T18:00:00Z"}
+```
 
 ## Download
 

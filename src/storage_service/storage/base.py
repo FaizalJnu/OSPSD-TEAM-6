@@ -1,8 +1,11 @@
 """The contract every storage backend must follow.
 
-The rest of the service only talks to storage through this contract, so adding
-a provider (Garage, a local disk, Google Drive, ...) means adding one module to
-this package. Nothing outside ``storage/`` has to change.
+``StorageClient`` has one method for each thing an operation needs from storage,
+in our own types, so the service never sees a provider SDK. Adding a provider
+(Garage, a local disk, Google Drive, ...) means adding one module to this package
+and one branch in ``main.build_storage``. Nothing else has to change.
+``docs/ARCHITECTURE.md`` explains why each method exists and how the backend is
+wired in.
 
 Rules every backend must follow:
 

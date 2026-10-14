@@ -167,9 +167,8 @@ up, the test layout and fixtures, and what each operation's tests check.
 
 ## Design notes
 
-* **Layers.** Requests go from `routers/` (HTTP) to `service.py` (validation
-  and rules) to a storage backend, through the contract in `storage/base.py`.
-  boto3 is only used in `storage/s3.py`. See `AGENTS.md` for the full code map.
+* **Layers.** The layers, the provider boundary, and how the backend is wired in
+  are explained in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 * **No database.** The provider is the single source of truth. S3 already
   stores each object's size, content type, ETag, and modification time, and a
   separate database would be a second copy that can fall out of sync. We plan

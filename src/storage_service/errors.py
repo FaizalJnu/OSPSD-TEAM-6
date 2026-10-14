@@ -1,7 +1,7 @@
 """Errors this service raises on purpose.
 
 These are plain Python exceptions with no HTTP in them, so the same errors work
-for any caller: the HTTP API, a command-line tool, or an agent. ``routes.py`` is
+for any caller: the HTTP API, a command-line tool, or an agent. ``routers/error_handlers.py`` is
 the only place that turns them into HTTP status codes.
 """
 

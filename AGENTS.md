@@ -8,7 +8,7 @@ Guidance for contributors and coding agents. Read `README.md` first for setup.
 src/storage_service/
   main.py            Builds the app and picks the storage backend (the only wiring point)
   config.py          Reads settings from environment variables
-  routes.py          HTTP layer: endpoints, request parsing, error-to-status mapping
+  routers/           HTTP layer: one module per operation, plus deps.py and error_handlers.py
   service.py         The rules: validation, create vs replace, size limits
   errors.py          Our error types (plain Python, no HTTP)
   models.py          Data shapes: FileInfo, FilePage, FileDownload
@@ -37,8 +37,8 @@ no network), and checks against a real bucket (`provider_client`, marked
 
 ## Architecture rules
 
-* Dependencies point one way: `routes` -> `service` -> `storage.base` <- backends.
-* Only `routes.py` and `main.py` import FastAPI. Only `storage/s3.py` imports
+* Dependencies point one way: `routers` -> `service` -> `storage.base` <- backends.
+* Only `routers/` and `main.py` import FastAPI. Only `storage/s3.py` imports
   boto3 or botocore. Provider SDK types and exceptions never leave their backend.
   (Tests may use botocore's `Stubber` to test `storage/s3.py` without network.)
 * The service never mentions HTTP status codes. Routes never contain rules.

@@ -174,23 +174,105 @@ yet.
 
 ## Download
 
-`GET /files/{key}`. Owner: **Vikram Markali**. Not written yet.
+`GET /files/{key}`. Owner: **Vikram Markali**.
 
 ### Meaning
 
+Returns the contents of the file stored under a key, as a download. It only reads:
+nothing in the bucket changes.
+
 ### Request
+
+`GET /files/{key}`, where `{key}` is the file's [key](#keys) (required, slashes
+included). There are no query parameters and no body.
 
 ### Success
 
+Status **200**. The body is the file's exact bytes, streamed from the provider in
+pieces, so large files never have to fit in the server's memory. The headers:
+
+| Header | Meaning |
+|---|---|
+| `Content-Type` | The type stored with the file at upload, the same value as `content_type` in [file info](#file-info). For `text/*` types the server adds `; charset=utf-8`, for example `text/plain; charset=utf-8`. |
+| `Content-Length` | The file's size in bytes, the same value as `size` in file info. |
+| `ETag` | The file's `etag` from file info, wrapped in double quotes as HTTP requires, for example `"08a83d6686281a5a292732435b21f83a"`. |
+| `Content-Disposition` | `attachment; filename*=UTF-8''<name>`, where `<name>` is the last segment of the key, percent-encoded as UTF-8. `docs/résumé.pdf` gives `attachment; filename*=UTF-8''r%C3%A9sum%C3%A9.pdf`, so browsers save the file instead of displaying it. |
+| `X-Content-Type-Options` | Always `nosniff`: browsers must use `Content-Type` instead of guessing the type from the bytes. |
+
 ### Side effects
+
+None.
 
 ### Errors
 
+The body uses the [error format](#error-format).
+
+| Status | `error` | When |
+|---|---|---|
+| 400 | `InvalidInput` | The key breaks a [key rule](#keys). The provider is not contacted. |
+| 404 | `FileNotFound` | No file exists under the key. |
+| 502 | `ProviderError` | The provider refused the request, for example bad credentials, a denied permission, or a missing bucket. |
+| 503 | `ProviderUnavailable` | The provider could not be reached or timed out. |
+
+These statuses are only possible before the body starts. If the provider fails after
+the 200 headers are sent, the response is cut off before `Content-Length` bytes arrive,
+with no error body. Compare the received size with `Content-Length` to detect this.
+
 ### Retry
+
+Download only reads, so repeating it is always safe. After a 503, retrying later may
+succeed. After a 400, 404, or 502, retrying the same request gives the same result until
+the key, the stored files, or the configuration change. A cut-off body can be retried
+from the start.
 
 ### Assumptions
 
+* The `ETag` header is quoted, while every JSON `etag` field (Create, Replace,
+  Metadata, List) has no quotes. They are the same value: strip the quotes to compare.
+* `Content-Type` is the type the provider stored with the file. For files uploaded
+  through this service, that is the type picked from the key's extension. For files
+  uploaded another way, such as the provider's console, it is whatever that tool stored,
+  which may not match the extension. The OCI Console stored `text/plain` for a `.txt`
+  file. If the provider stored no type, the response has no `Content-Type` header, and
+  Metadata reports `content_type` as `null`.
+* The file name in `Content-Disposition` is only a suggestion to the client. The
+  download is the same file whatever name it is saved under.
+
 ### Example
+
+Pick any key, for example `examples/hello.txt`. Create a file under it first (Download
+needs an existing file), download it with its headers, compare the bytes, then delete
+it. In Windows `cmd.exe`:
+
+```bat
+set B=http://127.0.0.1:8000
+echo hello from the download example> hello.txt
+curl.exe -s -F "file=@hello.txt" %B%/files/examples/hello.txt
+curl.exe -s -D - -o back.txt %B%/files/examples/hello.txt
+fc /b hello.txt back.txt
+curl.exe -i -X DELETE %B%/files/examples/hello.txt
+del hello.txt back.txt
+```
+
+`-D -` prints the headers and `-o back.txt` saves only the body. (`-i -o` would put the
+headers into the file too.) Expected output, with your own `etag` and `date`:
+
+```text
+HTTP/1.1 200 OK
+date: Wed, 14 Oct 2026 18:48:55 GMT
+server: uvicorn
+content-length: 33
+content-disposition: attachment; filename*=UTF-8''hello.txt
+etag: "d5dd2e893e86e4e636ad6261081837ed"
+x-content-type-options: nosniff
+content-type: text/plain; charset=utf-8
+```
+
+`fc /b` then prints `FC: no differences encountered`, and the delete returns
+`HTTP/1.1 204 No Content`. To check the cleanup, `curl.exe -i %B%/files/examples/hello.txt`
+now returns `404` with `{"error":"FileNotFound",...}`. On macOS or Linux, use
+`B=http://127.0.0.1:8000`, `$B` instead of `%B%`, `curl` instead of `curl.exe`,
+`cmp hello.txt back.txt` instead of `fc /b`, and `rm` instead of `del`.
 
 ## Metadata
 

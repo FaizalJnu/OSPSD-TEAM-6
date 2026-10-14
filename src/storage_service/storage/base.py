@@ -28,7 +28,20 @@ class StorageClient(Protocol):
         ...
 
     def get(self, key: str) -> FileDownload:
-        """Open a file for reading. Contents arrive in chunks as they are iterated."""
+        """Open the file stored under ``key`` for reading. Only reads provider state.
+
+        Returns a ``FileDownload``: the file's ``FileInfo`` (``content_type`` is the type
+        stored with the file, or None if the provider has none; ``etag`` has no quotes)
+        and ``chunks``, byte chunks that join to the whole file. The info is known before
+        any contents are read. Contents are fetched from the provider as ``chunks`` is
+        iterated, and it can be iterated only once. The backend releases its provider
+        resources once ``chunks`` is exhausted, or closed after reading has started.
+
+        Raises ``FileNotFound`` if no file exists under ``key``, and ``ProviderError`` or
+        ``ProviderUnavailable`` if the provider fails while the file is being opened. A
+        failure while ``chunks`` is being read is not translated yet (see the Download
+        gaps in TESTING.md).
+        """
         ...
 
     def stat(self, key: str) -> FileInfo:

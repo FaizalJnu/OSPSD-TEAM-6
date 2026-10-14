@@ -38,8 +38,10 @@ From here on, all work follows the process below.
 
 * `main` always passes CI, and releases are made from it. Nobody pushes to
   `main` directly. Every change goes through a pull request.
-* Work on a short-lived branch created from the latest `main`. Name it after the
-  issue, for example `12-garage-backend`.
+* Work on a short-lived branch created from the latest `dev`. Name it after the
+  issue, for example `12-garage-backend`, and open the pull request into `dev`.
+* Once a week, before class, a pull request from `dev` to `main` brings that
+  week's work to `main` for the instructors to review.
 * Each pull request has one purpose, links its issue with `Closes #12`, and
   completes the pull request template.
 * If any of the code was written with an AI assistant, say so in the pull
@@ -53,16 +55,16 @@ A pull request can be merged only when all of these are true:
 2. Every CI check passes on the pull request's latest commit: lint, format,
    type check, and tests.
 3. Every review comment is resolved.
-4. The branch is up to date with `main`. If it is behind, update it and let CI
-   run again.
+4. The branch is up to date with the branch it merges into (`dev`, or `main` for
+   the weekly pull request). If it is behind, update it and let CI run again.
 
 Reviewers check that the change does what the issue asks, that new behavior has
 tests, that the architecture rules in `AGENTS.md` still hold, that the docs are
 updated, and that no secrets were added.
 
-When a pull request is approved and green, its author merges it with **Squash
-and merge**, so each pull request becomes a single commit on `main` that is
-easy to revert. Then the author deletes the branch.
+When a pull request into `dev` is approved and green, its author merges it with
+**Squash and merge**, so each pull request becomes a single commit on `dev` that
+is easy to revert. Then the author deletes the branch.
 
 Failures are reported honestly. We never skip, disable, or loosen a test or a
 check just to get a green result. If a check fails for a reason that has nothing
@@ -101,8 +103,10 @@ issue. The release manager:
 
 1. Opens an issue named "Release vX.Y.Z", assigns themselves, and lists the
    pull requests going into the release.
-2. Opens a pull request that bumps the version. It goes through normal review.
-3. After it merges, confirms that CI passed on that exact commit on `main`.
+2. Opens a pull request into `dev` that bumps the version. It goes through
+   normal review.
+3. After the bump reaches `main` through a pull request from `dev`, confirms that
+   CI passed on the `main` commit that will be tagged.
 4. Runs the real-provider tests: `uv run --env-file .env pytest -m provider`.
    CI has no provider credentials, so this is the only check against real
    storage. Every test must pass. Note the result for the release notes.
@@ -143,10 +147,11 @@ recovery.
    in the bucket. Switching versions therefore needs no data migration. If the
    bad release wrote wrong files to the bucket, find them by key or
    modification time and delete or re-upload them.
-3. **Fix it on `main`.** Either revert the pull request that caused the problem
-   (`git revert <commit>` in a new pull request, which is a single commit
-   because we squash-merge), or write a fix. Either way, start with a test that
-   fails because of the bug.
+3. **Fix it on `dev`, then bring it to `main`.** Either revert the pull request
+   that caused the problem (`git revert <commit>` in a new pull request into
+   `dev`, which is a single commit because we squash-merge), or write a fix.
+   Either way, start with a test that fails because of the bug. Then open a pull
+   request from `dev` to `main`.
 4. **Release the fix** as a new PATCH version, following the steps above. Never
    delete, move, or reuse a published tag. The bad version stays in the history
    with its warning.

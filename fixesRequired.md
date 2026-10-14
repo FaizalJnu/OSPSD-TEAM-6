@@ -22,8 +22,8 @@ the bug.
 * Use your own S3-compatible bucket and keys in `.env`. The README walks through
   OCI. Never commit `.env`, and never paste keys into Slack, issues, or PRs. On
   OCI, add the two FIX-1 lines below to your `.env` until FIX-1 is merged.
-* Branch from the latest `main` once the test-foundation PR (which adds the
-  fixtures below) is merged.
+* Branch from the latest `dev`. The test-foundation PR, which adds the fixtures
+  below, is merged there.
 
 ### Tests and fixtures
 
@@ -61,11 +61,11 @@ Fixtures in `tests/conftest.py`:
 4. Fix the bug, keeping provider details inside `storage/s3.py`. Run the test
    again and keep the passing output.
 5. Run every check in the table above.
-6. Open a PR with `Closes #<issue>`. Make the title the behavior change, for
-   example "Return 400 for malformed list cursors", because it becomes the
-   squash commit message.
+6. Open a PR into `dev` with `Closes #<issue>`. Make the title the behavior
+   change, for example "Return 400 for malformed list cursors", because it
+   becomes the squash commit message.
 7. Merge after the reviewer approves, CI is green, every comment is resolved, and
-   the branch is up to date with `main`. Squash and merge, then delete the
+   the branch is up to date with `dev`. Squash and merge, then delete the
    branch.
 
 If the bug does **not** reproduce on your provider, record what you observed

@@ -24,6 +24,10 @@ tests/
   test_list.py             GET /files
   test_service.py          Input rules
   test_storage_contract.py Same tests for every backend; S3 runs only with -m provider
+docs/
+  API.md             HTTP contract: keys, file info, errors, one section per operation
+  PROVIDERS.md       Settings and provider-test results for each S3-compatible provider
+TESTING.md           Check commands, test layout, fixtures, and each operation's test record
 ```
 
 Each operation's file holds all of its tests: HTTP behavior on the in-memory

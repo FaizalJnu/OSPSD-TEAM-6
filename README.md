@@ -79,7 +79,9 @@ server stops.
    ```
 
 Garage, MinIO, and AWS S3 use the same settings with a different endpoint,
-region, and keys. See `.env.example` for all available settings.
+region, and keys. See `.env.example` for all available settings, and
+[docs/PROVIDERS.md](docs/PROVIDERS.md) for what the team has verified on each
+provider.
 
 ## Try it
 
@@ -102,24 +104,17 @@ Add `-i` to any command to show the status code and response headers.
 
 ## API
 
-| Method | Path | Description | Errors |
-|---|---|---|---|
-| `POST` | `/files/{key}` | Create a file (form field `file`) | 409 exists, 413 too large |
-| `PUT` | `/files/{key}` | Replace an existing file | 404 missing, 413 too large |
-| `GET` | `/files/{key}` | Download a file (streamed) | 404 missing |
-| `DELETE` | `/files/{key}` | Delete a file | 404 missing |
-| `GET` | `/metadata/{key}` | Get file info as JSON | 404 missing |
-| `GET` | `/files` | List files: `prefix`, `limit` (1 to 1000), `cursor` | 422 invalid limit |
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/files/{key}` | Create a file (form field `file`) |
+| `PUT` | `/files/{key}` | Replace an existing file |
+| `GET` | `/files/{key}` | Download a file (streamed) |
+| `DELETE` | `/files/{key}` | Delete a file |
+| `GET` | `/metadata/{key}` | Get file info as JSON |
+| `GET` | `/files` | List files: `prefix`, `limit` (1 to 1000), `cursor` |
 
-Any endpoint can also return 400 (invalid key), 502 (the provider rejected the
-request, usually a configuration problem), or 503 (the provider is unreachable).
-Error responses are JSON, for example:
-`{"error": "FileNotFound", "detail": "no file named 'x.txt'"}`.
-
-A **key** is a file's full name, including any folder-like prefix, such as
-`photos/2026/cat.jpg`. Keys must be non-empty and at most 1024 bytes. They
-cannot start or end with `/`, contain `//`, contain `.` or `..` segments, or
-include control characters.
+The key rules, response fields, statuses, and errors are in
+[docs/API.md](docs/API.md).
 
 ## Tests
 
@@ -135,13 +130,8 @@ every push to `main`, and every release tag. All of them must pass before a
 merge or a release. CI has no provider credentials, so the `provider` tests
 never run there. Run them yourself before a release.
 
-Tests that need a real bucket are marked `provider` and are left out of the
-fast suite. With `-m provider`, they fail (rather than skip) if `.env` does not
-configure `STORAGE_BACKEND=s3`. They write only under `contract-tests/` and
-`api-tests/` and delete their files afterwards.
-
-`tests/test_storage_contract.py` runs the same tests against every storage
-backend to check that the in-memory test double behaves like the real provider.
+[TESTING.md](TESTING.md) explains how the provider tests are selected and cleaned
+up, the test layout and fixtures, and what each operation's tests check.
 
 ## Clean up
 

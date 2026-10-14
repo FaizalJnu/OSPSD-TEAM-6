@@ -189,8 +189,9 @@ Tests: [tests/test_download.py](tests/test_download.py).
 * **Content type:** a known binary type (`.pdf`), a text type (`.txt`, which gains
   `; charset=utf-8`), and an unknown extension (falls back to
   `application/octet-stream`).
-* **Size:** small files in the fast tests. On the real provider, 5 MiB, so the download
-  streams as several 1 MiB chunks.
+* **Size:** small files in the fast tests, and 10 bytes read with a 4-byte chunk size to
+  check that the download is split into chunks, including a short last one. On the real
+  provider, 5 MiB, to check a multi-megabyte round trip.
 * **Provider errors:** `NoSuchKey` (404) and `AccessDenied` (403), one for each of the
   two translations in `_translate_errors`.
 * **Stream cleanup:** a body read to the end, and a body closed after the first chunk.
@@ -221,6 +222,9 @@ Translation, with `stubbed_s3` (no network):
 * [`test_s3_get_closes_the_provider_stream`](tests/test_download.py): the provider
   stream is closed after every chunk is read, and after a caller closes the chunks
   following the first one.
+* [`test_s3_get_streams_in_chunks`](tests/test_download.py): with the chunk size set to
+  4 bytes, a 10-byte file arrives as chunks of 4, 4, and 2 bytes, so the backend streams
+  instead of reading the whole file at once.
 * [`test_s3_get_rejected_by_the_provider_raises_provider_error`](tests/test_download.py):
   `AccessDenied` becomes `ProviderError`.
 
@@ -286,10 +290,13 @@ Real provider (marked `provider`):
   the status can no longer change. Verified with a test double whose chunks raise
   `ProviderUnavailable` after 11 of 100 bytes, served by uvicorn: curl received
   `200`, `content-length: 100`, then 11 bytes, and exited with code 18 (partial file);
-  there was no error body. The server logged `Exception in ASGI application`. With
-  `S3Storage`, an error while reading chunks also is not translated into our errors
-  (see the `get` docstring). Callers can detect the cut by comparing the received size
-  with `Content-Length`. Not covered by an automated test.
+  there was no error body. The server logged `Exception in ASGI application`. Callers
+  can detect the cut by comparing the received size with `Content-Length`. Not covered
+  by an automated test.
+* **`S3Storage` lets a mid-stream SDK error escape.** When the connection drops while
+  chunks are being read, botocore's `ResponseStreamingError` leaves the backend instead
+  of becoming `ProviderUnavailable`, which breaks the `get` contract and the AGENTS.md
+  rule. Tracked in [#26](https://github.com/FaizalJnu/OSPSD-TEAM-6/issues/26).
 * **A download dropped before its first chunk does not close the provider stream.**
   `S3Storage` closes the stream in a generator's `finally`, which only runs once the
   generator has started. Tracked in [#15](https://github.com/FaizalJnu/OSPSD-TEAM-6/issues/15).

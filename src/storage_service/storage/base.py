@@ -37,10 +37,9 @@ class StorageClient(Protocol):
         iterated, and it can be iterated only once. The backend releases its provider
         resources once ``chunks`` is exhausted, or closed after reading has started.
 
-        Raises ``FileNotFound`` if no file exists under ``key``, and ``ProviderError`` or
-        ``ProviderUnavailable`` if the provider fails while the file is being opened. A
-        failure while ``chunks`` is being read is not translated yet (see the Download
-        gaps in TESTING.md).
+        Raises ``FileNotFound`` if no file exists under ``key``. Provider failures raise
+        ``ProviderError`` or ``ProviderUnavailable``, both while the file is being opened
+        and while ``chunks`` is being iterated.
         """
         ...
 

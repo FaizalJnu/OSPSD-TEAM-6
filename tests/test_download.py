@@ -115,6 +115,13 @@ def test_s3_get_closes_the_provider_stream(stubbed_s3):
     assert abandoned.closed
 
 
+def test_s3_get_streams_in_chunks(stubbed_s3, monkeypatch):
+    storage, stubber = stubbed_s3
+    monkeypatch.setattr("storage_service.storage.s3.DOWNLOAD_CHUNK_BYTES", 4)
+    queue_get_object(stubber, "a.pdf", b"x" * 10)
+    assert [len(chunk) for chunk in storage.get("a.pdf").chunks] == [4, 4, 2]
+
+
 def test_s3_get_rejected_by_the_provider_raises_provider_error(stubbed_s3):
     storage, stubber = stubbed_s3
     stubber.add_client_error(
@@ -130,7 +137,7 @@ def test_s3_get_rejected_by_the_provider_raises_provider_error(stubbed_s3):
 @pytest.mark.provider
 def test_download_of_a_multi_megabyte_file_from_the_real_provider(provider_client, provider_prefix):
     key = provider_prefix + "big.bin"
-    data = os.urandom(5 * 1024 * 1024)  # several 1 MiB download chunks
+    data = os.urandom(5 * 1024 * 1024)  # chunking itself: test_s3_get_streams_in_chunks
     assert send_file(provider_client, "POST", key, data).status_code == 201
     etag = provider_client.get(f"/metadata/{key}").json()["etag"]
 

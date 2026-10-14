@@ -52,6 +52,8 @@ delete their files afterwards.
 | [tests/test_list.py](tests/test_list.py) | List: `GET /files` |
 | [tests/test_service.py](tests/test_service.py) | The key rules and the content-type choice, without HTTP |
 | [tests/test_storage_contract.py](tests/test_storage_contract.py) | The same tests for every storage backend |
+| [tests/test_injection.py](tests/test_injection.py) | Application tests over a controlled backend: storage calls made and provider failures |
+| [tests/fakes.py](tests/fakes.py) | `FakeStorage`, the controlled backend (below) |
 
 Each operation's file holds all of that operation's tests. There are three kinds:
 
@@ -63,6 +65,28 @@ Each operation's file holds all of that operation's tests. There are three kinds
 
 Add tests to your own operation's file. A fixture that only one operation needs goes
 in that file, not in `conftest.py`.
+
+### Controlled storage
+
+[`FakeStorage`](tests/fakes.py) is a `StorageClient` for application tests. Build the
+app with `create_app(FileService(fake, max_upload_bytes=...))`, as
+[tests/test_injection.py](tests/test_injection.py) does. It:
+
+* records each call in `fake.calls` as `(method, key)`, in order. `list_files` records
+  its prefix instead of a key.
+* raises a given error from a given method after `fake.fail(method, error)`, on every
+  later call. The method name is typed, so mypy rejects a misspelled one.
+* otherwise passes each call to a wrapped `InMemoryStorage`.
+
+mypy checks that it satisfies `StorageClient` through a typed assignment at the end of
+the file. Its assumptions:
+
+* Without a configured failure, it behaves exactly like `InMemoryStorage`, which
+  `tests/test_storage_contract.py` checks against the real provider.
+* A configured failure is raised before the store is touched, so a failed `put` stores
+  nothing. A real provider makes no such promise (see "After a failed write" in
+  [docs/API.md](docs/API.md#after-a-failed-write)), so do not use the fake to test what
+  a failed write left behind.
 
 `tests/test_storage_contract.py` runs the same tests against every storage backend to
 check that the in-memory test double behaves like the real provider. They check the

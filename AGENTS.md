@@ -24,6 +24,8 @@ tests/
   test_list.py             GET /files
   test_service.py          Input rules
   test_storage_contract.py Same tests for every backend; S3 runs only with -m provider
+  test_injection.py        Application tests over FakeStorage: storage calls and provider failures
+  fakes.py                 FakeStorage: records calls and raises configured errors
 docs/
   API.md             HTTP contract: keys, file info, errors, one section per operation
   PROVIDERS.md       Settings and provider-test results for each S3-compatible provider

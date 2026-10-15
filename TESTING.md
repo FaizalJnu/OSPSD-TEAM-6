@@ -435,19 +435,137 @@ Real provider (marked `provider`):
 ## Metadata
 
 Owner: **Darsh Shani**. Contract: [docs/API.md](docs/API.md#metadata).
-Tests: [tests/test_metadata.py](tests/test_metadata.py). Not written yet.
+Tests: [tests/test_metadata.py](tests/test_metadata.py).
 
 ### Contract checked
 
+`GET /metadata/{key}` returns 200 and all five promised fields without changing
+contents. Sizes are integer bytes, ETags have no surrounding quotes, and
+timestamps are timezone-aware UTC ISO 8601. An unchanged file has the same key,
+size, and ETag in metadata and listing. Invalid keys are rejected before any
+storage call; a missing file returns 404 with the public error body.
+
+The provider boundary is `StorageClient.stat`, whose contract is in
+[storage/base.py](src/storage_service/storage/base.py). Tests inject storage
+into `FileService`, then pass it to `create_app(service)`. The HTTP route and
+application decisions are the same ones used in production. No credential or
+network access is needed for these tests. The team's `FakeStorage` wraps the
+in-memory backend, records calls, and injects failures. The metadata tests use
+it for successful reads, invalid-key rejection before storage, and HTTP 502
+mapping. The shared HTTP 503 case stays in
+`tests/test_injection.py::test_metadata_returns_503_when_the_provider_is_unavailable`;
+metadata retains its separate S3 connection-error translation test. Separate
+Stubber tests cover the actual S3 translation.
+
 ### Cases and boundaries
+
+* Ordinary file: all fields, read-only behavior, and agreement with upload and list.
+* Unicode key exactly at the 1024-byte UTF-8 limit is accepted. Empty keys,
+  empty segments, trailing slashes, a control character, and an over-limit
+  multibyte key are rejected without a storage call.
+* Missing file, provider rejection, and provider unavailability use the shared
+  HTTP error mapping, without introducing Level 5 logging or retry behavior.
+* Provider metadata with and without a content type becomes `FileInfo`.
+  Quoted opaque ETags lose only their surrounding quotes. SDK error codes
+  `NoSuchKey` becomes `FileNotFound`; explicit `NoSuchBucket` and
+  `AccessDenied` become `ProviderError`; connection errors become
+  `ProviderUnavailable`.
 
 ### Tests
 
+Run the offline tests with `uv run pytest tests/test_metadata.py`. Their names
+state the behavior checked: complete HTTP response, metadata/list consistency,
+missing/invalid keys, injection and failure mapping, S3 response/error
+translation, and the published OpenAPI response contract.
+
+The provider-marked test
+`test_metadata_reports_real_provider_values_and_matches_listing` creates one
+file through HTTP under `provider_prefix`, checks every metadata field, compares
+downloaded bytes and listing, and leaves cleanup to `provider_client`. It
+compares parsed UTC timestamps allowing less than one second of precision
+difference; this is not a guarantee about concurrent changes.
+
+```bash
+uv run --env-file .env pytest -m provider tests/test_metadata.py
+```
+
 ### Real-provider verification
+
+#### Run from Darsh's Windows checkout with Codex assistance
+
+- Provider: OCI Object Storage, `us-ashburn-1`, Darsh's private test bucket.
+- Date: 2026-10-14.
+- Source commit: `003d529829ff2df776711c9ed0f3598337efbcee`.
+- Provider command: `uv run --locked --env-file .env pytest -m provider tests/test_metadata.py
+  --tb=short --show-capture=no -p no:cacheprovider`.
+- Observed: **1 passed, 19 deselected**. The cache plugin was disabled only for
+  this invocation because elevated execution could not write the sandbox-owned
+  pytest cache. Test selection and assertions were unchanged.
+- Manual verification: a local Uvicorn server at `http://127.0.0.1:8765`, wired
+  from `.env`, was exercised with `curl.exe`. The sample contained the 37 UTF-8
+  bytes `%PDF-1.7 metadata manual verification`.
+
+Exact HTTP requests used this unique key:
+
+```powershell
+$B = 'http://127.0.0.1:8765'
+$K = 'api-tests/manual-metadata-1779d5119d034bc8a99c24de24cc6933/report.pdf'
+$P = 'api-tests/manual-metadata-1779d5119d034bc8a99c24de24cc6933/'
+curl.exe -F 'file=@metadata-sample.pdf' "$B/files/$K"
+curl.exe "$B/metadata/$K"
+curl.exe "$B/files?prefix=$P"
+curl.exe -o metadata-download.pdf "$B/files/$K"
+curl.exe -X DELETE "$B/files/$K"
+curl.exe "$B/metadata/$K"
+curl.exe "$B/files?prefix=$P"
+```
+
+Expected and observed statuses, in that order: **201, 200, 200, 200, 204, 404,
+200**. The metadata response was:
+
+```json
+{
+  "key": "api-tests/manual-metadata-1779d5119d034bc8a99c24de24cc6933/report.pdf",
+  "size": 37,
+  "content_type": "application/pdf",
+  "etag": "bac20131ce394b58e1fe6e3b51cf6d59",
+  "last_modified": "2026-10-14T17:36:39Z"
+}
+```
+
+Listing returned the same key, size, ETag, and `2026-10-14T17:36:39Z` timestamp,
+with `content_type: null`. No timestamp precision difference was observed in
+this run. Downloaded bytes were identical to the sample (SHA-256
+`bf0ccb51fc04920038af9f8c011a901d11c25f11c932caf22592e0a21588adb1`).
+
+Cleanup: DELETE returned 204; metadata then returned 404 `FileNotFound`, and
+the prefix listing returned `{"files": [], "next_cursor": null}`. The provider
+fixture also completed its own cleanup without an error. Only the unique test
+prefixes were used. A second teammate still needs to repeat verification.
 
 ### Provider observations
 
+The first live attempt returned 502 `ProviderError` with code `NotImplemented`
+on upload. Inspection showed boto3's checksum mode was `when_supported`,
+matching the team's existing FIX-1 report. Setting
+`AWS_REQUEST_CHECKSUM_CALCULATION=when_required` and
+`AWS_RESPONSE_CHECKSUM_VALIDATION=when_required` in the ignored local `.env`
+made the same provider test pass. No production upload fix is included here.
+
+HEAD and LIST returned equal UTC timestamps with whole-second precision for
+this sample. This observation does not promise identical precision on every
+provider or request. Ambiguous HEAD 404s (FIX-2) remain a separate change.
+
 ### Gaps
+
+* Darsh's local automated and manual OCI verification is recorded above. A
+  second person's independent provider run and Faizal's review remain pending.
+* The missing-bucket HEAD 404 ambiguity is intentionally handled in a separate
+  FIX-2 / BUG-BUCKET change; no missing-bucket fix is claimed here.
+* The controlled fake does not validate authentication, provider availability,
+  or SDK retry behavior. Stubber validates request parameters and translation,
+  not whether the provider actually returns these responses.
+* Level 5 error-model and structured-logging work remains outside this task.
 
 ## Delete
 

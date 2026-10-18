@@ -217,6 +217,8 @@ All in [tests/test_upload.py](tests/test_upload.py):
 * `test_s3_put_returns_the_info_from_its_follow_up_stat`: also checks that ETag quotes
   are stripped.
 * `test_s3_put_turns_a_provider_rejection_into_provider_error`
+* Both stub tests pin `put_object`'s parameters (bucket, key, content type, and no
+  checksum parameter), so they fail if FIX-1's checksum setting is removed.
 * `test_create_and_replace_against_the_real_provider` (`provider`): Create, Replace, a
   download, and Metadata against a real bucket.
 * `test_multipart_upload_round_trips_against_the_real_provider` (`provider`): a 9 MiB
@@ -274,8 +276,9 @@ All in [tests/test_upload.py](tests/test_upload.py):
   multipart ETags are not.
 - `last_modified` has one-second precision: a Create and a Replace in the same second both
   reported `20:40:45Z`. Compare `etag`, not `last_modified`, to detect a change.
-- Uploads to OCI need the FIX-1 checksum settings until FIX-1 merges; without them every
-  upload returns 502.
+- OCI rejects boto3's default upload checksum (`NotImplemented`: aws-chunked encoding not
+  supported), which returned 502 for every upload before FIX-1. `S3Storage` now sends
+  checksums only when an operation requires them.
 
 ### Gaps
 
@@ -286,8 +289,6 @@ All in [tests/test_upload.py](tests/test_upload.py):
   [docs/API.md](docs/API.md#create-and-replace) but not tested.
 * The multipart path is covered only by the `provider` test and the manual run, not by
   the fast suite.
-* The stub test does not pin the upload's parameters, because boto3 adds a checksum
-  parameter that FIX-1 changes.
 
 ## Download
 

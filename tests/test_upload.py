@@ -5,6 +5,7 @@ import os
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from botocore.stub import ANY
 
 from storage_service.errors import ProviderError
 from tests.conftest import MAX_UPLOAD_BYTES, send_file
@@ -122,11 +123,21 @@ def test_replace_changes_etag_and_size(client):
 
 # --- Level 3: how S3Storage.put translates provider replies (no network) ---
 
+# The exact parameters a small upload of notes.txt sends. No checksum parameter: OCI
+# rejects the aws-chunked encoding boto3 uses to send one (FIX-1).
+PUT_OBJECT_PARAMS = {
+    "Bucket": "test-bucket",
+    "Key": "notes.txt",
+    "ContentType": "text/plain",
+    "Body": ANY,
+}
+
 
 def test_s3_put_returns_the_info_from_its_follow_up_stat(stubbed_s3):
     storage, stubber = stubbed_s3
-    # put_object's parameters are not pinned: boto3 adds a checksum parameter that FIX-1 changes.
-    stubber.add_response("put_object", {"ETag": '"5d41402abc4b2a76b9719d911017c592"'})
+    stubber.add_response(
+        "put_object", {"ETag": '"5d41402abc4b2a76b9719d911017c592"'}, PUT_OBJECT_PARAMS
+    )
     stubber.add_response(
         "head_object",
         {
@@ -149,7 +160,12 @@ def test_s3_put_returns_the_info_from_its_follow_up_stat(stubbed_s3):
 
 def test_s3_put_turns_a_provider_rejection_into_provider_error(stubbed_s3):
     storage, stubber = stubbed_s3
-    stubber.add_client_error("put_object", service_error_code="AccessDenied", http_status_code=403)
+    stubber.add_client_error(
+        "put_object",
+        service_error_code="AccessDenied",
+        http_status_code=403,
+        expected_params=PUT_OBJECT_PARAMS,
+    )
 
     with pytest.raises(ProviderError):
         storage.put("notes.txt", io.BytesIO(b"hello"), "text/plain")

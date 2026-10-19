@@ -85,10 +85,14 @@ provider.
 
 ## Try it
 
-Example requests with curl. Expected status codes are in the comments.
+Example requests with curl, run from an empty folder while the server is running.
+Expected status codes are in the comments. The first lines create two small sample
+files, and the last line removes them along with the downloaded copy.
 
 ```bash
 B=http://127.0.0.1:8000
+printf 'not really a cat' > cat.jpg                         # sample files
+printf 'another cat' > other.jpg
 
 curl -F "file=@cat.jpg" $B/files/photos/cat.jpg             # create  -> 201
 curl -F "file=@cat.jpg" $B/files/photos/cat.jpg             # again   -> 409
@@ -98,12 +102,15 @@ cmp cat.jpg back.jpg && echo "identical"
 curl "$B/files?prefix=photos/&limit=10"                     # list    -> 200
 curl -X PUT -F "file=@other.jpg" $B/files/photos/cat.jpg    # replace -> 200
 curl -i -X DELETE $B/files/photos/cat.jpg                   # delete  -> 204
+rm cat.jpg other.jpg back.jpg                               # clean up
 ```
 
 The same steps in Windows `cmd.exe`:
 
 ```bat
 set B=http://127.0.0.1:8000
+echo not really a cat> cat.jpg
+echo another cat> other.jpg
 
 curl.exe -F "file=@cat.jpg" %B%/files/photos/cat.jpg            & rem create: 201
 curl.exe -F "file=@cat.jpg" %B%/files/photos/cat.jpg            & rem again: 409
@@ -113,6 +120,7 @@ fc /b cat.jpg back.jpg                                          & rem "no differ
 curl.exe "%B%/files?prefix=photos/&limit=10"                    & rem list
 curl.exe -X PUT -F "file=@other.jpg" %B%/files/photos/cat.jpg   & rem replace: 200
 curl.exe -i -X DELETE %B%/files/photos/cat.jpg                  & rem delete: 204
+del cat.jpg other.jpg back.jpg                                  & rem clean up
 ```
 
 Add `-i` to any command to show the status code and response headers.

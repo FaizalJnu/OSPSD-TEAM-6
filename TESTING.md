@@ -495,8 +495,9 @@ Tests: [tests/test_download.py](tests/test_download.py).
   `X-Content-Type-Options`.
 * The header values agree with the file's info: the `ETag` is the Metadata `etag` in
   quotes, and `Content-Length` is the size.
-* An invalid key returns 400 `InvalidInput`, and a missing file returns 404
-  `FileNotFound`, both in the error format.
+* An invalid key returns 400 `InvalidInput`, a missing file returns 404
+  `FileNotFound`, and a provider outage in `get` returns 503 `ProviderUnavailable`,
+  all in the error format.
 * The `get` contract in `storage/base.py` holds for `S3Storage`: a `get_object` answer
   becomes `FileInfo` plus chunks, provider errors become our errors, and the provider
   stream is closed after reading.
@@ -512,6 +513,10 @@ Tests: [tests/test_download.py](tests/test_download.py).
 * **Size:** small files in the fast tests, and 10 bytes read with a 4-byte chunk size to
   check that the download is split into chunks, including a short last one. On the real
   provider, 5 MiB, to check a multi-megabyte round trip.
+* **Lazy reads:** a provider stream that records every read shows that opening a
+  download reads nothing and the first chunk reads exactly one chunk size. A backend
+  that read the whole body first and then split it would still pass the chunk-size
+  test, but not this one.
 * **Provider errors:** `NoSuchKey` (404) and `AccessDenied` (403), one for each of the
   two translations in `_translate_errors`.
 * **Stream cleanup:** a body read to the end, and a body closed after the first chunk.
@@ -532,6 +537,14 @@ HTTP behavior, on the in-memory backend through `create_app(service)`:
 * [`test_download_of_a_missing_file_is_404`](tests/test_download.py): 404, a body with
   exactly `error` and `detail`, and `FileNotFound`.
 
+HTTP behavior over [`FakeStorage`](#controlled-storage), with the `fake` and
+`fake_client` fixtures:
+
+* [`test_download_returns_503_when_the_provider_is_unavailable`](tests/test_download.py):
+  with `get` set to raise `ProviderUnavailable`, 503 with exactly
+  `{"error": "ProviderUnavailable", "detail": "could not reach the storage provider"}`,
+  and `fake.calls == [("get", "notes.txt")]`.
+
 Translation, with `stubbed_s3` (no network):
 
 * [`test_s3_get_translates_the_response_into_file_info_and_chunks`](tests/test_download.py):
@@ -545,6 +558,9 @@ Translation, with `stubbed_s3` (no network):
 * [`test_s3_get_streams_in_chunks`](tests/test_download.py): with the chunk size set to
   4 bytes, a 10-byte file arrives as chunks of 4, 4, and 2 bytes, so the backend streams
   instead of reading the whole file at once.
+* [`test_s3_get_reads_lazily_one_chunk_at_a_time`](tests/test_download.py): with the
+  chunk size set to 4 bytes and a stream that records every read, `storage.get` reads
+  nothing, and the first chunk reads exactly 4 bytes.
 * [`test_s3_get_closes_the_provider_stream_when_no_chunk_was_read`](tests/test_download.py):
   the provider stream is closed when a caller closes the chunks before reading any
   (regression test for [#15](https://github.com/FaizalJnu/OSPSD-TEAM-6/issues/15)).
@@ -620,9 +636,10 @@ Real provider (marked `provider`):
   chunks are being read, botocore's `ResponseStreamingError` leaves the backend instead
   of becoming `ProviderUnavailable`, which breaks the `get` contract and the AGENTS.md
   rule. Tracked in [#26](https://github.com/FaizalJnu/OSPSD-TEAM-6/issues/26).
-* **`ProviderUnavailable` from `get` is not tested here.** The Stubber can only queue
-  answers and client errors, not connection failures. L4-FAKE adds an HTTP test for a
-  503.
+* **`ProviderUnavailable` from `get` is tested over `FakeStorage`, not through
+  `S3Storage`.** The Stubber can only queue answers and client errors, not connection
+  failures, so `test_download_returns_503_when_the_provider_is_unavailable` checks the
+  HTTP mapping with a fake that raises it.
 * **Client disconnects are not tested.** When Starlette stops reading the chunks after
   a client disconnects, and whether it closes them, is not established here.
 

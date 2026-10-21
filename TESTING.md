@@ -295,33 +295,8 @@ observed 404 `FileNotFound` for a unique nonexistent key in the accessible test
 bucket. Both checks passed; the provider fixture also completed cleanup.
 
 No objects were written by these checks. Provider tests remain explicitly
-selectable and fail rather than skip if configuration is missing.
-
-#### Run by Faizal Rahman (second verifier)
-
-- Provider: OCI Object Storage, us-ashburn-1, Faizal's own test bucket
-- Date: 2026-10-21
-- Commit: `cb623aa` (`dev`, after #23 merged)
-- Provider command: `uv run --env-file .env pytest -m provider tests/test_bucket_errors.py`
-- Provider result: `2 passed, 17 deselected`
-- Request: the same requests as the two provider tests, through
-  `TestClient(create_app(build_service(settings)))`. First with the bucket changed in
-  memory to a unique name that was never created, then with the configured bucket and
-  a key under a fresh prefix
-  `P=api-tests/manual-fix2-65294909ff294e52b316fb2066b6dbff/`.
-- Expected: with the missing bucket, 502 `ProviderError` with detail "the configured
-  bucket does not exist or is not accessible" for Metadata, Delete, and Replace. With
-  the configured bucket, a missing key is still 404 `FileNotFound`. See
-  [Bucket checks](docs/API.md#bucket-checks).
-- Observed (the configured-bucket key shortened to `P/missing.txt`):
-  ```text
-  missing bucket  GET    /metadata/missing.txt    502 {"error":"ProviderError","detail":"the configured bucket does not exist or is not accessible"}
-  missing bucket  DELETE /files/missing.txt       502 {"error":"ProviderError","detail":"the configured bucket does not exist or is not accessible"}
-  missing bucket  PUT    /files/missing.txt       502 {"error":"ProviderError","detail":"the configured bucket does not exist or is not accessible"}
-  real bucket     GET    /metadata/P/missing.txt  404 {"error":"FileNotFound","detail":"no file named 'P/missing.txt'"}
-  ```
-- Cleanup: nothing was written. The missing bucket was never created, and
-  `GET /files?prefix=P` afterwards returned `{"files":[],"next_cursor":null}`.
+selectable and fail rather than skip if configuration is missing. Human review
+and a second person's independent verification by Faizal remain pending.
 
 ## Filling in an operation section
 
@@ -432,7 +407,7 @@ All in [tests/test_upload.py](tests/test_upload.py):
   ```
 - Cleanup: deleted through the API (204). Local files removed.
 
-#### Run by Darsh Shani: Create, Replace, and multipart round trip
+#### Run by Darsh Shani: Create, Replace, and multipart round trip (R17)
 
 - Provider: OCI Object Storage, us-ashburn-1, using Darsh's own private test bucket
   and the existing ignored `.env`. Executed with Codex assistance.
@@ -836,6 +811,8 @@ provider or request. Ambiguous HEAD 404s are now covered by the
 
 ### Gaps
 
+* Darsh's and Vikram's independent OCI runs are recorded above. Faizal's review
+  remains pending.
 * Missing-bucket behavior and its independent-verification status are recorded
   in the [FIX-2 section](#missing-bucket-regression-fix-2).
 * The controlled fake does not validate authentication, provider availability,
@@ -902,8 +879,8 @@ None yet.
 
 ### Gaps
 
-* No real-provider run is recorded. Level 2 needs runs by two people: Prateek and
-  Faizal.
+* No real-provider run is recorded. Level 2 needs two people's runs (R17 in the #29
+  fix plan: Prateek and Faizal).
 * The missing-bucket behavior is tested in
   [test_bucket_errors.py](tests/test_bucket_errors.py) (FIX-2), not here, including
   that Delete returns 502 before deleting anything.

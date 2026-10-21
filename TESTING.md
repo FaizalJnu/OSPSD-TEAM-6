@@ -78,6 +78,9 @@ in that file, not in `conftest.py`.
   its prefix instead of a key.
 * raises a given error from a given method after `fake.fail(method, error)`, on every
   later call. The method name is typed, so mypy rejects a misspelled one.
+* with `fake.fail(method, error, after_applying=True)`, applies the call to the store
+  first and then raises, like a provider that completed a write but whose response was
+  lost. Without it, the error is raised before the store is touched.
 * otherwise passes each call to a wrapped `InMemoryStorage`.
 
 mypy checks that it satisfies `StorageClient` through a typed assignment at the end of
@@ -85,10 +88,20 @@ the file. Its assumptions:
 
 * Without a configured failure, it behaves exactly like `InMemoryStorage`, which
   `tests/test_storage_contract.py` checks against the real provider.
-* A configured failure is raised before the store is touched, so a failed `put` stores
-  nothing. A real provider makes no such promise (see "After a failed write" in
-  [docs/API.md](docs/API.md#after-a-failed-write)), so do not use the fake to test what
-  a failed write left behind.
+* A failure is either all or nothing: the call changes nothing, or the whole change is
+  made. A real provider can fail in other ways too, such as a multipart upload left
+  unfinished, which the fake does not model.
+
+`after_applying` tests the "After a failed write" contract in
+[docs/API.md](docs/API.md#after-a-failed-write), that a 502 or 503 from a write does not
+prove nothing changed:
+
+* [`test_create_that_stores_the_file_then_fails_returns_503_and_a_retry_is_409`](tests/test_upload.py):
+  `put` stores the file and then raises `ProviderUnavailable`. Create returns 503,
+  Metadata then returns 200, and a retried Create returns 409.
+* [`test_delete_that_removes_the_file_then_fails_returns_503_and_a_retry_is_404`](tests/test_delete.py):
+  `delete` removes the file and then raises `ProviderUnavailable`. Delete returns 503,
+  Metadata then returns 404, and a retried Delete returns 404.
 
 `tests/test_storage_contract.py` runs the same tests against every storage backend to
 check that the in-memory test double behaves like the real provider. They check the
@@ -852,9 +865,6 @@ None yet.
   fix plan: Prateek and Faizal).
 * On OCI, a missing bucket returns 404 `FileNotFound` instead of 502 until #23
   (FIX-2) merges. No test here claims the missing-bucket behavior.
-* What a failed delete leaves behind (the provider deleted the file and then the
-  response failed) is not tested: `FakeStorage` raises before touching the store.
-  R3 adds that.
 * The race between the check and the delete is documented, not tested.
 
 ## List

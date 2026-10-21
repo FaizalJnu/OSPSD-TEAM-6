@@ -721,6 +721,44 @@ Real provider (marked `provider`):
 - Cleanup: `curl.exe -i -X DELETE %B%/files/examples/hello.txt` returned
   `204 No Content`, and a following `GET` returned `404` `FileNotFound`.
 
+#### Run by Debasmith Mandal (second verifier)
+
+- Provider: OCI Object Storage, us-ashburn-1
+- Date: 2026-10-21
+- Commit: `b3c5242`
+- Provider command: `uv run --env-file .env pytest -m provider tests/test_download.py`
+- Observed: `1 passed, 13 deselected`
+- Manual request, against a local server started with
+  `uv run --env-file .env uvicorn storage_service.main:create_app --factory`:
+```bash
+  B=http://127.0.0.1:8000
+  P=api-tests/manual-download-$(date +%s)/
+  printf 'hello from debasmith\n' > hello.txt
+  curl -s -F "file=@hello.txt" "$B/files/${P}hello.txt"
+  curl -s -D - -o back.txt "$B/files/${P}hello.txt"
+  cmp hello.txt back.txt && echo "byte-identical"
+  curl -s "$B/metadata/${P}hello.txt"
+  curl -s -o /dev/null -w "DELETE %{http_code}\n" -X DELETE "$B/files/${P}hello.txt"
+  curl -s "$B/files?prefix=api-tests/"
+```
+- Expected: 201 on upload; 200 with the stored bytes and every header promised in
+  [docs/API.md](docs/API.md#download), with the `ETag` equal to the Metadata `etag` in
+  quotes; then 204 on delete and an empty listing.
+- Observed: 201, 200, 200, 204, 200. Download headers (date and server omitted):
+```text
+  HTTP/1.1 200 OK
+  content-length: 21
+  content-disposition: attachment; filename*=UTF-8''hello.txt
+  etag: "6362df44bdee741f54c93292482979a4"
+  x-content-type-options: nosniff
+  content-type: text/plain; charset=utf-8
+```
+  `cmp` found the files byte-identical. Metadata returned `size` 21 and
+  `etag` `6362df44bdee741f54c93292482979a4`.
+- Cleanup: DELETE returned 204, and `GET /files?prefix=api-tests/` returned
+  `{"files":[],"next_cursor":null}`, so neither run left files behind. Local files
+  removed.
+
 ### Provider observations
 
 * **Files uploaded outside the service keep the type the provider stored.** On OCI

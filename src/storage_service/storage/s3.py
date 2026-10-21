@@ -1,8 +1,8 @@
 """Storage backend for any S3-compatible service.
 
-Works with OCI Object Storage (through its S3 compatibility API), AWS S3,
-Garage, MinIO, Cloudflare R2, and similar services. Only the endpoint URL and
-the credentials change.
+Tested with OCI Object Storage (through its S3 compatibility API), AWS S3, and
+Google Cloud Storage (through its XML API). Only the endpoint URL, the region,
+and the credentials change.
 
 This is the only module that imports boto3. Every boto3 error is translated
 into one of our own errors before it leaves this file.

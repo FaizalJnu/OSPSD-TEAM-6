@@ -39,12 +39,13 @@ Fixtures in `tests/conftest.py`:
   client. Queue responses with `stubber.add_response(...)` or
   `stubber.add_client_error(...)`. A call with nothing queued fails instead of
   reaching the network.
+* `fake` and `fake_client`: the HTTP API over `FakeStorage`, which records storage
+  calls and raises the errors you configure.
 * `provider_client` and `provider_prefix`: the HTTP API wired like production,
   against your bucket. Mark these tests `@pytest.mark.provider`. Everything under
   `provider_prefix` is deleted afterwards.
 
-`tests/test_delete.py` has one example test for `stubbed_s3` and one for
-`provider_client`.
+`tests/test_delete.py` has examples that use each of these fixtures.
 
 ### Steps
 
@@ -241,6 +242,10 @@ the tradeoff in the PR:
 curl output above before and after the fix.
 
 ## FIX-3: A malformed list cursor returns the wrong error
+
+**Fixed in #49.** A cursor this API did not produce now returns 400 `InvalidInput` on
+both backends. Prateek's OCI run is recorded under List in
+[TESTING.md](TESTING.md#list). The symptom below describes the original bug.
 
 **Symptom.** A cursor that this API did not produce gives different results on
 the two backends, and neither is right.

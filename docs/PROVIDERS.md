@@ -35,41 +35,18 @@ The provider the README documents.
 
 | Field | Value |
 |---|---|
-| Endpoint format (`S3_ENDPOINT`) | |
-| Region value (`S3_REGION`) | |
-| How to get keys | |
-| Contract-test result | |
-| Quirks | |
+| Endpoint format (`S3_ENDPOINT`) | `https://s3.<region>.amazonaws.com` |
+| Region value (`S3_REGION`) | The bucket's region, for example `us-east-1` |
+| How to get keys | An IAM user with an access key, limited by policy to the one bucket: `s3:ListBucket` on the bucket, and `s3:GetObject`, `s3:PutObject`, and `s3:DeleteObject` on its objects. Without `s3:ListBucket`, AWS answers a request for a missing key with 403, so the service reports `AccessDenied` instead of `FileNotFound`. |
+| Contract-test result | Tested: `uv run --env-file .env pytest -m provider` passed against an AWS S3 test bucket. |
+| Quirks | None recorded. |
 
 ## Google Cloud Storage
 
 | Field | Value |
 |---|---|
-| Endpoint format (`S3_ENDPOINT`) | |
-| Region value (`S3_REGION`) | |
-| How to get keys | |
-| Contract-test result | |
-| Quirks | |
-
-## Cloudflare R2
-
-| Field | Value |
-|---|---|
-| Endpoint format (`S3_ENDPOINT`) | |
-| Region value (`S3_REGION`) | |
-| How to get keys | |
-| Contract-test result | |
-| Quirks | |
-
-## Local MinIO or Garage
-
-Useful for development without a cloud account. A run against a local server does not
-count as real-provider verification for an operation.
-
-| Field | Value |
-|---|---|
-| Endpoint format (`S3_ENDPOINT`) | |
-| Region value (`S3_REGION`) | |
-| How to get keys | |
-| Contract-test result | |
-| Quirks | |
+| Endpoint format (`S3_ENDPOINT`) | `https://storage.googleapis.com` |
+| Region value (`S3_REGION`) | `auto` |
+| How to get keys | An HMAC key for a service account (Cloud Storage > Settings > Interoperability). The service account needs to read, write, list, and delete objects in the one bucket, and to read the bucket itself, which the service checks after a missing file. |
+| Contract-test result | Tested: `uv run --env-file .env pytest -m provider` passed against a Google Cloud Storage test bucket. |
+| Quirks | None recorded. |

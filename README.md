@@ -1,8 +1,8 @@
 # OSPSD-TEAM-6
 
-A self-hostable HTTP API for storing and retrieving files. It works with any
-S3-compatible storage (OCI Object Storage, Garage, MinIO, AWS S3, Cloudflare R2),
-so switching providers only requires changing configuration.
+A self-hostable HTTP API for storing and retrieving files. It works with
+S3-compatible storage (tested on OCI Object Storage, AWS S3, and Google Cloud
+Storage), so switching providers only requires changing configuration.
 
 ## Team Members
 
@@ -78,8 +78,8 @@ server stops.
    uv run --env-file .env uvicorn storage_service.main:create_app --factory --reload
    ```
 
-Garage, MinIO, and AWS S3 use the same settings with a different endpoint,
-region, and keys. See `.env.example` for all available settings, and
+AWS S3 and Google Cloud Storage use the same settings with a different
+endpoint, region, and keys. See `.env.example` for all available settings, and
 [docs/PROVIDERS.md](docs/PROVIDERS.md) for what the team has verified on each
 provider.
 

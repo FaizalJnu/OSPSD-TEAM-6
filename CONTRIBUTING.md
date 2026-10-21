@@ -39,7 +39,7 @@ From here on, all work follows the process below.
 * `main` always passes CI, and releases are made from it. Nobody pushes to
   `main` directly. Every change goes through a pull request.
 * Work on a short-lived branch created from the latest `dev`. Name it after the
-  issue, for example `12-garage-backend`, and open the pull request into `dev`.
+  issue, for example `12-err-400`, and open the pull request into `dev`.
 * Once a week, before class, a pull request from `dev` to `main` brings that
   week's work to `main` for the instructors to review.
 * Each pull request has one purpose, links its issue with `Closes #12`, and

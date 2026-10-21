@@ -150,13 +150,15 @@ above:
 |---|---|---|
 | 404 | The path matches no route, for example `GET /nothing`. | `{"detail": "Not Found"}` |
 | 405 | The path exists but not for that method, for example `POST /files`. | `{"detail": "Method Not Allowed"}` |
+| 400 | Create or Replace with a `multipart/form-data` body that cannot be parsed: no boundary, more than 1000 files, or a text field over 1 MB. | `{"detail": "<message>"}`, for example `{"detail": "Missing boundary in multipart."}` |
 | 500 | An unexpected failure inside the service. | Plain text: `Internal Server Error` |
 
 A 404 without an `error` field means the path is wrong, not that the file is missing.
 
-Invalid input that FastAPI catches first, such as `limit=abc` or a missing `file` field,
-uses our format: 400 `InvalidInput`, with the field name at the start of `detail`.
-Moving the three responses above to our format is tracked as a follow-up.
+Other invalid input that FastAPI catches first, such as `limit=abc` or a missing `file`
+field, uses our format: 400 `InvalidInput`, with the field name at the start of
+`detail`. Moving the four responses above to our format is tracked in
+[#10](https://github.com/FaizalJnu/OSPSD-TEAM-6/issues/10).
 
 ### Bucket checks
 
@@ -232,8 +234,9 @@ contents of a file that already exists. Both change stored files.
 * Create: a file now exists under the key.
 * Replace: the old contents are gone. `size`, `etag`, and `last_modified` describe the
   new contents.
-* A request that fails with a 4xx status changes nothing: after a failed Create the key
-  is still free, and after a failed Replace the old contents are still there.
+* A request that fails with a 4xx status changes nothing. After a 400 or 413, the key is
+  as it was before. After a 409, the existing file is unchanged. After a failed Replace,
+  the old contents are still there.
 
 ### Errors
 

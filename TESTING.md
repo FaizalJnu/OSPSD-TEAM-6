@@ -867,7 +867,7 @@ this run. Downloaded bytes were identical to the sample (SHA-256
 Cleanup: DELETE returned 204; metadata then returned 404 `FileNotFound`, and
 the prefix listing returned `{"files": [], "next_cursor": null}`. The provider
 fixture also completed its own cleanup without an error. Only the unique test
-prefixes were used. A second teammate still needs to repeat verification.
+prefixes were used. Vikram's run below is the second verification.
 
 #### Run by Vikram Markali
 
@@ -930,7 +930,8 @@ provider or request. Ambiguous HEAD 404s are now covered by the
 * The controlled fake does not validate authentication, provider availability,
   or SDK retry behavior. Stubber validates request parameters and translation,
   not whether the provider actually returns these responses.
-* Level 5 error-model and structured-logging work remains outside this task.
+* Access denial and failure logs are tested in
+  [Error model and failure logs](#error-model-and-failure-logs-level-5), not here.
 
 ## Delete
 

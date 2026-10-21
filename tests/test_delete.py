@@ -2,7 +2,7 @@
 
 import pytest
 
-from storage_service.errors import ProviderError, ProviderUnavailable
+from storage_service.errors import AccessDenied, ProviderError, ProviderUnavailable
 from tests.conftest import send_file
 
 
@@ -50,14 +50,14 @@ def test_delete_returns_503_and_never_deletes_when_the_check_cannot_reach_the_pr
 def test_delete_returns_502_when_the_provider_rejects_the_delete(fake, fake_client):
     send_file(fake_client, "POST", "old.txt", b"bye")
     fake.calls.clear()
-    fake.fail("delete", ProviderError("storage provider rejected the request (AccessDenied)"))
+    fake.fail("delete", ProviderError("the storage provider rejected the request"))
 
     response = fake_client.delete("/files/old.txt")
 
     assert response.status_code == 502
     assert response.json() == {
         "error": "ProviderError",
-        "detail": "storage provider rejected the request (AccessDenied)",
+        "detail": "the storage provider rejected the request",
     }
     assert fake.calls == [("stat", "old.txt"), ("delete", "old.txt")]
 
@@ -76,7 +76,7 @@ def test_delete_that_removes_the_file_then_fails_returns_503_and_a_retry_is_404(
     assert fake_client.delete("/files/old.txt").status_code == 404
 
 
-def test_s3_delete_rejected_by_the_provider_raises_provider_error(stubbed_s3):
+def test_s3_delete_denied_by_the_provider_raises_access_denied(stubbed_s3):
     storage, stubber = stubbed_s3
     stubber.add_client_error(
         "delete_object",
@@ -84,7 +84,7 @@ def test_s3_delete_rejected_by_the_provider_raises_provider_error(stubbed_s3):
         http_status_code=403,
         expected_params={"Bucket": "test-bucket", "Key": "old.txt"},
     )
-    with pytest.raises(ProviderError):
+    with pytest.raises(AccessDenied):
         storage.delete("old.txt")
 
 

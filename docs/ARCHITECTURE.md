@@ -90,7 +90,9 @@ and nothing else:
 Everything provider-specific stays behind it: the endpoint, bucket, and credentials;
 path-style addressing; retries and timeouts; multipart uploads; ETag quoting; S3's
 continuation tokens; and the provider's error codes, which become `FileNotFound`,
-`ProviderError`, or `ProviderUnavailable`. One known exception, an error while a
+`AccessDenied`, `ProviderError`, or `ProviderUnavailable`. The code itself is kept on
+the error as `provider_code` for the failure log and never reaches a response. One
+known exception, an error while a
 download is being read, is listed under [Known limits](#known-limits).
 
 ## Wiring

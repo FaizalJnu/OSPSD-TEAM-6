@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 import pytest
 from botocore.response import StreamingBody
 
-from storage_service.errors import FileNotFound, ProviderError, ProviderUnavailable
+from storage_service.errors import AccessDenied, FileNotFound, ProviderUnavailable
 from storage_service.models import FileInfo
 from tests.conftest import send_file
 
@@ -174,7 +174,7 @@ def test_s3_get_closes_the_provider_stream_when_no_chunk_was_read(stubbed_s3):
     assert raw.closed
 
 
-def test_s3_get_rejected_by_the_provider_raises_provider_error(stubbed_s3):
+def test_s3_get_denied_by_the_provider_raises_access_denied(stubbed_s3):
     storage, stubber = stubbed_s3
     stubber.add_client_error(
         "get_object",
@@ -182,8 +182,11 @@ def test_s3_get_rejected_by_the_provider_raises_provider_error(stubbed_s3):
         http_status_code=403,
         expected_params={"Bucket": "test-bucket", "Key": "secret.pdf"},
     )
-    with pytest.raises(ProviderError, match="AccessDenied"):
+    with pytest.raises(AccessDenied) as raised:
         storage.get("secret.pdf")
+    # The provider's code is kept for the logs, not put in the message.
+    assert raised.value.provider_code == "AccessDenied"
+    assert "AccessDenied" not in str(raised.value)
 
 
 @pytest.mark.provider

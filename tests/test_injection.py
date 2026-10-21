@@ -41,14 +41,14 @@ def test_metadata_returns_503_when_the_provider_is_unavailable(fake, fake_client
 
 
 def test_create_returns_502_when_the_provider_rejects_the_write(fake, fake_client):
-    fake.fail("put", ProviderError("storage provider rejected the request (AccessDenied)"))
+    fake.fail("put", ProviderError("the storage provider rejected the request"))
 
     response = send_file(fake_client, "POST", "notes.txt", b"data")
 
     assert response.status_code == 502
     assert response.json() == {
         "error": "ProviderError",
-        "detail": "storage provider rejected the request (AccessDenied)",
+        "detail": "the storage provider rejected the request",
     }
     assert fake.calls == [("stat", "notes.txt"), ("put", "notes.txt")]
 

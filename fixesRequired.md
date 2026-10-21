@@ -9,7 +9,7 @@ the bug.
 |---|---|---|---|---|
 | FIX-1 | OCI rejects every upload | Blocks everyone using OCI | Faizal | Debasmith |
 | FIX-2 (implemented) | A missing bucket is reported as a missing file | Fixed by the bucket probe; independent review pending (#23) | Darsh | Faizal |
-| FIX-3 | A malformed list cursor returns 502 on OCI and 200 in memory | Wrong error for a caller mistake | Prateek | Vikram |
+| FIX-3 (implemented) | A malformed list cursor returns 502 on OCI and 200 in memory | Fixed in #45: 400 `InvalidInput` on both backends; OCI run and review pending | Prateek | Vikram |
 
 ## How to work on a fix
 

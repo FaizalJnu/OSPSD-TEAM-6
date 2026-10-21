@@ -56,6 +56,7 @@ delete their files afterwards.
 | [tests/test_invalid_input.py](tests/test_invalid_input.py) | Invalid input that FastAPI rejects first (a bad List `limit`, a missing `file` field) returns 400 `InvalidInput` |
 | [tests/test_injection.py](tests/test_injection.py) | Application tests over a controlled backend: storage calls made, provider failures, and how the app is built |
 | [tests/fakes.py](tests/fakes.py) | `FakeStorage`, the controlled backend (below) |
+| [tests/test_cleanup.py](tests/test_cleanup.py) | `delete_everything_under`, the cleanup helper the provider tests rely on |
 
 Each operation's file holds all of that operation's tests. There are three kinds:
 
@@ -78,6 +79,9 @@ in that file, not in `conftest.py`.
   its prefix instead of a key.
 * raises a given error from a given method after `fake.fail(method, error)`, on every
   later call. The method name is typed, so mypy rejects a misspelled one.
+* with `fake.fail(method, error, after_applying=True)`, applies the call to the store
+  first and then raises, like a provider that completed a write but whose response was
+  lost. Without it, the error is raised before the store is touched.
 * otherwise passes each call to a wrapped `InMemoryStorage`.
 
 mypy checks that it satisfies `StorageClient` through a typed assignment at the end of
@@ -85,10 +89,20 @@ the file. Its assumptions:
 
 * Without a configured failure, it behaves exactly like `InMemoryStorage`, which
   `tests/test_storage_contract.py` checks against the real provider.
-* A configured failure is raised before the store is touched, so a failed `put` stores
-  nothing. A real provider makes no such promise (see "After a failed write" in
-  [docs/API.md](docs/API.md#after-a-failed-write)), so do not use the fake to test what
-  a failed write left behind.
+* A failure is either all or nothing: the call changes nothing, or the whole change is
+  made. A real provider can fail in other ways too, such as a multipart upload left
+  unfinished, which the fake does not model.
+
+`after_applying` tests the "After a failed write" contract in
+[docs/API.md](docs/API.md#after-a-failed-write), that a 502 or 503 from a write does not
+prove nothing changed:
+
+* [`test_create_that_stores_the_file_then_fails_returns_503_and_a_retry_is_409`](tests/test_upload.py):
+  `put` stores the file and then raises `ProviderUnavailable`. Create returns 503,
+  Metadata then returns 200, and a retried Create returns 409.
+* [`test_delete_that_removes_the_file_then_fails_returns_503_and_a_retry_is_404`](tests/test_delete.py):
+  `delete` removes the file and then raises `ProviderUnavailable`. Delete returns 503,
+  Metadata then returns 404, and a retried Delete returns 404.
 
 `tests/test_storage_contract.py` runs the same tests against every storage backend to
 check that the in-memory test double behaves like the real provider. They check the
@@ -120,6 +134,9 @@ From [tests/conftest.py](tests/conftest.py):
 * **`provider_prefix`:** a unique prefix per test, `api-tests/<random hex>/`. Put every
   key a provider test writes under it. `provider_client` deletes everything there
   afterwards through a separate storage client, even when the test fails.
+* **`delete_everything_under(storage, prefix)`:** a helper that deletes every file
+  under `prefix`, following every page of the listing. `provider_client` and the
+  contract tests clean up with it.
 * **`load_provider_settings()`:** a helper that returns the settings from the
   environment, or fails the test with a hint if they do not configure the `s3`
   backend. The contract tests use it too.
@@ -155,9 +172,6 @@ the OCI namespace and the bucket name.
 
 * Known provider bugs, with their reproductions and planned fixes, are in
   [fixesRequired.md](fixesRequired.md).
-* `provider_client` and the contract tests clean up with one listing of at most 1000
-  keys. A test that writes more than 1000 files under its prefix leaves the rest
-  behind.
 * The provider tests never run in CI. The release manager runs them before each
   release (see "Releases" in [CONTRIBUTING.md](CONTRIBUTING.md)).
 
@@ -281,8 +295,33 @@ observed 404 `FileNotFound` for a unique nonexistent key in the accessible test
 bucket. Both checks passed; the provider fixture also completed cleanup.
 
 No objects were written by these checks. Provider tests remain explicitly
-selectable and fail rather than skip if configuration is missing. Human review
-and a second person's independent verification by Faizal remain pending.
+selectable and fail rather than skip if configuration is missing.
+
+#### Run by Faizal Rahman (second verifier)
+
+- Provider: OCI Object Storage, us-ashburn-1, Faizal's own test bucket
+- Date: 2026-10-21
+- Commit: `cb623aa` (`dev`, after #23 merged)
+- Provider command: `uv run --env-file .env pytest -m provider tests/test_bucket_errors.py`
+- Provider result: `2 passed, 17 deselected`
+- Request: the same requests as the two provider tests, through
+  `TestClient(create_app(build_service(settings)))`. First with the bucket changed in
+  memory to a unique name that was never created, then with the configured bucket and
+  a key under a fresh prefix
+  `P=api-tests/manual-fix2-65294909ff294e52b316fb2066b6dbff/`.
+- Expected: with the missing bucket, 502 `ProviderError` with detail "the configured
+  bucket does not exist or is not accessible" for Metadata, Delete, and Replace. With
+  the configured bucket, a missing key is still 404 `FileNotFound`. See
+  [Bucket checks](docs/API.md#bucket-checks).
+- Observed (the configured-bucket key shortened to `P/missing.txt`):
+  ```text
+  missing bucket  GET    /metadata/missing.txt    502 {"error":"ProviderError","detail":"the configured bucket does not exist or is not accessible"}
+  missing bucket  DELETE /files/missing.txt       502 {"error":"ProviderError","detail":"the configured bucket does not exist or is not accessible"}
+  missing bucket  PUT    /files/missing.txt       502 {"error":"ProviderError","detail":"the configured bucket does not exist or is not accessible"}
+  real bucket     GET    /metadata/P/missing.txt  404 {"error":"FileNotFound","detail":"no file named 'P/missing.txt'"}
+  ```
+- Cleanup: nothing was written. The missing bucket was never created, and
+  `GET /files?prefix=P` afterwards returned `{"files":[],"next_cursor":null}`.
 
 ## Filling in an operation section
 
@@ -393,7 +432,7 @@ All in [tests/test_upload.py](tests/test_upload.py):
   ```
 - Cleanup: deleted through the API (204). Local files removed.
 
-#### Run by Darsh Shani: Create, Replace, and multipart round trip (R17)
+#### Run by Darsh Shani: Create, Replace, and multipart round trip
 
 - Provider: OCI Object Storage, us-ashburn-1, using Darsh's own private test bucket
   and the existing ignored `.env`. Executed with Codex assistance.
@@ -482,8 +521,9 @@ Tests: [tests/test_download.py](tests/test_download.py).
   `X-Content-Type-Options`.
 * The header values agree with the file's info: the `ETag` is the Metadata `etag` in
   quotes, and `Content-Length` is the size.
-* An invalid key returns 400 `InvalidInput`, and a missing file returns 404
-  `FileNotFound`, both in the error format.
+* An invalid key returns 400 `InvalidInput`, a missing file returns 404
+  `FileNotFound`, and a provider outage in `get` returns 503 `ProviderUnavailable`,
+  all in the error format.
 * The `get` contract in `storage/base.py` holds for `S3Storage`: a `get_object` answer
   becomes `FileInfo` plus chunks, provider errors become our errors, and the provider
   stream is closed after reading.
@@ -499,6 +539,10 @@ Tests: [tests/test_download.py](tests/test_download.py).
 * **Size:** small files in the fast tests, and 10 bytes read with a 4-byte chunk size to
   check that the download is split into chunks, including a short last one. On the real
   provider, 5 MiB, to check a multi-megabyte round trip.
+* **Lazy reads:** a provider stream that records every read shows that opening a
+  download reads nothing and the first chunk reads exactly one chunk size. A backend
+  that read the whole body first and then split it would still pass the chunk-size
+  test, but not this one.
 * **Provider errors:** `NoSuchKey` (404) and `AccessDenied` (403), one for each of the
   two translations in `_translate_errors`.
 * **Stream cleanup:** a body read to the end, and a body closed after the first chunk.
@@ -519,6 +563,14 @@ HTTP behavior, on the in-memory backend through `create_app(service)`:
 * [`test_download_of_a_missing_file_is_404`](tests/test_download.py): 404, a body with
   exactly `error` and `detail`, and `FileNotFound`.
 
+HTTP behavior over [`FakeStorage`](#controlled-storage), with the `fake` and
+`fake_client` fixtures:
+
+* [`test_download_returns_503_when_the_provider_is_unavailable`](tests/test_download.py):
+  with `get` set to raise `ProviderUnavailable`, 503 with exactly
+  `{"error": "ProviderUnavailable", "detail": "could not reach the storage provider"}`,
+  and `fake.calls == [("get", "notes.txt")]`.
+
 Translation, with `stubbed_s3` (no network):
 
 * [`test_s3_get_translates_the_response_into_file_info_and_chunks`](tests/test_download.py):
@@ -532,6 +584,9 @@ Translation, with `stubbed_s3` (no network):
 * [`test_s3_get_streams_in_chunks`](tests/test_download.py): with the chunk size set to
   4 bytes, a 10-byte file arrives as chunks of 4, 4, and 2 bytes, so the backend streams
   instead of reading the whole file at once.
+* [`test_s3_get_reads_lazily_one_chunk_at_a_time`](tests/test_download.py): with the
+  chunk size set to 4 bytes and a stream that records every read, `storage.get` reads
+  nothing, and the first chunk reads exactly 4 bytes.
 * [`test_s3_get_closes_the_provider_stream_when_no_chunk_was_read`](tests/test_download.py):
   the provider stream is closed when a caller closes the chunks before reading any
   (regression test for [#15](https://github.com/FaizalJnu/OSPSD-TEAM-6/issues/15)).
@@ -607,9 +662,10 @@ Real provider (marked `provider`):
   chunks are being read, botocore's `ResponseStreamingError` leaves the backend instead
   of becoming `ProviderUnavailable`, which breaks the `get` contract and the AGENTS.md
   rule. Tracked in [#26](https://github.com/FaizalJnu/OSPSD-TEAM-6/issues/26).
-* **`ProviderUnavailable` from `get` is not tested here.** The Stubber can only queue
-  answers and client errors, not connection failures. L4-FAKE adds an HTTP test for a
-  503.
+* **`ProviderUnavailable` from `get` is tested over `FakeStorage`, not through
+  `S3Storage`.** The Stubber can only queue answers and client errors, not connection
+  failures, so `test_download_returns_503_when_the_provider_is_unavailable` checks the
+  HTTP mapping with a fake that raises it.
 * **Client disconnects are not tested.** When Starlette stops reading the chunks after
   a client disconnects, and whether it closes them, is not established here.
 
@@ -724,6 +780,46 @@ the prefix listing returned `{"files": [], "next_cursor": null}`. The provider
 fixture also completed its own cleanup without an error. Only the unique test
 prefixes were used. A second teammate still needs to repeat verification.
 
+#### Run by Vikram Markali
+
+- Provider: OCI Object Storage, us-ashburn-1, my own private test bucket
+- Date: 2026-10-20
+- Commit: fd2d127
+- Provider command: `uv run --env-file .env pytest -m provider tests/test_metadata.py`
+- Observed: `1 passed, 18 deselected`
+- Setup note: ran with the documented FIX-1 checksum workaround, the two
+  `AWS_*_CHECKSUM_*` lines in `.env` (see
+  [FIX-1](fixesRequired.md#fix-1-oci-rejects-every-upload)), because FIX-1 is not
+  merged yet.
+- Manual request, in Windows `cmd.exe` against a local server started with
+  `uv run --env-file .env uvicorn storage_service.main:create_app --factory`, with a
+  31-byte local file `report.pdf`:
+  ```bat
+  set B=http://127.0.0.1:8000
+  set P=api-tests/manual-metadata-a9d44c7b039a4447a19198f75c7f14cf/
+  curl.exe -F "file=@report.pdf" %B%/files/%P%report.pdf
+  curl.exe %B%/metadata/%P%report.pdf
+  curl.exe -X DELETE %B%/files/%P%report.pdf
+  curl.exe %B%/metadata/%P%report.pdf
+  curl.exe "%B%/files?prefix=%P%"
+  ```
+- Expected: 201; then 200 with the same `key`, `size`, `content_type`, `etag`, and
+  `last_modified` that Create returned, as [docs/API.md](docs/API.md#metadata)
+  promises; then 204, 404 `FileNotFound`, and an empty listing.
+- Observed: 201, 200, 204, 404, 200. The metadata response matched Create's exactly:
+  ```json
+  {"key":"api-tests/manual-metadata-a9d44c7b039a4447a19198f75c7f14cf/report.pdf","size":31,"content_type":"application/pdf","etag":"5112b948fcf05f9c2148d479322db3f6","last_modified":"2026-10-21T02:04:15Z"}
+  ```
+  After the delete:
+  ```text
+  {"error":"FileNotFound","detail":"no file named 'api-tests/manual-metadata-a9d44c7b039a4447a19198f75c7f14cf/report.pdf'"}
+  {"files":[],"next_cursor":null}
+  ```
+- Cleanup: the DELETE returned 204, metadata then returned 404, and listing the
+  prefix returned `{"files":[],"next_cursor":null}`, so the prefix is empty. The
+  provider test's fixture cleaned up its own prefix without an error. The local
+  `report.pdf` was deleted.
+
 ### Provider observations
 
 The first live attempt returned 502 `ProviderError` with code `NotImplemented`
@@ -740,8 +836,6 @@ provider or request. Ambiguous HEAD 404s are now covered by the
 
 ### Gaps
 
-* Darsh's local automated and manual OCI verification is recorded above. A
-  second person's independent provider run and Faizal's review remain pending.
 * Missing-bucket behavior and its independent-verification status are recorded
   in the [FIX-2 section](#missing-bucket-regression-fix-2).
 * The controlled fake does not validate authentication, provider availability,
@@ -808,13 +902,11 @@ None yet.
 
 ### Gaps
 
-* No real-provider run is recorded. Level 2 needs two people's runs (R17 in the #29
-  fix plan: Prateek and Faizal).
-* On OCI, a missing bucket returns 404 `FileNotFound` instead of 502 until #23
-  (FIX-2) merges. No test here claims the missing-bucket behavior.
-* What a failed delete leaves behind (the provider deleted the file and then the
-  response failed) is not tested: `FakeStorage` raises before touching the store.
-  R3 adds that.
+* No real-provider run is recorded. Level 2 needs runs by two people: Prateek and
+  Faizal.
+* The missing-bucket behavior is tested in
+  [test_bucket_errors.py](tests/test_bucket_errors.py) (FIX-2), not here, including
+  that Delete returns 502 before deleting anything.
 * The race between the check and the delete is documented, not tested.
 
 ## List

@@ -1,28 +1,12 @@
 """Application tests that supply a controlled storage backend (Level 4).
 
-Each test builds the app with ``create_app(service)`` over a ``FakeStorage``, so it
-can check which storage calls a request made and how a provider failure reaches the
-caller. See ``tests/fakes.py``.
+Each test uses the ``fake_client`` fixture from ``tests/conftest.py``, an app over a
+``FakeStorage``, to check which storage calls a request made and how a provider
+failure reaches the caller. See ``tests/fakes.py``.
 """
 
-import pytest
-from fastapi.testclient import TestClient
-
 from storage_service.errors import ProviderError, ProviderUnavailable
-from storage_service.main import create_app
-from storage_service.service import FileService
-from tests.conftest import MAX_UPLOAD_BYTES, send_file
-from tests.fakes import FakeStorage
-
-
-@pytest.fixture
-def fake() -> FakeStorage:
-    return FakeStorage()
-
-
-@pytest.fixture
-def fake_client(fake: FakeStorage) -> TestClient:
-    return TestClient(create_app(FileService(fake, max_upload_bytes=MAX_UPLOAD_BYTES)))
+from tests.conftest import send_file
 
 
 def test_invalid_key_is_rejected_before_storage_is_called(fake, fake_client):

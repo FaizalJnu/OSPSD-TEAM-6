@@ -647,7 +647,8 @@ retrying later sometimes succeeds (see [Error types](#error-types)).
   with. The in-memory backend answers a cursor from another prefix with 400
   `InvalidInput`. An S3-compatible provider decides for itself: it may reject the
   cursor (400), or continue from where that cursor points, which can skip or repeat
-  files. How long a cursor stays usable has not been tested.
+  files. OCI does the second: a cursor sent with a prefix that sorts before it
+  returned 200 with an empty page. How long a cursor stays usable has not been tested.
 * **Cursor strings change.** On OCI, two requests for the same page return different
   `next_cursor` strings, and both work. Compare pages by their files, not by cursor.
 * **`content_type` is `null`**, because the S3 list call does not return it. Use

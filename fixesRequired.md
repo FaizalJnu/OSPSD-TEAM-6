@@ -9,7 +9,7 @@ the bug.
 |---|---|---|---|---|
 | FIX-1 (fixed) | OCI rejects every upload | Fixed in #31: `S3Storage` sends checksums only when an operation requires them | Faizal | Debasmith |
 | FIX-2 (fixed) | A missing bucket is reported as a missing file | Fixed in #23 by the bucket probe; verified on OCI by Darsh and Faizal | Darsh | Faizal |
-| FIX-3 | A malformed list cursor returns 502 on OCI and 200 in memory | Wrong error for a caller mistake | Prateek | Vikram |
+| FIX-3 (fixed) | A malformed list cursor returns 502 on OCI and 200 in memory | Fixed in #49: 400 `InvalidInput` on both backends; verified on OCI by Prateek | Prateek | Vikram |
 
 ## How to work on a fix
 

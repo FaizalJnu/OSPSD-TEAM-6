@@ -1247,8 +1247,51 @@ With `S3Storage` keeping the ETag quotes in listings, the page translation test 
 The example in [docs/API.md](docs/API.md#list) was also run as written against the
 same bucket. Its output is the one shown there, and its prefix was empty afterwards.
 
+#### Run by Prateek Saxena (second verifier)
+
+- Provider: OCI Object Storage, us-ashburn-1, my own private test bucket
+- Date: 2026-10-21
+- Commit: 560ee5d (`dev` after #49, FIX-3), boto3 1.43.108
+- Provider command: `uv run --env-file .env pytest -m provider -k list`
+- Observed: `5 passed, 152 deselected`. This includes
+  `test_list_with_a_cursor_this_backend_did_not_produce_is_invalid_input[s3]`, so
+  FIX-3's contract test passes on OCI. The full `pytest -m provider` run on the same
+  commit gave `16 passed, 141 deselected`.
+- Cleanup: before and after the `-k list` run, the bucket held the same objects under
+  `api-tests/` (left by an earlier run that failed on a new key's credentials) and none
+  under `contract-tests/`. So the cleanup from #43, which reads every page, removed
+  everything this run created.
+- Manual requests against a local server started with
+  `uv run --env-file .env uvicorn storage_service.main:create_app --factory --port 8765`,
+  with `P` a fresh prefix and `<c>` the percent-encoded `next_cursor` of page 1:
+  ```bash
+  curl -i "$B/files?cursor=garbage"
+  curl -i "$B/files?prefix=docs/&cursor=abc123"
+  # upload one-byte files a.txt, b.txt, c.txt under $P
+  curl "$B/files?prefix=$P&limit=2"
+  curl "$B/files?prefix=$P&limit=2&cursor=<c>"
+  curl -i "$B/files?prefix=other/&cursor=<c>"
+  # delete the three files
+  curl "$B/files?prefix=$P"
+  ```
+- Expected: 400 `InvalidInput` for both made-up cursors; `a.txt`, `b.txt` and a cursor,
+  then `c.txt` and `next_cursor: null`; for the cursor sent with another prefix, either
+  400 or a page decided by the provider (see the List assumptions in
+  [docs/API.md](docs/API.md#list)); an empty listing after cleanup.
+- Observed: both made-up cursors returned
+  `400 {"error":"InvalidInput","detail":"cursor is not a next_cursor this API returned for this prefix"}`
+  (502 `ProviderError` before FIX-3). Paging returned `a.txt`, `b.txt`, then `c.txt`
+  with `next_cursor: null`. The cursor sent with `prefix=other/` returned
+  `200 {"files":[],"next_cursor":null}`. All three deletes returned 204, and the
+  listing was then `{"files":[],"next_cursor":null}`.
+
 ### Provider observations
 
+* **A cursor from another prefix.** OCI does not reject it. A cursor from page 1 of
+  `P`, sent with `prefix=other/`, returned 200 with an empty page and
+  `next_cursor: null`, because `other/` sorts before the cursor's position. A prefix
+  that sorts after it could return files, so a caller who mixes prefixes can silently
+  miss files on S3, where the in-memory backend says 400.
 * **Cursor format.** OCI cursors are `1:` followed by about 108 base64url characters,
   sometimes ending in `=`. They worked both percent-encoded and not, but callers should
   encode them, as the API docs say.
@@ -1266,15 +1309,9 @@ same bucket. Its output is the one shown there, and its prefix was empty afterwa
 
 ### Gaps
 
-* **A second person's provider run.** Only Faizal has run List against a real provider.
-  Level 2 needs two people, so the reviewer should run
-  `uv run --env-file .env pytest -m provider -k list` against their own bucket and add a
-  record above.
-* **Malformed cursors on a real provider.** FIX-3's contract test has not yet been run
-  against OCI. Until it is, the S3 mapping rests on the error OCI returned in
-  [FIX-3](fixesRequired.md#fix-3-a-malformed-list-cursor-returns-the-wrong-error).
-* **A cursor from another prefix on a real provider** is passed to the provider
-  unchanged, and what OCI does with it is not tested.
+* **A cursor from another prefix on S3** is passed to the provider unchanged and was
+  observed once, by hand, for a prefix that sorts before the cursor. No automated test
+  covers it.
 * **The Stubber checks shapes, not real answers.** Whether OCI really sends what the
   translation tests feed in is shown only by the provider tests.
 * **Connection failures are simulated by replacing the boto3 call**, so botocore's own

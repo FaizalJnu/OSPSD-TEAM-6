@@ -724,6 +724,46 @@ the prefix listing returned `{"files": [], "next_cursor": null}`. The provider
 fixture also completed its own cleanup without an error. Only the unique test
 prefixes were used. A second teammate still needs to repeat verification.
 
+#### Run by Vikram Markali
+
+- Provider: OCI Object Storage, us-ashburn-1, my own private test bucket
+- Date: 2026-10-20
+- Commit: fd2d127
+- Provider command: `uv run --env-file .env pytest -m provider tests/test_metadata.py`
+- Observed: `1 passed, 18 deselected`
+- Setup note: ran with the documented FIX-1 checksum workaround, the two
+  `AWS_*_CHECKSUM_*` lines in `.env` (see
+  [FIX-1](fixesRequired.md#fix-1-oci-rejects-every-upload)), because FIX-1 is not
+  merged yet.
+- Manual request, in Windows `cmd.exe` against a local server started with
+  `uv run --env-file .env uvicorn storage_service.main:create_app --factory`, with a
+  31-byte local file `report.pdf`:
+  ```bat
+  set B=http://127.0.0.1:8000
+  set P=api-tests/manual-metadata-a9d44c7b039a4447a19198f75c7f14cf/
+  curl.exe -F "file=@report.pdf" %B%/files/%P%report.pdf
+  curl.exe %B%/metadata/%P%report.pdf
+  curl.exe -X DELETE %B%/files/%P%report.pdf
+  curl.exe %B%/metadata/%P%report.pdf
+  curl.exe "%B%/files?prefix=%P%"
+  ```
+- Expected: 201; then 200 with the same `key`, `size`, `content_type`, `etag`, and
+  `last_modified` that Create returned, as [docs/API.md](docs/API.md#metadata)
+  promises; then 204, 404 `FileNotFound`, and an empty listing.
+- Observed: 201, 200, 204, 404, 200. The metadata response matched Create's exactly:
+  ```json
+  {"key":"api-tests/manual-metadata-a9d44c7b039a4447a19198f75c7f14cf/report.pdf","size":31,"content_type":"application/pdf","etag":"5112b948fcf05f9c2148d479322db3f6","last_modified":"2026-10-21T02:04:15Z"}
+  ```
+  After the delete:
+  ```text
+  {"error":"FileNotFound","detail":"no file named 'api-tests/manual-metadata-a9d44c7b039a4447a19198f75c7f14cf/report.pdf'"}
+  {"files":[],"next_cursor":null}
+  ```
+- Cleanup: the DELETE returned 204, metadata then returned 404, and listing the
+  prefix returned `{"files":[],"next_cursor":null}`, so the prefix is empty. The
+  provider test's fixture cleaned up its own prefix without an error. The local
+  `report.pdf` was deleted.
+
 ### Provider observations
 
 The first live attempt returned 502 `ProviderError` with code `NotImplemented`
@@ -740,8 +780,8 @@ provider or request. Ambiguous HEAD 404s are now covered by the
 
 ### Gaps
 
-* Darsh's local automated and manual OCI verification is recorded above. A
-  second person's independent provider run and Faizal's review remain pending.
+* Darsh's and Vikram's independent OCI runs are recorded above. Faizal's review
+  remains pending.
 * Missing-bucket behavior and its independent-verification status are recorded
   in the [FIX-2 section](#missing-bucket-regression-fix-2).
 * The controlled fake does not validate authentication, provider availability,

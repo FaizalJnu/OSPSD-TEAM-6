@@ -26,7 +26,7 @@ tests/
   test_service.py          Input rules
   test_storage_contract.py Same tests for every backend; S3 runs only with -m provider
   test_invalid_input.py    FastAPI's own input rejections also return 400 InvalidInput
-  test_injection.py        Application tests over FakeStorage: storage calls and provider failures
+  test_injection.py        Application tests: storage calls, provider failures, how the app is built
   fakes.py                 FakeStorage: records calls and raises configured errors
 docs/
   API.md             HTTP contract: keys, file info, errors, one section per operation

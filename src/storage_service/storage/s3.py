@@ -10,7 +10,7 @@ into one of our own errors before it leaves this file.
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, Self
 
 import boto3
 from botocore.config import Config
@@ -68,7 +68,7 @@ class S3Storage:
             response = self._client.get_object(Bucket=self._bucket, Key=key)
         return FileDownload(
             info=_info_from_response(key, response),
-            chunks=_read_in_chunks(response["Body"]),
+            chunks=_ChunkReader(response["Body"]),
         )
 
     def stat(self, key: str) -> FileInfo:
@@ -115,12 +115,29 @@ def _clean_etag(etag: str) -> str:
     return etag.strip('"')
 
 
-def _read_in_chunks(body: StreamingBody) -> Iterator[bytes]:
-    """Yield a download piece by piece, and always release the connection afterwards."""
-    try:
-        yield from body.iter_chunks(DOWNLOAD_CHUNK_BYTES)
-    finally:
-        body.close()
+class _ChunkReader:
+    """Yield a download piece by piece, and always release the connection afterwards.
+
+    Not a generator: a generator's cleanup only runs once iteration has started, so
+    a download dropped before its first chunk would keep the connection open.
+    """
+
+    def __init__(self, body: StreamingBody) -> None:
+        self._body = body
+        self._chunks: Iterator[bytes] = body.iter_chunks(DOWNLOAD_CHUNK_BYTES)
+
+    def __iter__(self) -> Self:
+        return self
+
+    def __next__(self) -> bytes:
+        try:
+            return next(self._chunks)
+        except BaseException:  # the last chunk was read, or reading failed
+            self.close()
+            raise
+
+    def close(self) -> None:
+        self._body.close()
 
 
 @contextmanager

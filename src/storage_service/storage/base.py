@@ -58,7 +58,7 @@ class StorageClient(Protocol):
         and ``chunks``, byte chunks that join to the whole file. The info is known before
         any contents are read. Contents are fetched from the provider as ``chunks`` is
         iterated, and it can be iterated only once. The backend releases its provider
-        resources once ``chunks`` is exhausted, or closed after reading has started.
+        resources once ``chunks`` is exhausted or closed.
 
         Raises ``FileNotFound`` if no file exists under ``key``. Provider failures raise
         ``ProviderError`` or ``ProviderUnavailable``, both while the file is being opened

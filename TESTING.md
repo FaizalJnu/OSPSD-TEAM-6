@@ -881,8 +881,9 @@ None yet.
 
 * No real-provider run is recorded. Level 2 needs two people's runs (R17 in the #29
   fix plan: Prateek and Faizal).
-* On OCI, a missing bucket returns 404 `FileNotFound` instead of 502 until #23
-  (FIX-2) merges. No test here claims the missing-bucket behavior.
+* The missing-bucket behavior is tested in
+  [test_bucket_errors.py](tests/test_bucket_errors.py) (FIX-2), not here, including
+  that Delete returns 502 before deleting anything.
 * The race between the check and the delete is documented, not tested.
 
 ## List

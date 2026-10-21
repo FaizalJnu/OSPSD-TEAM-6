@@ -29,7 +29,9 @@ class FileTooLarge(StorageError):
 class ProviderError(StorageError):
     """The provider refused the request: bad credentials, missing bucket, and so on.
 
-    Usually a configuration problem. Retrying will not help.
+    Usually a configuration problem, which retrying will not fix. It can also be a
+    provider-side failure that lasted through the client's own retries, so retrying
+    later sometimes succeeds.
     """
 
 

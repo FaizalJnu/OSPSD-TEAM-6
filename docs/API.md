@@ -95,7 +95,7 @@ Every error the service reports itself has this JSON body:
 | `FileNotFound` | 404 | No file exists under the key (Download, Metadata, Replace, Delete). | Not until a file is created under that key. |
 | `FileAlreadyExists` | 409 | Create was called for a key that already has a file. | No. Use Replace, or Delete the file first. |
 | `FileTooLarge` | 413 | The upload to Create or Replace is larger than `MAX_UPLOAD_BYTES` (default 1 GiB). | No, not with the same file. |
-| `ProviderError` | 502 | The provider refused the request: bad credentials, a missing bucket, and so on. Usually a configuration problem. | No. Fix the configuration first. |
+| `ProviderError` | 502 | The provider refused the request: bad credentials, a missing bucket, and so on. Usually a configuration problem, but it can also be a provider-side failure, such as throttling or an internal error, that lasted through the client's own retries. | Usually not: fix the configuration first. If the configuration is correct, retrying later sometimes succeeds. |
 | `ProviderUnavailable` | 503 | The provider could not be reached: network failure, timeout, and so on. | Retrying later may help. |
 
 ### After a failed write
@@ -309,9 +309,11 @@ with no error body. Compare the received size with `Content-Length` to detect th
 ### Retry
 
 Download only reads, so repeating it is always safe. After a 503, retrying later may
-succeed. After a 400, 404, or 502, retrying the same request gives the same result until
-the key, the stored files, or the configuration change. A cut-off body can be retried
-from the start.
+succeed. After a 400 or 404, retrying the same request gives the same result until the
+key or the stored files change. A 502 is usually a configuration problem and repeats
+until the configuration changes, but it can also be a passing provider-side failure, so
+retrying later sometimes succeeds (see [Error types](#error-types)). A cut-off body can
+be retried from the start.
 
 ### Assumptions
 
@@ -408,7 +410,8 @@ failure during that check returns 503. See [Bucket checks](#bucket-checks).
 
 Repeating this read is safe. Correct invalid input or provider configuration
 before retrying; a missing file must be created first. Retrying later may help
-after a 503. Another caller's write can change the result between reads.
+after a 503, and sometimes after a 502 (see [Error types](#error-types)). Another
+caller's write can change the result between reads.
 
 ### Assumptions
 
@@ -593,8 +596,10 @@ an empty page on the in-memory backend, and 502 `ProviderError` on OCI. See
 
 List only reads, so repeating any request is safe. After a 503, retry later with the
 same parameters, including the same `cursor`: on OCI, sending a cursor a second time
-returned the same page again. After a 400 or 502, retrying the same request gives the
-same result until the input or the configuration changes.
+returned the same page again. After a 400, retrying the same request gives the same
+result until the input changes. A 502 is usually a configuration problem and repeats
+until the configuration changes, but it can also be a passing provider-side failure, so
+retrying later sometimes succeeds (see [Error types](#error-types)).
 
 ### Assumptions
 

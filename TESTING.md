@@ -550,6 +550,10 @@ prefixes were used. A second teammate still needs to repeat verification.
 - Commit: fd2d127
 - Provider command: `uv run --env-file .env pytest -m provider tests/test_metadata.py`
 - Observed: `1 passed, 18 deselected`
+- Setup note: ran with the documented FIX-1 checksum workaround, the two
+  `AWS_*_CHECKSUM_*` lines in `.env` (see
+  [FIX-1](fixesRequired.md#fix-1-oci-rejects-every-upload)), because FIX-1 is not
+  merged yet.
 - Manual request, in Windows `cmd.exe` against a local server started with
   `uv run --env-file .env uvicorn storage_service.main:create_app --factory`, with a
   31-byte local file `report.pdf`:

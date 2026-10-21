@@ -13,6 +13,7 @@ router = APIRouter()
     summary="Read file metadata",
     responses={
         400: {"description": "InvalidInput: the decoded key violates a key rule."},
+        403: {"description": "AccessDenied: the provider denied the service access."},
         404: {"description": "FileNotFound: no file exists under the key."},
         502: {"description": "ProviderError: the storage provider rejected the request."},
         503: {"description": "ProviderUnavailable: the storage provider could not be reached."},

@@ -16,6 +16,7 @@ router = APIRouter()
     summary="List files",
     responses={
         400: {"description": "InvalidInput: limit is not 1 to 1000, or prefix is too long."},
+        403: {"description": "AccessDenied: the provider denied the service access."},
         502: {"description": "ProviderError: the storage provider rejected the request."},
         503: {"description": "ProviderUnavailable: the storage provider could not be reached."},
     },

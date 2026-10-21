@@ -12,7 +12,7 @@ import pytest
 from botocore.exceptions import EndpointConnectionError
 from fastapi.testclient import TestClient
 
-from storage_service.errors import InvalidInput, ProviderError, ProviderUnavailable
+from storage_service.errors import AccessDenied, InvalidInput, ProviderError, ProviderUnavailable
 from storage_service.main import create_app
 from storage_service.models import FileInfo, FilePage
 from storage_service.service import FileService
@@ -294,7 +294,8 @@ def test_invalid_list_input_never_reaches_storage(controlled_storage, controlled
 @pytest.mark.parametrize(
     ("error", "status"),
     [
-        (ProviderError("storage provider rejected the request (AccessDenied)"), 502),
+        (AccessDenied("the storage provider denied access"), 403),
+        (ProviderError("the storage provider rejected the request"), 502),
         (ProviderUnavailable("could not reach the storage provider"), 503),
     ],
 )
@@ -421,8 +422,11 @@ def test_s3_list_returns_keys_decoded_when_the_provider_sends_them_url_encoded(s
     assert [info.key for info in storage.list_files("docs/", 2, None).files] == ["docs/résumé.pdf"]
 
 
-@pytest.mark.parametrize(("code", "status"), [("AccessDenied", 403), ("NoSuchBucket", 404)])
-def test_s3_list_rejected_by_the_provider_raises_provider_error(stubbed_s3, code, status):
+@pytest.mark.parametrize(
+    ("code", "status", "error"),
+    [("AccessDenied", 403, AccessDenied), ("NoSuchBucket", 404, ProviderError)],
+)
+def test_s3_list_rejected_by_the_provider_raises_our_error(stubbed_s3, code, status, error):
     storage, stubber = stubbed_s3
     # List names no file, so even a 404 is a provider problem, never FileNotFound.
     stubber.add_client_error(
@@ -432,8 +436,11 @@ def test_s3_list_rejected_by_the_provider_raises_provider_error(stubbed_s3, code
         expected_params=LIST_PARAMS,
     )
 
-    with pytest.raises(ProviderError, match=code):
+    with pytest.raises(error) as raised:
         storage.list_files("docs/", 2, None)
+    # The provider's code is kept for the logs, not put in the message.
+    assert raised.value.provider_code == code
+    assert code not in str(raised.value)
 
 
 def test_s3_list_turns_a_rejected_cursor_into_invalid_input(stubbed_s3):

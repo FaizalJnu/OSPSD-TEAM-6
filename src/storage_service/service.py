@@ -15,12 +15,24 @@ Rules:
 Known limitation: the existence check and the write are two separate provider
 calls, so two clients racing on the same key can both pass the check. The last
 write wins.
+
+Every error records which storage call it came from (``StorageError.storage_call``),
+so a failure log can say whether the provider was involved and whether a write was
+attempted.
 """
 
 import mimetypes
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import BinaryIO
 
-from storage_service.errors import FileAlreadyExists, FileNotFound, FileTooLarge, InvalidInput
+from storage_service.errors import (
+    FileAlreadyExists,
+    FileNotFound,
+    FileTooLarge,
+    InvalidInput,
+    StorageError,
+)
 from storage_service.models import FileDownload, FileInfo, FilePage
 from storage_service.storage.base import StorageClient
 
@@ -39,41 +51,48 @@ class FileService:
         validate_key(key)
         self._check_size(size)
         if self._exists(key):
-            raise FileAlreadyExists(f"a file named {key!r} already exists")
-        return self._storage.put(key, stream, guess_content_type(key))
+            raise FileAlreadyExists(f"a file named {key!r} already exists", storage_call="stat")
+        with _storage_call("put"):
+            return self._storage.put(key, stream, guess_content_type(key))
 
     def replace(self, key: str, stream: BinaryIO, size: int) -> FileInfo:
         """Overwrite an existing file with new contents."""
         validate_key(key)
         self._check_size(size)
         if not self._exists(key):
-            raise FileNotFound(f"no file named {key!r}")
-        return self._storage.put(key, stream, guess_content_type(key))
+            raise FileNotFound(f"no file named {key!r}", storage_call="stat")
+        with _storage_call("put"):
+            return self._storage.put(key, stream, guess_content_type(key))
 
     def download(self, key: str) -> FileDownload:
         validate_key(key)
-        return self._storage.get(key)
+        with _storage_call("get"):
+            return self._storage.get(key)
 
     def stat(self, key: str) -> FileInfo:
         validate_key(key)
-        return self._storage.stat(key)
+        with _storage_call("stat"):
+            return self._storage.stat(key)
 
     def list_files(self, prefix: str = "", limit: int = 100, cursor: str | None = None) -> FilePage:
         if not 1 <= limit <= MAX_PAGE_SIZE:
             raise InvalidInput(f"limit must be between 1 and {MAX_PAGE_SIZE}")
         if len(prefix.encode("utf-8")) > MAX_KEY_BYTES:
             raise InvalidInput(f"prefix is longer than {MAX_KEY_BYTES} bytes")
-        return self._storage.list_files(prefix, limit, cursor)
+        with _storage_call("list_files"):
+            return self._storage.list_files(prefix, limit, cursor)
 
     def delete(self, key: str) -> None:
         validate_key(key)
         if not self._exists(key):
-            raise FileNotFound(f"no file named {key!r}")
-        self._storage.delete(key)
+            raise FileNotFound(f"no file named {key!r}", storage_call="stat")
+        with _storage_call("delete"):
+            self._storage.delete(key)
 
     def _exists(self, key: str) -> bool:
         try:
-            self._storage.stat(key)
+            with _storage_call("stat"):
+                self._storage.stat(key)
         except FileNotFound:
             return False
         return True
@@ -81,6 +100,17 @@ class FileService:
     def _check_size(self, size: int) -> None:
         if size > self._max_upload_bytes:
             raise FileTooLarge(f"file is {size} bytes; the limit is {self._max_upload_bytes}")
+
+
+@contextmanager
+def _storage_call(name: str) -> Iterator[None]:
+    """Record on any error raised inside the block that storage call ``name`` raised it."""
+    try:
+        yield
+    except StorageError as err:
+        if err.storage_call is None:
+            err.storage_call = name
+        raise
 
 
 def validate_key(key: str) -> None:

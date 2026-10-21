@@ -8,7 +8,7 @@ import pytest
 from botocore.exceptions import EndpointConnectionError
 from fastapi.testclient import TestClient
 
-from storage_service.errors import FileNotFound, ProviderError, ProviderUnavailable
+from storage_service.errors import AccessDenied, FileNotFound, ProviderError, ProviderUnavailable
 from storage_service.main import create_app
 from storage_service.models import FileInfo
 from storage_service.service import FileService
@@ -144,16 +144,19 @@ def test_s3_metadata_translates_missing_file(stubbed_s3):
         storage.stat("missing.txt")
 
 
-@pytest.mark.parametrize("code", ["AccessDenied", "NoSuchBucket"])
-def test_s3_metadata_translates_provider_rejection(stubbed_s3, code):
+@pytest.mark.parametrize(
+    ("code", "status", "error"),
+    [("AccessDenied", 403, AccessDenied), ("NoSuchBucket", 404, ProviderError)],
+)
+def test_s3_metadata_translates_provider_rejection(stubbed_s3, code, status, error):
     storage, stubber = stubbed_s3
     stubber.add_client_error(
         "head_object",
         service_error_code=code,
-        http_status_code=403 if code == "AccessDenied" else 404,
+        http_status_code=status,
         expected_params={"Bucket": "test-bucket", "Key": "report.pdf"},
     )
-    with pytest.raises(ProviderError):
+    with pytest.raises(error):
         storage.stat("report.pdf")
 
 

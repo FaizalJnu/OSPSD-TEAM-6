@@ -92,10 +92,11 @@ Every error the service reports itself has this JSON body:
 | `error` | Status | When it happens | Does retrying help? |
 |---|---|---|---|
 | `InvalidInput` | 400 | A key breaks a [key rule](#keys), the List `prefix` is longer than 1024 bytes, the List `limit` is not a whole number from 1 to 1000, or Create or Replace is missing the `file` form field. | No. Change the input. |
+| `AccessDenied` | 403 | The provider refused the service's credentials or permissions, for example a wrong secret key or a bucket policy that does not allow the operation. This is the service's configuration, not the caller's. | No, not until whoever runs the service fixes the credentials or permissions. |
 | `FileNotFound` | 404 | No file exists under the key (Download, Metadata, Replace, Delete). | Not until a file is created under that key. |
 | `FileAlreadyExists` | 409 | Create was called for a key that already has a file. | No. Use Replace, or Delete the file first. |
 | `FileTooLarge` | 413 | The upload to Create or Replace is larger than `MAX_UPLOAD_BYTES` (default 1 GiB). | No, not with the same file. |
-| `ProviderError` | 502 | The provider refused the request: bad credentials, a missing bucket, and so on. Usually a configuration problem, but it can also be a provider-side failure, such as throttling or an internal error, that lasted through the client's own retries. | Usually not: fix the configuration first. If the configuration is correct, retrying later sometimes succeeds. |
+| `ProviderError` | 502 | The provider refused the request for another reason: a missing bucket, an unsupported request, and so on. Usually a configuration problem, but it can also be a provider-side failure, such as throttling or an internal error, that lasted through the client's own retries. | Usually not: fix the configuration first. If the configuration is correct, retrying later sometimes succeeds. |
 | `ProviderUnavailable` | 503 | The provider could not be reached: network failure, timeout, and so on. | Retrying later may help. |
 
 ### After a failed write
@@ -105,6 +106,40 @@ Create and Replace store the file and then read its info back from the provider.
 that read fails, the caller gets the error although the new contents were stored. A
 timeout can also hide a write or delete that the provider completed. Before retrying,
 check the file with Metadata. Retrying a Create whose file was stored returns 409.
+
+### What stays internal
+
+`error` and `detail` describe this service, not the provider. The provider's own error
+code (such as `NoSuchBucket` or `SignatureDoesNotMatch`), its message (which on OCI
+names the namespace and bucket), and stack traces never appear in a response. A
+caller can tell the failure classes apart from `error` alone: `InvalidInput`
+(the input), `FileNotFound` (no such file), `AccessDenied` (the service's
+permissions), and `ProviderError` or `ProviderUnavailable` (the provider failed).
+The provider's code goes to the [failure log](#failure-logs) for whoever runs the
+service.
+
+### Failure logs
+
+Every failed request writes one JSON line to the server's log (stderr), for example:
+
+```json
+{"level": "ERROR", "event": "request_failed", "operation": "create_file", "status": 503, "error": "ProviderUnavailable", "detail": "could not reach the storage provider", "provider_involved": true, "storage_call": "put", "provider_code": "EndpointConnectionError", "write_outcome": "unknown"}
+```
+
+| Field | Meaning |
+|---|---|
+| `level` | `WARNING` when the caller can fix it (400, 404, 409, 413). `ERROR` when whoever runs the service has to act (403 `AccessDenied`, 502, 503, 500). |
+| `operation` | `create_file`, `replace_file`, `download_file`, `get_metadata`, `delete_file`, or `list_files`. |
+| `status`, `error`, `detail` | Exactly what the caller received. |
+| `provider_involved` | `true` when a storage call raised the error or decided it (a 404 or 409 from the existence check). `false` when the request was rejected before storage was called. |
+| `storage_call` | The storage call involved: `stat`, `put`, `get`, `list_files`, or `delete`, or `null`. |
+| `provider_code` | Only when the provider or its SDK named the failure, for example `NoSuchBucket`, `403`, or `EndpointConnectionError`. Never sent to the caller. |
+| `write_outcome` | Create, Replace, and Delete only. `not_attempted` when the request failed before the write call, so nothing changed. `unknown` when the write call itself failed: the provider may have completed it (see [After a failed write](#after-a-failed-write)). |
+
+Expected failures are logged without a traceback. Only an unexpected 500 includes one.
+The log never contains credentials or the provider's message. With no logging
+configured, Python prints these lines (`WARNING` and above) to stderr, as uvicorn
+does.
 
 ### Responses in another format
 
@@ -127,10 +162,12 @@ Moving the three responses above to our format is tracked as a follow-up.
 
 After an ambiguous S3 HEAD 404/NotFound, Metadata and the existence checks for
 Create, Replace, and Delete probe the bucket before reporting a missing file.
-An accessible bucket preserves 404 `FileNotFound`; a missing or denied bucket
-returns 502 `ProviderError` with detail "the configured bucket does not exist or
-is not accessible". The detail contains neither the bucket name nor the raw
-provider error code. A connection failure during the probe returns
+An accessible bucket preserves 404 `FileNotFound`. A bucket the provider denies
+access to returns 403 `AccessDenied` with detail "the storage provider denied access
+to the configured bucket". Any other failed probe, such as a missing bucket, returns
+502 `ProviderError` with detail "the configured bucket does not exist or is not
+accessible". The detail contains neither the bucket name nor the raw provider error
+code. A connection failure during the probe returns
 503 `ProviderUnavailable`. Create, Replace, and Delete stop before writing if
 this check fails.
 
@@ -203,6 +240,7 @@ contents of a file that already exists. Both change stored files.
 | Status | `error` | When |
 |---|---|---|
 | 400 | `InvalidInput` | The key breaks a [key rule](#keys), or the `file` form field is missing. |
+| 403 | `AccessDenied` | The provider denied the service's credentials or permissions. |
 | 404 | `FileNotFound` | Replace only: no file exists under the key. |
 | 409 | `FileAlreadyExists` | Create only: a file already exists under the key. |
 | 413 | `FileTooLarge` | The upload is larger than `MAX_UPLOAD_BYTES`. |
@@ -296,8 +334,9 @@ The body uses the [error format](#error-format).
 | Status | `error` | When |
 |---|---|---|
 | 400 | `InvalidInput` | The key breaks a [key rule](#keys). The provider is not contacted. |
+| 403 | `AccessDenied` | The provider denied the service's credentials or permissions. |
 | 404 | `FileNotFound` | No file exists under the key. |
-| 502 | `ProviderError` | The provider refused the request, for example bad credentials, a denied permission, or a missing bucket. |
+| 502 | `ProviderError` | The provider refused the request, for example because of a missing bucket. |
 | 503 | `ProviderUnavailable` | The provider could not be reached or timed out. |
 
 These statuses are only possible before the body starts. If the provider fails after
@@ -396,13 +435,15 @@ Responses use the shared [error format](#error-format):
 | Status | Error | When |
 |---|---|---|
 | 400 | `InvalidInput` | The decoded key breaks a key rule. |
+| 403 | `AccessDenied` | The provider denied the service's credentials or permissions. |
 | 404 | `FileNotFound` | No file exists under the key. |
-| 502 | `ProviderError` | The provider rejects the request, including configuration or permission problems. |
+| 502 | `ProviderError` | The provider rejects the request, for example because of a missing bucket. |
 | 503 | `ProviderUnavailable` | The provider cannot be reached. |
 
 An ambiguous HEAD 404 is checked against the bucket before reporting a missing
-file. A missing or inaccessible bucket returns 502 `ProviderError`; a connection
-failure during that check returns 503. See [Bucket checks](#bucket-checks).
+file. A missing bucket returns 502 `ProviderError`, a denied one 403
+`AccessDenied`, and a connection failure during that check 503. See
+[Bucket checks](#bucket-checks).
 
 ### Retry
 
@@ -476,14 +517,15 @@ Responses use the shared [error format](#error-format):
 | Status | Error | When |
 |---|---|---|
 | 400 | `InvalidInput` | The decoded key breaks a key rule. The provider is not contacted. |
+| 403 | `AccessDenied` | The provider denied the service's credentials or permissions. |
 | 404 | `FileNotFound` | No file exists under the key. Nothing is deleted. |
-| 502 | `ProviderError` | The provider rejects the check or the delete, including configuration or permission problems. |
+| 502 | `ProviderError` | The provider rejects the check or the delete, for example because of a missing bucket. |
 | 503 | `ProviderUnavailable` | The provider cannot be reached. |
 
 An ambiguous HEAD 404 is checked against the bucket before reporting a missing
-file, and nothing is deleted if that check fails. A missing or inaccessible bucket
-returns 502 `ProviderError`; a connection failure during that check returns 503. See
-[Bucket checks](#bucket-checks).
+file, and nothing is deleted if that check fails. A missing bucket returns 502
+`ProviderError`, a denied one 403 `AccessDenied`, and a connection failure during that
+check 503. See [Bucket checks](#bucket-checks).
 
 ### Retry
 
@@ -584,7 +626,8 @@ The body uses the [error format](#error-format).
 |---|---|---|
 | 400 | `InvalidInput` | `limit` is not a whole number from 1 to 1000 (for example `0`, `1001`, or `abc`), or `prefix` is longer than 1024 bytes. The provider is not contacted. |
 | 400 | `InvalidInput` | `cursor` is not a `next_cursor` this API returned for this `prefix`, for example `garbage`, or a key name. |
-| 502 | `ProviderError` | The provider refused the request, for example bad credentials, a denied permission, or a missing bucket. |
+| 403 | `AccessDenied` | The provider denied the service's credentials or permissions. |
+| 502 | `ProviderError` | The provider refused the request, for example because of a missing bucket. |
 | 503 | `ProviderUnavailable` | The provider could not be reached or timed out. |
 
 ### Retry

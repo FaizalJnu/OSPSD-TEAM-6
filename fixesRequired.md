@@ -275,10 +275,11 @@ OCI's message is `InvalidArgument: Illegal argument: unable to decode the token`
 memory, and on S3 with `-m provider`) that expects `InvalidInput` for a garbage
 cursor, plus an HTTP test in `test_list.py` that expects 400.
 
-## Noted for Level 5 (no fix now)
+## Noted for Level 5 (now fixed)
 
-Every expected provider failure above writes a full traceback of about 60 lines
-to the server log. The log also includes the provider's raw message, which names
-the OCI namespace and bucket. The course's Level 5 spec (section 5.5) and grading
-rubric (section 9.3) ask for concise, sanitized failure logs. Handle this when we design the Level 5 error
-model.
+Every expected provider failure above used to write a full traceback of about 60
+lines to the server log, including the provider's raw message, which names the OCI
+namespace and bucket. The course's Level 5 spec (section 5.5) and grading rubric
+(section 9.3) ask for concise, sanitized failure logs. Each failed request now writes
+one JSON line without a traceback or the provider's message. See
+[Failure logs](docs/API.md#failure-logs).

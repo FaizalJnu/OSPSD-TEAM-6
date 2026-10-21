@@ -17,7 +17,14 @@ from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 from botocore.response import StreamingBody
 
-from storage_service.errors import FileNotFound, InvalidInput, ProviderError, ProviderUnavailable
+from storage_service.errors import (
+    AccessDenied,
+    FileNotFound,
+    InvalidInput,
+    ProviderError,
+    ProviderUnavailable,
+    StorageError,
+)
 from storage_service.models import FileDownload, FileInfo, FilePage
 
 # How much to read from the provider at a time while streaming a download.
@@ -27,6 +34,15 @@ DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 _NOT_FOUND_CODES = {"404", "NoSuchKey", "NotFound"}
 # HEAD cannot distinguish a missing key from a missing/inaccessible bucket.
 _AMBIGUOUS_HEAD_NOT_FOUND_CODES = {"404", "NotFound"}
+# Error codes for refused credentials or permissions. Any HTTP 403 counts too: a HEAD
+# response has no body, so its code is only the status, "403".
+_ACCESS_DENIED_CODES = {
+    "AccessDenied",
+    "AllAccessDisabled",
+    "Forbidden",
+    "InvalidAccessKeyId",
+    "SignatureDoesNotMatch",
+}
 
 
 class S3Storage:
@@ -87,12 +103,18 @@ class S3Storage:
                 # A HEAD error has no body: 404/NotFound may mean the bucket,
                 # not the key. Only report a missing file if the bucket is
                 # accessible. Never expose the bucket name or raw probe code.
-                if err.response.get("Error", {}).get("Code") in _AMBIGUOUS_HEAD_NOT_FOUND_CODES:
+                if _error_code(err) in _AMBIGUOUS_HEAD_NOT_FOUND_CODES:
                     try:
                         self._client.head_bucket(Bucket=self._bucket)
                     except ClientError as bucket_err:
+                        if _is_access_denied(bucket_err):
+                            raise AccessDenied(
+                                "the storage provider denied access to the configured bucket",
+                                provider_code=_error_code(bucket_err),
+                            ) from bucket_err
                         raise ProviderError(
-                            "the configured bucket does not exist or is not accessible"
+                            "the configured bucket does not exist or is not accessible",
+                            provider_code=_error_code(bucket_err),
                         ) from bucket_err
                 raise
         return _info_from_response(key, response)
@@ -107,10 +129,11 @@ class S3Storage:
             except ClientError as err:
                 # The service has already checked prefix and limit, so when a cursor
                 # was sent, a rejected argument means the cursor is not one we made.
-                code = err.response.get("Error", {}).get("Code")
+                code = _error_code(err)
                 if cursor is not None and code == "InvalidArgument":
                     raise InvalidInput(
-                        "cursor is not a next_cursor this API returned for this prefix"
+                        "cursor is not a next_cursor this API returned for this prefix",
+                        provider_code=code,
                     ) from err
                 raise
         files = [
@@ -182,9 +205,32 @@ def _translate_errors(key: str | None = None) -> Iterator[None]:
     try:
         yield
     except ClientError as err:
-        code = err.response.get("Error", {}).get("Code", "unknown")
+        code = _error_code(err)
         if key is not None and code in _NOT_FOUND_CODES:
-            raise FileNotFound(f"no file named {key!r}") from err
-        raise ProviderError(f"storage provider rejected the request ({code})") from err
+            raise FileNotFound(f"no file named {key!r}", provider_code=code) from err
+        raise _rejection(err) from err
     except BotoCoreError as err:
-        raise ProviderUnavailable("could not reach the storage provider") from err
+        raise ProviderUnavailable(
+            "could not reach the storage provider", provider_code=type(err).__name__
+        ) from err
+
+
+def _rejection(err: ClientError) -> StorageError:
+    """Our error for a provider rejection that does not mean a missing file.
+
+    The provider's code goes to ``provider_code`` for the logs, not into the message:
+    callers should not depend on one provider's error names.
+    """
+    code = _error_code(err)
+    if _is_access_denied(err):
+        return AccessDenied("the storage provider denied access", provider_code=code)
+    return ProviderError("the storage provider rejected the request", provider_code=code)
+
+
+def _is_access_denied(err: ClientError) -> bool:
+    status = err.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+    return status == 403 or _error_code(err) in _ACCESS_DENIED_CODES
+
+
+def _error_code(err: ClientError) -> str:
+    return str(err.response.get("Error", {}).get("Code", "unknown"))

@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from botocore.stub import ANY
 
-from storage_service.errors import ProviderError, ProviderUnavailable
+from storage_service.errors import AccessDenied, ProviderUnavailable
 from tests.conftest import MAX_UPLOAD_BYTES, send_file
 
 
@@ -171,7 +171,7 @@ def test_s3_put_returns_the_info_from_its_follow_up_stat(stubbed_s3):
     assert info.last_modified == datetime(2026, 10, 14, 12, 0, tzinfo=UTC)
 
 
-def test_s3_put_turns_a_provider_rejection_into_provider_error(stubbed_s3):
+def test_s3_put_turns_a_permission_denial_into_access_denied(stubbed_s3):
     storage, stubber = stubbed_s3
     stubber.add_client_error(
         "put_object",
@@ -180,7 +180,7 @@ def test_s3_put_turns_a_provider_rejection_into_provider_error(stubbed_s3):
         expected_params=PUT_OBJECT_PARAMS,
     )
 
-    with pytest.raises(ProviderError):
+    with pytest.raises(AccessDenied):
         storage.put("notes.txt", io.BytesIO(b"hello"), "text/plain")
 
 

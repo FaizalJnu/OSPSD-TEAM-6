@@ -9,7 +9,7 @@ from botocore.exceptions import EndpointConnectionError
 from botocore.stub import Stubber
 from fastapi.testclient import TestClient
 
-from storage_service.errors import FileNotFound, ProviderError, ProviderUnavailable
+from storage_service.errors import AccessDenied, FileNotFound, ProviderError, ProviderUnavailable
 from storage_service.main import build_service, create_app
 from storage_service.service import FileService
 from tests.conftest import load_provider_settings
@@ -58,9 +58,10 @@ def test_bucket_permission_denial_is_not_reported_as_missing_file(stubbed_s3):
         http_status_code=403,
         expected_params={"Bucket": "test-bucket"},
     )
-    with pytest.raises(ProviderError) as caught:
+    with pytest.raises(AccessDenied) as caught:
         storage.stat("missing.txt")
-    assert str(caught.value) == "the configured bucket does not exist or is not accessible"
+    assert str(caught.value) == "the storage provider denied access to the configured bucket"
+    assert caught.value.provider_code == "403"
 
 
 def test_bucket_probe_connection_failure_is_provider_unavailable(stubbed_s3, monkeypatch):
@@ -105,7 +106,7 @@ def test_object_permission_denial_does_not_probe_the_bucket(stubbed_s3):
         http_status_code=403,
         expected_params={"Bucket": "test-bucket", "Key": "hello.txt"},
     )
-    with pytest.raises(ProviderError):
+    with pytest.raises(AccessDenied):
         storage.stat("hello.txt")
 
 

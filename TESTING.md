@@ -55,6 +55,7 @@ delete their files afterwards.
 | [tests/test_storage_contract.py](tests/test_storage_contract.py) | The same tests for every storage backend |
 | [tests/test_invalid_input.py](tests/test_invalid_input.py) | Invalid input that FastAPI rejects first (a bad List `limit`, a missing `file` field) returns 400 `InvalidInput` |
 | [tests/test_injection.py](tests/test_injection.py) | Application tests over a controlled backend: storage calls made, provider failures, and how the app is built |
+| [tests/test_failures.py](tests/test_failures.py) | The error model across operations (Level 5): access denial, sanitized errors, and the failure log |
 | [tests/fakes.py](tests/fakes.py) | `FakeStorage`, the controlled backend (below) |
 | [tests/test_cleanup.py](tests/test_cleanup.py) | `delete_everything_under`, the cleanup helper the provider tests rely on |
 
@@ -195,8 +196,10 @@ when its expected status was 502, without network or credentials.
 `S3Storage.stat` now probes `head_bucket` only after ambiguous 404/NotFound
 object errors. A successful probe confirms the bucket is accessible and the
 original error becomes `FileNotFound`. A failed probe is translated as
-`ProviderError` or `ProviderUnavailable`, never as a missing file. A failed
-probe does not establish whether the bucket is absent or access is denied.
+`ProviderError` or `ProviderUnavailable`, never as a missing file. Since Level 5, a
+probe the provider answers with 403 is `AccessDenied` instead (see
+[Error model and failure logs](#error-model-and-failure-logs-level-5)). Any other
+failed probe does not establish whether the bucket is absent or access is denied.
 
 The change stays in [storage/s3.py](src/storage_service/storage/s3.py).
 `service.py`, startup wiring, and the shared error translator are unchanged.
@@ -323,6 +326,91 @@ selectable and fail rather than skip if configuration is missing.
 - Cleanup: nothing was written. The missing bucket was never created, and
   `GET /files?prefix=P` afterwards returned `{"files":[],"next_cursor":null}`.
 
+## Error model and failure logs (Level 5)
+
+Contract: [Errors](docs/API.md#errors) in docs/API.md, including
+[What stays internal](docs/API.md#what-stays-internal) and
+[Failure logs](docs/API.md#failure-logs). Tests:
+[tests/test_failures.py](tests/test_failures.py), plus the translation tests in each
+operation's file.
+
+### Contract checked
+
+* A caller can tell the failure classes apart from `error` alone: 400 `InvalidInput`,
+  403 `AccessDenied`, 404 `FileNotFound`, and 502 `ProviderError` or 503
+  `ProviderUnavailable`.
+* Any provider 403 (`AccessDenied`, `SignatureDoesNotMatch`, a bodiless HEAD `403`, and
+  so on) becomes `AccessDenied`, on every operation.
+* No response contains the provider's code or message. The code is kept on the error as
+  `provider_code` for the log.
+* Every failed request logs exactly one JSON line whose `status`, `error`, and `detail`
+  match the response, without a traceback, and without the provider's message.
+* For Create, Replace, and Delete, `write_outcome` is `not_attempted` when the request
+  failed before the write call, and `unknown` when the write call failed.
+
+### Tests
+
+All in [tests/test_failures.py](tests/test_failures.py), over `FakeStorage` unless
+noted:
+
+* `test_a_successful_request_logs_nothing`
+* `test_invalid_input_is_logged_as_rejected_before_the_provider`: 400, `WARNING`,
+  `provider_involved` false, no `write_outcome` for a read, and no storage call.
+* `test_input_fastapi_rejects_is_logged_like_our_own`: `limit=abc` is logged as
+  `list_files`, 400 `InvalidInput`.
+* `test_a_missing_file_is_logged_as_reported_by_the_provider`: 404, `storage_call`
+  `stat`.
+* `test_access_denied_is_403_and_logged_for_whoever_runs_the_service`: 403 with the
+  full body, logged at `ERROR` with `provider_code`.
+* `test_a_write_that_failed_in_its_check_is_logged_as_not_attempted`: Delete whose
+  `stat` is unavailable: 503, `not_attempted`, and `delete` never called.
+* `test_a_write_that_failed_in_the_write_call_is_logged_as_unknown`: Create whose `put`
+  stores the file and then fails: 503, `unknown`, and Metadata then finds the file.
+* `test_a_create_refused_by_our_own_rules_is_logged_as_not_attempted`: 413
+  (`provider_involved` false) and 409 (true, decided by the existence check).
+* `test_provider_messages_stay_out_of_responses_and_logs` (`stubbed_s3`): a
+  `NoSuchBucket` whose message names a namespace and bucket. The response is the
+  generic 502, the log has `provider_code` `NoSuchBucket`, and neither contains the
+  namespace, the bucket, or a traceback.
+* `test_wrong_credentials_are_access_denied_on_the_real_provider` (marked `provider`):
+  with a wrong secret key, Metadata, List, and Create return 403 `AccessDenied`, and
+  nothing is written.
+
+The new tests fail on `dev` at `a9b8258`: they cannot import `AccessDenied`.
+
+### Real-provider verification
+
+#### Run by Faizal Rahman, with Claude Code
+
+- Provider: OCI Object Storage, us-ashburn-1, Faizal's own test bucket
+- Date: 2026-10-21
+- Commit: `a9b8258`, plus this branch's changes
+- Provider command: `uv run --env-file .env pytest -m provider`
+- Provider result: `16 passed, 144 deselected`, including the wrong-credentials test
+  and FIX-2's missing-bucket test.
+- Observed failure logs (keys shortened to `P/`):
+  ```text
+  {"level": "ERROR", "event": "request_failed", "operation": "get_metadata", "status": 403, "error": "AccessDenied", "detail": "the storage provider denied access", "provider_involved": true, "storage_call": "stat", "provider_code": "403"}
+  {"level": "ERROR", "event": "request_failed", "operation": "list_files", "status": 403, "error": "AccessDenied", "detail": "the storage provider denied access", "provider_involved": true, "storage_call": "list_files", "provider_code": "SignatureDoesNotMatch"}
+  {"level": "ERROR", "event": "request_failed", "operation": "create_file", "status": 403, "error": "AccessDenied", "detail": "the storage provider denied access", "provider_involved": true, "storage_call": "stat", "provider_code": "403", "write_outcome": "not_attempted"}
+  {"level": "ERROR", "event": "request_failed", "operation": "delete_file", "status": 502, "error": "ProviderError", "detail": "the configured bucket does not exist or is not accessible", "provider_involved": true, "storage_call": "stat", "provider_code": "404", "write_outcome": "not_attempted"}
+  {"level": "WARNING", "event": "request_failed", "operation": "get_metadata", "status": 404, "error": "FileNotFound", "detail": "no file named 'P/missing.txt'", "provider_involved": true, "storage_call": "stat", "provider_code": "404"}
+  ```
+  No line names the namespace or bucket, and none has a traceback.
+- Cleanup: the provider fixtures emptied their prefixes. The wrong-credentials test
+  checked that its prefix stayed empty.
+
+### Gaps
+
+* The failure log covers errors our handlers see. FastAPI's own 404 and 405, a 500 from
+  a bug, and Starlette's multipart 400s still bypass it, and still use another format
+  ([#10](https://github.com/FaizalJnu/OSPSD-TEAM-6/issues/10)).
+* An error while a download streams is not logged by us
+  ([#26](https://github.com/FaizalJnu/OSPSD-TEAM-6/issues/26)).
+* `write_outcome` is `unknown` for any failure of the write call, including an explicit
+  403 from it. That is conservative: a refused write most likely changed nothing.
+* Throttling and provider-side 5xx errors are still 502 `ProviderError` (F1).
+
 ## Filling in an operation section
 
 * **Contract checked:** which promises in [docs/API.md](docs/API.md) the tests
@@ -380,7 +468,7 @@ All in [tests/test_upload.py](tests/test_upload.py):
 * `test_client_content_type_is_ignored`
 * `test_s3_put_returns_the_info_from_its_follow_up_stat`: also checks that ETag quotes
   are stripped.
-* `test_s3_put_turns_a_provider_rejection_into_provider_error`
+* `test_s3_put_turns_a_permission_denial_into_access_denied`
 * Both stub tests pin `put_object`'s parameters (bucket, key, content type, and no
   checksum parameter), so they fail if FIX-1's checksum setting is removed.
 * `test_create_and_replace_against_the_real_provider` (`provider`): Create, Replace, a
@@ -543,8 +631,8 @@ Tests: [tests/test_download.py](tests/test_download.py).
   download reads nothing and the first chunk reads exactly one chunk size. A backend
   that read the whole body first and then split it would still pass the chunk-size
   test, but not this one.
-* **Provider errors:** `NoSuchKey` (404) and `AccessDenied` (403), one for each of the
-  two translations in `_translate_errors`.
+* **Provider errors:** `NoSuchKey` (404) and `AccessDenied` (403), which become
+  `FileNotFound` and `AccessDenied`.
 * **Stream cleanup:** a body read to the end, and a body closed after the first chunk.
 
 ### Tests
@@ -590,8 +678,9 @@ Translation, with `stubbed_s3` (no network):
 * [`test_s3_get_closes_the_provider_stream_when_no_chunk_was_read`](tests/test_download.py):
   the provider stream is closed when a caller closes the chunks before reading any
   (regression test for [#15](https://github.com/FaizalJnu/OSPSD-TEAM-6/issues/15)).
-* [`test_s3_get_rejected_by_the_provider_raises_provider_error`](tests/test_download.py):
-  `AccessDenied` becomes `ProviderError`.
+* [`test_s3_get_denied_by_the_provider_raises_access_denied`](tests/test_download.py):
+  `AccessDenied` becomes our `AccessDenied`, with the provider's code kept in
+  `provider_code` and out of the message.
 
 Real provider (marked `provider`):
 
@@ -704,9 +793,9 @@ Stubber tests cover the actual S3 translation.
   HTTP error mapping, without introducing Level 5 logging or retry behavior.
 * Provider metadata with and without a content type becomes `FileInfo`.
   Quoted opaque ETags lose only their surrounding quotes. SDK error codes
-  `NoSuchKey` becomes `FileNotFound`; explicit `NoSuchBucket` and
-  `AccessDenied` become `ProviderError`; connection errors become
-  `ProviderUnavailable`.
+  `NoSuchKey` becomes `FileNotFound`; explicit `NoSuchBucket` becomes
+  `ProviderError`; `AccessDenied` becomes our `AccessDenied`; connection errors
+  become `ProviderUnavailable`.
 
 ### Tests
 
@@ -883,9 +972,9 @@ Run them with `uv run pytest tests/test_delete.py`.
   503 with the full body, calls `[("stat", k)]`.
 * `test_delete_returns_502_when_the_provider_rejects_the_delete`: 502 with the full
   body, calls `[("stat", k), ("delete", k)]`.
-* `test_s3_delete_rejected_by_the_provider_raises_provider_error`: Stubber test that
+* `test_s3_delete_denied_by_the_provider_raises_access_denied`: Stubber test that
   `DeleteObject` is sent with the right bucket and key, and that `AccessDenied` becomes
-  `ProviderError`.
+  our `AccessDenied`.
 * `test_delete_removes_the_file_from_the_real_provider` (marked `provider`): create,
   delete (204), then Metadata 404 against a real bucket.
 
@@ -1066,8 +1155,9 @@ Translation, with `stubbed_s3` (no network):
 * [`test_s3_list_returns_keys_decoded_when_the_provider_sends_them_url_encoded`](tests/test_list.py):
   boto3 asks for `EncodingType=url` and decodes the keys itself, so
   `docs/r%C3%A9sum%C3%A9.pdf` reaches callers as `docs/résumé.pdf`.
-* [`test_s3_list_rejected_by_the_provider_raises_provider_error`](tests/test_list.py):
-  `AccessDenied` and `NoSuchBucket` both become `ProviderError`.
+* [`test_s3_list_rejected_by_the_provider_raises_our_error`](tests/test_list.py):
+  `AccessDenied` becomes `AccessDenied` and `NoSuchBucket` becomes `ProviderError`. The
+  provider's code is in `provider_code`, not in the message.
 * [`test_s3_list_turns_a_rejected_cursor_into_invalid_input`](tests/test_list.py):
   `InvalidArgument` (OCI's "unable to decode the token") for a request with a
   `ContinuationToken` becomes `InvalidInput`, and the provider's code is not in the

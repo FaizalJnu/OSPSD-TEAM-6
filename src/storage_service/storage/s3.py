@@ -50,6 +50,12 @@ class S3Storage:
                 # Put the bucket in the URL path (https://host/bucket/key) instead
                 # of the hostname. Every S3-compatible provider supports this style.
                 s3={"addressing_style": "path"},
+                # Since 1.36, boto3 sends a checksum with every upload using the
+                # aws-chunked transfer encoding, which OCI rejects. Send checksums
+                # only for operations that require them. These settings override
+                # the AWS_*_CHECKSUM_* environment variables.
+                request_checksum_calculation="when_required",
+                response_checksum_validation="when_required",
                 retries={"mode": "standard", "max_attempts": 3},
                 connect_timeout=5,
                 read_timeout=60,

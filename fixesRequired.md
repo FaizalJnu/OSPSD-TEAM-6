@@ -144,7 +144,9 @@ You are responsible for every line the agent writes.
 
 ## FIX-1: OCI rejects every upload
 
-**Until this is fixed:** if you use OCI, add these two lines to your `.env`:
+**Fixed.** `S3Storage` now sets both options in its botocore `Config`, which takes
+precedence over the environment. Before the fix, OCI users added these two lines to
+their `.env`:
 
 ```dotenv
 AWS_REQUEST_CHECKSUM_CALCULATION=when_required

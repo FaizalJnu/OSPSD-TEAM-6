@@ -10,7 +10,7 @@ into one of our own errors before it leaves this file.
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, Self
 
 import boto3
 from botocore.config import Config
@@ -25,6 +25,8 @@ DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 
 # Error codes S3-compatible providers use for "this key does not exist".
 _NOT_FOUND_CODES = {"404", "NoSuchKey", "NotFound"}
+# HEAD cannot distinguish a missing key from a missing/inaccessible bucket.
+_AMBIGUOUS_HEAD_NOT_FOUND_CODES = {"404", "NotFound"}
 
 
 class S3Storage:
@@ -48,6 +50,12 @@ class S3Storage:
                 # Put the bucket in the URL path (https://host/bucket/key) instead
                 # of the hostname. Every S3-compatible provider supports this style.
                 s3={"addressing_style": "path"},
+                # Since 1.36, boto3 sends a checksum with every upload using the
+                # aws-chunked transfer encoding, which OCI rejects. Send checksums
+                # only for operations that require them. These settings override
+                # the AWS_*_CHECKSUM_* environment variables.
+                request_checksum_calculation="when_required",
+                response_checksum_validation="when_required",
                 retries={"mode": "standard", "max_attempts": 3},
                 connect_timeout=5,
                 read_timeout=60,
@@ -68,12 +76,25 @@ class S3Storage:
             response = self._client.get_object(Bucket=self._bucket, Key=key)
         return FileDownload(
             info=_info_from_response(key, response),
-            chunks=_read_in_chunks(response["Body"]),
+            chunks=_ChunkReader(response["Body"]),
         )
 
     def stat(self, key: str) -> FileInfo:
         with _translate_errors(key):
-            response = self._client.head_object(Bucket=self._bucket, Key=key)
+            try:
+                response = self._client.head_object(Bucket=self._bucket, Key=key)
+            except ClientError as err:
+                # A HEAD error has no body: 404/NotFound may mean the bucket,
+                # not the key. Only report a missing file if the bucket is
+                # accessible. Never expose the bucket name or raw probe code.
+                if err.response.get("Error", {}).get("Code") in _AMBIGUOUS_HEAD_NOT_FOUND_CODES:
+                    try:
+                        self._client.head_bucket(Bucket=self._bucket)
+                    except ClientError as bucket_err:
+                        raise ProviderError(
+                            "the configured bucket does not exist or is not accessible"
+                        ) from bucket_err
+                raise
         return _info_from_response(key, response)
 
     def list_files(self, prefix: str, limit: int, cursor: str | None) -> FilePage:
@@ -115,12 +136,29 @@ def _clean_etag(etag: str) -> str:
     return etag.strip('"')
 
 
-def _read_in_chunks(body: StreamingBody) -> Iterator[bytes]:
-    """Yield a download piece by piece, and always release the connection afterwards."""
-    try:
-        yield from body.iter_chunks(DOWNLOAD_CHUNK_BYTES)
-    finally:
-        body.close()
+class _ChunkReader:
+    """Yield a download piece by piece, and always release the connection afterwards.
+
+    Not a generator: a generator's cleanup only runs once iteration has started, so
+    a download dropped before its first chunk would keep the connection open.
+    """
+
+    def __init__(self, body: StreamingBody) -> None:
+        self._body = body
+        self._chunks: Iterator[bytes] = body.iter_chunks(DOWNLOAD_CHUNK_BYTES)
+
+    def __iter__(self) -> Self:
+        return self
+
+    def __next__(self) -> bytes:
+        try:
+            return next(self._chunks)
+        except BaseException:  # the last chunk was read, or reading failed
+            self.close()
+            raise
+
+    def close(self) -> None:
+        self._body.close()
 
 
 @contextmanager

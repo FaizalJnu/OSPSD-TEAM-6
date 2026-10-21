@@ -29,10 +29,6 @@ The provider the README documents.
 * **Setup:** follow
   [Connect a real provider (OCI Object Storage)](../README.md#connect-a-real-provider-oci-object-storage)
   in the README. It covers the endpoint, region, keys, and bucket policy.
-* **Until FIX-1 is merged:** OCI rejects every upload. In your `.env`, uncomment the
-  two `AWS_*_CHECKSUM_*` lines at the end of `.env.example`. See
-  [FIX-1](../fixesRequired.md#fix-1-oci-rejects-every-upload). Remove this note once
-  FIX-1 is merged.
 * **Known bugs:** see [fixesRequired.md](../fixesRequired.md).
 
 ## AWS S3

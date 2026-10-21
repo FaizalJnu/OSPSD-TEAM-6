@@ -13,7 +13,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from storage_service.errors import FileNotFound
+from storage_service.errors import FileNotFound, InvalidInput
 from storage_service.main import build_storage
 from storage_service.storage.base import StorageClient
 from storage_service.storage.memory import InMemoryStorage
@@ -92,6 +92,13 @@ def test_list_is_sorted_paginated_and_has_no_content_type(storage, prefix):
     assert [f.key for f in second.files] == [prefix + "c"]
     assert second.next_cursor is None
     assert all(f.content_type is None for f in first.files + second.files)
+
+
+def test_list_with_a_cursor_this_backend_did_not_produce_is_invalid_input(storage, prefix):
+    put_bytes(storage, prefix + "a")
+
+    with pytest.raises(InvalidInput):
+        storage.list_files(prefix, 2, "garbage")
 
 
 def test_list_matches_the_prefix_as_text_at_every_depth_in_byte_order(storage, prefix):

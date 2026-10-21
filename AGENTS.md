@@ -16,16 +16,17 @@ src/storage_service/
   storage/s3.py      S3-compatible backend (the only module that imports boto3)
   storage/memory.py  In-memory backend for tests and local experiments
 tests/
-  conftest.py              Shared fixtures: in-memory client, stubbed S3, real-provider client
+  conftest.py              Shared fixtures: in-memory client, FakeStorage client, stubbed S3, real-provider client
   test_upload.py           POST and PUT /files/{key} (create and replace)
   test_download.py         GET /files/{key}
   test_metadata.py         GET /metadata/{key}
+  test_bucket_errors.py    Missing-bucket errors across metadata and existence checks
   test_delete.py           DELETE /files/{key}
   test_list.py             GET /files
   test_service.py          Input rules
   test_storage_contract.py Same tests for every backend; S3 runs only with -m provider
   test_invalid_input.py    FastAPI's own input rejections also return 400 InvalidInput
-  test_injection.py        Application tests over FakeStorage: storage calls and provider failures
+  test_injection.py        Application tests: storage calls, provider failures, how the app is built
   fakes.py                 FakeStorage: records calls and raises configured errors
 docs/
   API.md             HTTP contract: keys, file info, errors, one section per operation

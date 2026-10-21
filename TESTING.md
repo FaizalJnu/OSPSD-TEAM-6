@@ -48,12 +48,13 @@ delete their files afterwards.
 | [tests/test_upload.py](tests/test_upload.py) | Create and Replace: `POST` and `PUT /files/{key}` |
 | [tests/test_download.py](tests/test_download.py) | Download: `GET /files/{key}` |
 | [tests/test_metadata.py](tests/test_metadata.py) | Metadata: `GET /metadata/{key}` |
+| [tests/test_bucket_errors.py](tests/test_bucket_errors.py) | FIX-2: missing/denied buckets, probe failures, and HTTP checks before writes |
 | [tests/test_delete.py](tests/test_delete.py) | Delete: `DELETE /files/{key}` |
 | [tests/test_list.py](tests/test_list.py) | List: `GET /files` |
 | [tests/test_service.py](tests/test_service.py) | The key rules and the content-type choice, without HTTP |
 | [tests/test_storage_contract.py](tests/test_storage_contract.py) | The same tests for every storage backend |
 | [tests/test_invalid_input.py](tests/test_invalid_input.py) | Invalid input that FastAPI rejects first (a bad List `limit`, a missing `file` field) returns 400 `InvalidInput` |
-| [tests/test_injection.py](tests/test_injection.py) | Application tests over a controlled backend: storage calls made and provider failures |
+| [tests/test_injection.py](tests/test_injection.py) | Application tests over a controlled backend: storage calls made, provider failures, and how the app is built |
 | [tests/fakes.py](tests/fakes.py) | `FakeStorage`, the controlled backend (below) |
 
 Each operation's file holds all of that operation's tests. There are three kinds:
@@ -69,9 +70,9 @@ in that file, not in `conftest.py`.
 
 ### Controlled storage
 
-[`FakeStorage`](tests/fakes.py) is a `StorageClient` for application tests. Build the
-app with `create_app(FileService(fake, max_upload_bytes=...))`, as
-[tests/test_injection.py](tests/test_injection.py) does. It:
+[`FakeStorage`](tests/fakes.py) is a `StorageClient` for application tests. The
+`fake` and `fake_client` fixtures build the app over it with
+`create_app(FileService(fake, max_upload_bytes=...))`. It:
 
 * records each call in `fake.calls` as `(method, key)`, in order. `list_files` records
   its prefix instead of a key.
@@ -101,6 +102,9 @@ From [tests/conftest.py](tests/conftest.py):
 * **`client`:** a `TestClient` for a fresh app over empty in-memory storage, so tests
   never share state. Its upload limit is `MAX_UPLOAD_BYTES`, 1024 bytes, so size tests
   stay small.
+* **`fake` and `fake_client`:** a fresh [`FakeStorage`](#controlled-storage), and a
+  `TestClient` for an app over it with the same upload limit as `client`. Configure
+  failures on `fake` and read `fake.calls` to check which storage calls a request made.
 * **`send_file(client, method, key, data)`:** a helper, not a fixture. Sends `data` to
   `/files/{key}` as the `file` form field, with `method` `"POST"` or `"PUT"`.
 * **`stubbed_s3`:** a `StubbedS3(storage, stubber)` pair. `storage` is a real
@@ -120,8 +124,8 @@ From [tests/conftest.py](tests/conftest.py):
   environment, or fails the test with a hint if they do not configure the `s3`
   backend. The contract tests use it too.
 
-[tests/test_delete.py](tests/test_delete.py) has one example test for `stubbed_s3` and
-one for `provider_client`.
+[tests/test_delete.py](tests/test_delete.py) has examples for `client`, `fake_client`,
+`stubbed_s3`, and `provider_client`.
 
 ## Recording a real-provider verification
 
@@ -158,6 +162,127 @@ the OCI namespace and the bucket name.
   release (see "Releases" in [CONTRIBUTING.md](CONTRIBUTING.md)).
 
 Gaps that belong to one operation go in that operation's section.
+
+## Missing-bucket regression (FIX-2)
+
+Owner: **Darsh Shani**. Tests: [test_bucket_errors.py](tests/test_bucket_errors.py).
+This regression spans metadata and the shared existence check used by create,
+replace, and delete, so it has a separate test file rather than duplicating
+the same provider setup in each operation's tests.
+
+### Expected behavior and cause
+
+A HEAD object response can represent a missing key and a missing bucket with
+the same generic 404. Previously, every such response became `FileNotFound`,
+so a broken bucket configuration incorrectly produced HTTP 404 for metadata,
+delete, and replace. The regression test reproduced metadata returning 404
+when its expected status was 502, without network or credentials.
+
+`S3Storage.stat` now probes `head_bucket` only after ambiguous 404/NotFound
+object errors. A successful probe confirms the bucket is accessible and the
+original error becomes `FileNotFound`. A failed probe is translated as
+`ProviderError` or `ProviderUnavailable`, never as a missing file. A failed
+probe does not establish whether the bucket is absent or access is denied.
+
+The change stays in [storage/s3.py](src/storage_service/storage/s3.py).
+`service.py`, startup wiring, and the shared error translator are unchanged.
+Compared with a startup check, the probe keeps startup free of network calls
+and handles bucket failures discovered after startup. It costs an extra SDK
+call on each ambiguous miss and needs bucket-read permissions. Every successful
+Create on a provider returning generic HEAD 404s pays this extra call, because
+its existence check must miss. Separate HEAD calls are not an atomic snapshot.
+
+### Verification
+
+Offline cases cover both generic error codes, accessible versus missing or
+denied buckets, probe connection failure, and unchanged successful metadata,
+explicit `NoSuchKey`, and object permission-denial paths. HTTP tests check
+GET metadata, DELETE, PUT, and POST return 502 before a write; only HEAD calls
+are queued in Stubber, so an attempted upload or delete fails the test.
+
+```bash
+uv run pytest tests/test_bucket_errors.py
+uv run --env-file .env pytest -m provider tests/test_bucket_errors.py
+```
+
+The provider suite uses a unique bucket name that is never created to check
+metadata, delete, and replace errors. A second test checks a missing file in
+the configured real bucket still returns 404. It does not modify the configured
+bucket or its contents.
+
+### Real-provider evidence and gaps
+
+Run from Darsh's Windows checkout with Codex assistance on **2026-10-14**,
+against OCI Object Storage in **us-ashburn-1**, using Darsh's own private test
+bucket and keys from the ignored local `.env`.
+
+Before the fix, source commit `0453b66` (metadata branch, unchanged S3 adapter)
+was exercised through `TestClient(create_app(build_service(settings)))` with
+the bucket changed only in memory to a unique nonexistent name. Observed:
+
+| Request | Expected | Observed before the fix |
+|---|---|---|
+| `GET /metadata/missing.txt` | 502 `ProviderError` | 404 `FileNotFound` |
+| `DELETE /files/missing.txt` | 502 `ProviderError` | 404 `FileNotFound` |
+| `PUT /files/missing.txt` with a file form field | 502 `ProviderError` | 404 `FileNotFound` |
+
+All three returned `{"error": "FileNotFound", "detail": "no file named 'missing.txt'"}`.
+The original `.env` was unchanged, and no bucket was created or modified.
+
+The original post-fix run used a pre-squash local commit that was not reachable
+from the PR branch. It is superseded by the following run.
+
+#### Review follow-up, 2026-10-20
+
+- Run with Codex using Darsh's configured OCI test provider.
+- Source commit: `46910b00fe7914912cb5b1dab0a09d2b6d850f2e` on
+  `22-missing-bucket`, including `dev` at `fd2d127`. This is a committed ancestor
+  of the documentation record, not a discarded pre-squash commit. The latest
+  branch-head verification is also recorded in PR #23.
+- Before the error-detail change: **11 failed, 6 passed, 2 deselected** in
+  `tests/test_bucket_errors.py`. The assertions observed raw `(404)`, `(NotFound)`,
+  `(NoSuchBucket)`, or `(403)` details instead of the clear bucket message.
+- After the change: **120 passed, 15 deselected** in the fast suite, including
+  all 17 offline bucket cases. Ruff lint, Ruff format check (42 files), and
+  mypy (31 files) passed.
+- Live provider result on that source commit: **2 passed, 17 deselected**.
+  Missing buckets returned 502 with detail "the configured bucket does not
+  exist or is not accessible" for GET metadata, DELETE, and PUT. A missing key
+  in the accessible bucket remained 404 `FileNotFound`. No objects were written.
+- The existing virtualenv's Windows launcher was blocked by application control,
+  including outside the sandbox. Checks therefore used installed CPython 3.13.16
+  with that virtualenv's existing packages and this checkout's `src` on
+  `PYTHONPATH`. No dependency, lockfile, or check configuration changed.
+- Provider access was blocked inside the sandbox; rerunning with network access
+  passed. Tracebacks and captured output were suppressed to keep account details
+  out of the record. The ignored `.env` was neither changed nor displayed.
+
+Commands from this worktree (the env-file path points to the main checkout):
+
+```powershell
+$env:PYTHONPATH = "$PWD\.venv\Lib\site-packages;$PWD\src"
+$python = '../../../.tools/python/cpython-3.13.16-windows-x86_64-none/python.exe'
+& $python -m pytest --tb=short --show-capture=no
+& $python -m ruff check .
+& $python -m ruff format --check .
+& $python -m mypy
+& '../../../.tools/uv/uv.exe' run --no-project --offline --python $python `
+  --env-file '../../../OSPSD-TEAM-6/.env' python -m pytest -m provider `
+  tests/test_bucket_errors.py --tb=no --show-capture=no -p no:cacheprovider
+```
+
+The normal command in a single checkout with a working virtualenv launcher remains
+`uv run --env-file .env pytest -m provider tests/test_bucket_errors.py`.
+
+`test_nonexistent_real_bucket_is_a_provider_error` observed 502 `ProviderError`
+with the public error shape for all three requests above. It used a unique
+bucket name that was never created. `test_missing_file_in_real_bucket_remains_404`
+observed 404 `FileNotFound` for a unique nonexistent key in the accessible test
+bucket. Both checks passed; the provider fixture also completed cleanup.
+
+No objects were written by these checks. Provider tests remain explicitly
+selectable and fail rather than skip if configuration is missing. Human review
+and a second person's independent verification by Faizal remain pending.
 
 ## Filling in an operation section
 
@@ -217,6 +342,8 @@ All in [tests/test_upload.py](tests/test_upload.py):
 * `test_s3_put_returns_the_info_from_its_follow_up_stat`: also checks that ETag quotes
   are stripped.
 * `test_s3_put_turns_a_provider_rejection_into_provider_error`
+* Both stub tests pin `put_object`'s parameters (bucket, key, content type, and no
+  checksum parameter), so they fail if FIX-1's checksum setting is removed.
 * `test_create_and_replace_against_the_real_provider` (`provider`): Create, Replace, a
   download, and Metadata against a real bucket.
 * `test_multipart_upload_round_trips_against_the_real_provider` (`provider`): a 9 MiB
@@ -266,6 +393,63 @@ All in [tests/test_upload.py](tests/test_upload.py):
   ```
 - Cleanup: deleted through the API (204). Local files removed.
 
+#### Run by Darsh Shani: Create, Replace, and multipart round trip (R17)
+
+- Provider: OCI Object Storage, us-ashburn-1, using Darsh's own private test bucket
+  and the existing ignored `.env`. Executed with Codex assistance.
+- Date: 2026-10-20 (America/New_York).
+- Source commit: `fd2d127f5a9cf0e0fc3a4af0b04ea764a997e561` (`dev`). The
+  verification branch starts at this commit; this record changes documentation only.
+- Configuration: the documented FIX-1 workaround was applied to the test process:
+  `AWS_REQUEST_CHECKSUM_CALCULATION=when_required` and
+  `AWS_RESPONSE_CHECKSUM_VALIDATION=when_required`. The effective SDK configuration
+  confirmed both values. No `.env`, source, dependency, or check configuration was
+  changed. This run does not verify that the production FIX-1 change has landed.
+- Test selection:
+  ```bash
+  uv run --env-file .env pytest -m provider tests/test_upload.py
+  ```
+  On this Windows machine, application control blocks the virtualenv's Python
+  launcher. The run used installed CPython 3.13.16 with the existing locked
+  environment's packages and this checkout's `src` on `PYTHONPATH`, with uv loading
+  the main checkout's `.env`. A local audit helper invoked the existing pytest
+  selection, observed each `provider_prefix` fixture without replacing it, and
+  checked those prefixes after all fixture teardown. The command from the worktree
+  was:
+  ```powershell
+  $env:PYTHONPATH = "$PWD\..\missing-bucket\.venv\Lib\site-packages;$PWD\src"
+  & '../../../.tools/uv/uv.exe' run --no-project --offline `
+    --python '../../../.tools/python/cpython-3.13.16-windows-x86_64-none/python.exe' `
+    --env-file '../../../OSPSD-TEAM-6/.env' python '../../../.tools/r17_verify.py'
+  ```
+  The helper calls `pytest.main` with `-m provider tests/test_upload.py --tb=no
+  --show-capture=no -p no:cacheprovider`; it does not replace test functions, app
+  wiring, or provider calls. Account identifiers and credentials are omitted from
+  the evidence.
+- Expected and observed (all assertions passed):
+
+  | Existing test | Expected | Observed |
+  |---|---|---|
+  | `test_create_and_replace_against_the_real_provider` | Create `first`: 201, size 5. Replace with `second, longer`: 200, size 14, changed ETag. Download matches the replacement bytes; Metadata equals the replacement info. | Pass |
+  | `test_multipart_upload_round_trips_against_the_real_provider` | Create 9 MiB (9437184 bytes): 201 and matching size. Download is byte-identical. This exceeds boto3's 8 MB multipart threshold. | Pass |
+
+  Pytest reported **2 passed, 14 deselected**. The first audit invocation also
+  reported one `PytestAssertRewriteWarning` for already-imported `anyio`, caused by
+  importing the app before pytest initialized its plugins; no test failed.
+- Cleanup: the existing provider fixture deleted its objects. A separate storage
+  client then queried each exact prefix with `list_files(prefix, 1000, None)`:
+
+  | Test prefix | Files remaining | `next_cursor` |
+  |---|---|---|
+  | `api-tests/1cd2a2f838724deda8864c658409c0df/` | 0 | `null` |
+  | `api-tests/9bcbf96d5ce54919943440978764c2f5/` | 0 | `null` |
+
+  Only test-prefixed objects were created, replaced, and deleted. No local upload
+  files were created: both tests use in-memory bytes.
+- Scope: this is a second runner's automated HTTP/provider verification for Create
+  and Replace, alongside Debasmith's records above. It does not add live checks of
+  error cases, concurrency, or the 1 GiB boundary.
+
 ### Provider observations
 
 - OCI returns AWS-style multipart ETags: a 12 MiB upload came back as `<hash>-2`, two
@@ -274,20 +458,17 @@ All in [tests/test_upload.py](tests/test_upload.py):
   multipart ETags are not.
 - `last_modified` has one-second precision: a Create and a Replace in the same second both
   reported `20:40:45Z`. Compare `etag`, not `last_modified`, to detect a change.
-- Uploads to OCI need the FIX-1 checksum settings until FIX-1 merges; without them every
-  upload returns 502.
+- OCI rejects boto3's default upload checksum (`NotImplemented`: aws-chunked encoding not
+  supported), which returned 502 for every upload before FIX-1. `S3Storage` now sends
+  checksums only when an operation requires them.
 
 ### Gaps
 
-* Level 2 asks for two people per operation. Replace has only been run on OCI by its
-  owner so far; Create was also exercised in Darsh's metadata run.
 * Error cases (409, 413) and files near the 1 GiB limit have not been run on OCI.
 * The race between the existence check and the write is documented in
   [docs/API.md](docs/API.md#create-and-replace) but not tested.
 * The multipart path is covered only by the `provider` test and the manual run, not by
   the fast suite.
-* The stub test does not pin the upload's parameters, because boto3 adds a checksum
-  parameter that FIX-1 changes.
 
 ## Download
 
@@ -351,6 +532,9 @@ Translation, with `stubbed_s3` (no network):
 * [`test_s3_get_streams_in_chunks`](tests/test_download.py): with the chunk size set to
   4 bytes, a 10-byte file arrives as chunks of 4, 4, and 2 bytes, so the backend streams
   instead of reading the whole file at once.
+* [`test_s3_get_closes_the_provider_stream_when_no_chunk_was_read`](tests/test_download.py):
+  the provider stream is closed when a caller closes the chunks before reading any
+  (regression test for [#15](https://github.com/FaizalJnu/OSPSD-TEAM-6/issues/15)).
 * [`test_s3_get_rejected_by_the_provider_raises_provider_error`](tests/test_download.py):
   `AccessDenied` becomes `ProviderError`.
 
@@ -423,9 +607,6 @@ Real provider (marked `provider`):
   chunks are being read, botocore's `ResponseStreamingError` leaves the backend instead
   of becoming `ProviderUnavailable`, which breaks the `get` contract and the AGENTS.md
   rule. Tracked in [#26](https://github.com/FaizalJnu/OSPSD-TEAM-6/issues/26).
-* **A download dropped before its first chunk does not close the provider stream.**
-  `S3Storage` closes the stream in a generator's `finally`, which only runs once the
-  generator has started. Tracked in [#15](https://github.com/FaizalJnu/OSPSD-TEAM-6/issues/15).
 * **`ProviderUnavailable` from `get` is not tested here.** The Stubber can only queue
   answers and client errors, not connection failures. L4-FAKE adds an HTTP test for a
   503.
@@ -594,14 +775,15 @@ made the same provider test pass. No production upload fix is included here.
 
 HEAD and LIST returned equal UTC timestamps with whole-second precision for
 this sample. This observation does not promise identical precision on every
-provider or request. Ambiguous HEAD 404s (FIX-2) remain a separate change.
+provider or request. Ambiguous HEAD 404s are now covered by the
+[FIX-2 regression](#missing-bucket-regression-fix-2).
 
 ### Gaps
 
 * Darsh's and Vikram's independent OCI runs are recorded above. Faizal's review
   remains pending.
-* The missing-bucket HEAD 404 ambiguity is intentionally handled in a separate
-  FIX-2 / BUG-BUCKET change; no missing-bucket fix is claimed here.
+* Missing-bucket behavior and its independent-verification status are recorded
+  in the [FIX-2 section](#missing-bucket-regression-fix-2).
 * The controlled fake does not validate authentication, provider availability,
   or SDK retry behavior. Stubber validates request parameters and translation,
   not whether the provider actually returns these responses.
@@ -610,19 +792,70 @@ provider or request. Ambiguous HEAD 404s (FIX-2) remain a separate change.
 ## Delete
 
 Owner: **Faizal Rahman**. Contract: [docs/API.md](docs/API.md#delete).
-Tests: [tests/test_delete.py](tests/test_delete.py). Not written yet.
+Tests: [tests/test_delete.py](tests/test_delete.py).
 
 ### Contract checked
 
+`DELETE /files/{key}` returns 204 with an empty body and removes the file, so a later
+Download or Delete returns 404. The service checks that the file exists with `stat`
+before it calls `delete`. A missing file returns 404 `FileNotFound` and `delete` is
+never called. A failed check returns 503 `ProviderUnavailable` or 502 `ProviderError`
+and `delete` is never called. A rejected delete returns 502 with the full error body.
+`S3Storage.delete` turns a provider rejection into `ProviderError`.
+
 ### Cases and boundaries
+
+* Existing file, then the same request again: the 404 on the second request is our
+  rule, because S3 deletes a missing key silently.
+* Missing file: shows the existence check stops the request before `delete`.
+* A failure on each of the two provider calls: `stat` unavailable (503) and `delete`
+  rejected (502). Together they show which call failed and that nothing runs after a
+  failed check.
+* Invalid keys are covered once for every operation in
+  [tests/test_service.py](tests/test_service.py) and
+  [tests/test_injection.py](tests/test_injection.py).
 
 ### Tests
 
+Run them with `uv run pytest tests/test_delete.py`.
+
+* `test_delete_removes_the_file_and_deleting_again_is_404`: in-memory HTTP round
+  trip: 204, then Download 404, then Delete 404.
+* `test_delete_checks_the_file_exists_then_deletes_it`: 204, empty body, and calls
+  `[("stat", k), ("delete", k)]`.
+* `test_delete_of_a_missing_file_is_404_and_never_calls_delete`: 404 `FileNotFound`,
+  calls `[("stat", k)]`.
+* `test_delete_returns_503_and_never_deletes_when_the_check_cannot_reach_the_provider`:
+  503 with the full body, calls `[("stat", k)]`.
+* `test_delete_returns_502_when_the_provider_rejects_the_delete`: 502 with the full
+  body, calls `[("stat", k), ("delete", k)]`.
+* `test_s3_delete_rejected_by_the_provider_raises_provider_error`: Stubber test that
+  `DeleteObject` is sent with the right bucket and key, and that `AccessDenied` becomes
+  `ProviderError`.
+* `test_delete_removes_the_file_from_the_real_provider` (marked `provider`): create,
+  delete (204), then Metadata 404 against a real bucket.
+
+Removing the existence check from `service.delete` makes all five HTTP tests above
+fail.
+
 ### Real-provider verification
+
+None recorded yet. See Gaps.
 
 ### Provider observations
 
+None yet.
+
 ### Gaps
+
+* No real-provider run is recorded. Level 2 needs two people's runs (R17 in the #29
+  fix plan: Prateek and Faizal).
+* On OCI, a missing bucket returns 404 `FileNotFound` instead of 502 until #23
+  (FIX-2) merges. No test here claims the missing-bucket behavior.
+* What a failed delete leaves behind (the provider deleted the file and then the
+  response failed) is not tested: `FakeStorage` raises before touching the store.
+  R3 adds that.
+* The race between the check and the delete is documented, not tested.
 
 ## List
 

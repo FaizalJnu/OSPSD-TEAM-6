@@ -8,7 +8,7 @@ the bug.
 | ID | Problem | Impact | Owner | Reviewer |
 |---|---|---|---|---|
 | FIX-1 | OCI rejects every upload | Blocks everyone using OCI | Faizal | Debasmith |
-| FIX-2 | A missing bucket is reported as a missing file | Misleading 404s | Darsh | Faizal |
+| FIX-2 (implemented) | A missing bucket is reported as a missing file | Fixed by the bucket probe; independent review pending (#23) | Darsh | Faizal |
 | FIX-3 | A malformed list cursor returns 502 on OCI and 200 in memory | Wrong error for a caller mistake | Prateek | Vikram |
 
 ## How to work on a fix
@@ -144,7 +144,9 @@ You are responsible for every line the agent writes.
 
 ## FIX-1: OCI rejects every upload
 
-**Until this is fixed:** if you use OCI, add these two lines to your `.env`:
+**Fixed.** `S3Storage` now sets both options in its botocore `Config`, which takes
+precedence over the environment. Before the fix, OCI users added these two lines to
+their `.env`:
 
 ```dotenv
 AWS_REQUEST_CHECKSUM_CALCULATION=when_required
@@ -189,6 +191,12 @@ passed). Also upload a file larger than 8 MB once, because that goes through the
 multipart path (`UploadPart`), which no current test covers.
 
 ## FIX-2: A missing bucket is reported as a missing file
+
+**Status: implementation done in PR #23.** `S3Storage.stat` uses option (b)
+below. Offline and real-provider evidence is recorded in
+[TESTING.md](TESTING.md#missing-bucket-regression-fix-2). Author review and
+Faizal's independent provider verification/approval remain required before merge.
+The symptom and reproduction below describe the original bug.
 
 **Symptom.** With `S3_BUCKET` set to a bucket that does not exist, some
 operations say the *file* is missing instead of reporting a configuration

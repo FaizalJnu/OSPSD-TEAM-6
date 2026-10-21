@@ -3,6 +3,8 @@
 Three ways to reach storage, from fastest to slowest:
 
 * ``client``: the HTTP API over in-memory storage. No network. Most tests use this.
+* ``fake`` and ``fake_client``: the HTTP API over a ``FakeStorage``, which records
+  storage calls and can be told to fail. No network. See ``tests/fakes.py``.
 * ``stubbed_s3``: the real ``S3Storage`` with botocore's Stubber in front of its
   client, for testing how provider responses and errors are translated. No network.
 * ``provider_client``: the HTTP API wired exactly like production, against the
@@ -24,6 +26,7 @@ from storage_service.main import build_storage, create_app
 from storage_service.service import FileService
 from storage_service.storage.memory import InMemoryStorage
 from storage_service.storage.s3 import S3Storage
+from tests.fakes import FakeStorage
 
 MAX_UPLOAD_BYTES = 1024
 
@@ -33,6 +36,18 @@ def client() -> TestClient:
     """A client for a fresh app with empty in-memory storage, so tests never share state."""
     service = FileService(InMemoryStorage(), max_upload_bytes=MAX_UPLOAD_BYTES)
     return TestClient(create_app(service))
+
+
+@pytest.fixture
+def fake() -> FakeStorage:
+    """A fresh ``FakeStorage``. Configure failures on it before making requests."""
+    return FakeStorage()
+
+
+@pytest.fixture
+def fake_client(fake: FakeStorage) -> TestClient:
+    """A client for an app over ``fake``, so tests can check the storage calls it made."""
+    return TestClient(create_app(FileService(fake, max_upload_bytes=MAX_UPLOAD_BYTES)))
 
 
 def send_file(client: TestClient, method: str, key: str, data: bytes):

@@ -983,16 +983,47 @@ fail.
 
 ### Real-provider verification
 
-None recorded yet. See Gaps.
+#### Run by Prateek Saxena
+
+- Provider: OCI Object Storage, us-ashburn-1, my own private test bucket
+- Date: 2026-10-21
+- Commit: 560ee5d, boto3 1.43.108
+- Provider command: `uv run --env-file .env pytest -m provider -k delete`
+- Observed: `3 passed, 154 deselected`: the HTTP test in this file and the two Delete
+  contract tests on S3. The full `pytest -m provider` run on the same commit gave
+  `16 passed, 141 deselected`.
+- Manual requests against a local server started with
+  `uv run --env-file .env uvicorn storage_service.main:create_app --factory --port 8765`,
+  with `K=manual-delete-<uuid>/x.txt` and a one-byte local file `a.txt`:
+  ```bash
+  curl -F "file=@a.txt" "$B/files/$K"
+  curl -i -X DELETE "$B/files/$K"
+  curl -i -X DELETE "$B/files/$K"
+  curl -i "$B/metadata/$K"
+  curl "$B/files?prefix=manual-delete-<uuid>/"
+  ```
+- Expected: 201; 204 with an empty body; 404 `FileNotFound` for the repeated delete
+  (our rule, since S3 deletes a missing key silently); 404 for Metadata; an empty
+  listing.
+- Observed: 201, 204 (empty body), 404, 404, 200 `{"files":[],"next_cursor":null}`.
+  Both 404s had the body
+  `{"error":"FileNotFound","detail":"no file named 'manual-delete-<uuid>/x.txt'"}`.
+- Missing bucket: with `S3_BUCKET` overridden to a bucket that does not exist,
+  `curl -i -X DELETE "$B/files/x.txt"` returned
+  `502 {"error":"ProviderError","detail":"the configured bucket does not exist or is not accessible"}`,
+  as [Bucket checks](docs/API.md#bucket-checks) says.
 
 ### Provider observations
 
-None yet.
+* Repeating a delete on OCI gives 404 from our existence check, so the provider's
+  silent delete of a missing key is never reached through the API. The contract test
+  `test_delete_of_a_missing_key_is_silent[s3]` confirms that OCI itself returns success
+  for it.
 
 ### Gaps
 
-* No real-provider run is recorded. Level 2 needs runs by two people: Prateek and
-  Faizal.
+* Only one real-provider run is recorded. Level 2 needs runs by two people; Faizal
+  does the second.
 * The missing-bucket behavior is tested in
   [test_bucket_errors.py](tests/test_bucket_errors.py) (FIX-2), not here, including
   that Delete returns 502 before deleting anything.

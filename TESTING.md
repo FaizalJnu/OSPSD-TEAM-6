@@ -53,7 +53,7 @@ delete their files afterwards.
 | [tests/test_service.py](tests/test_service.py) | The key rules and the content-type choice, without HTTP |
 | [tests/test_storage_contract.py](tests/test_storage_contract.py) | The same tests for every storage backend |
 | [tests/test_invalid_input.py](tests/test_invalid_input.py) | Invalid input that FastAPI rejects first (a bad List `limit`, a missing `file` field) returns 400 `InvalidInput` |
-| [tests/test_injection.py](tests/test_injection.py) | Application tests over a controlled backend: storage calls made and provider failures |
+| [tests/test_injection.py](tests/test_injection.py) | Application tests over a controlled backend: storage calls made, provider failures, and how the app is built |
 | [tests/fakes.py](tests/fakes.py) | `FakeStorage`, the controlled backend (below) |
 
 Each operation's file holds all of that operation's tests. There are three kinds:

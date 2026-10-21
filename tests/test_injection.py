@@ -1,8 +1,10 @@
 """Application tests that supply a controlled storage backend (Level 4).
 
-Each test builds the app with ``create_app(service)`` over a ``FakeStorage``, so it
+Most tests build the app with ``create_app(service)`` over a ``FakeStorage``, so they
 can check which storage calls a request made and how a provider failure reaches the
-caller. See ``tests/fakes.py``.
+caller. See ``tests/fakes.py``. The last tests check how the app is built: an injected
+service is used as is, apps do not share storage, and without one the backend and the
+upload limit come from the environment.
 """
 
 import pytest
@@ -59,3 +61,45 @@ def test_create_returns_502_when_the_provider_rejects_the_write(fake, fake_clien
         "detail": "storage provider rejected the request (AccessDenied)",
     }
     assert fake.calls == [("stat", "notes.txt"), ("put", "notes.txt")]
+
+
+def test_create_app_with_a_service_never_reads_settings_or_builds_storage(monkeypatch):
+    def must_not_run(*args, **kwargs):
+        raise AssertionError("create_app built its own storage despite an injected service")
+
+    monkeypatch.setattr("storage_service.main.load_settings", must_not_run)
+    monkeypatch.setattr("storage_service.main.build_storage", must_not_run)
+    fake = FakeStorage()
+    client = TestClient(create_app(FileService(fake, max_upload_bytes=MAX_UPLOAD_BYTES)))
+
+    response = client.get("/files")
+
+    assert response.status_code == 200
+    assert response.json() == {"files": [], "next_cursor": None}
+    assert fake.calls == [("list_files", "")]
+
+
+def test_each_app_keeps_its_own_storage():
+    first, second = FakeStorage(), FakeStorage()
+    first_client = TestClient(create_app(FileService(first, max_upload_bytes=MAX_UPLOAD_BYTES)))
+    second_client = TestClient(create_app(FileService(second, max_upload_bytes=MAX_UPLOAD_BYTES)))
+
+    assert send_file(first_client, "POST", "notes.txt", b"data").status_code == 201
+
+    assert second.calls == []
+    assert second_client.get("/files").json()["files"] == []
+    assert [f["key"] for f in first_client.get("/files").json()["files"]] == ["notes.txt"]
+
+
+def test_create_app_without_a_service_builds_storage_from_the_environment(monkeypatch):
+    for name in ("S3_ENDPOINT", "S3_REGION", "S3_BUCKET", "S3_ACCESS_KEY", "S3_SECRET_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("STORAGE_BACKEND", "memory")
+    monkeypatch.setenv("MAX_UPLOAD_BYTES", "8")
+    client = TestClient(create_app())
+
+    assert send_file(client, "POST", "at-limit.bin", b"x" * 8).status_code == 201
+    too_big = send_file(client, "POST", "too-big.bin", b"x" * 9)
+    assert too_big.status_code == 413
+    assert too_big.json()["error"] == "FileTooLarge"
+    assert client.get("/metadata/too-big.bin").status_code == 404

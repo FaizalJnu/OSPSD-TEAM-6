@@ -12,7 +12,7 @@ import pytest
 from botocore.exceptions import EndpointConnectionError
 from fastapi.testclient import TestClient
 
-from storage_service.errors import AccessDenied, ProviderError, ProviderUnavailable
+from storage_service.errors import InvalidInput, ProviderError, ProviderUnavailable
 from storage_service.main import create_app
 from storage_service.models import FileInfo, FilePage
 from storage_service.service import FileService
@@ -171,6 +171,27 @@ def test_prefix_of_1024_bytes_is_accepted_and_1025_is_400(client):
     assert client.get("/files", params={"prefix": at_limit}).status_code == 200
 
     response = client.get("/files", params={"prefix": at_limit + "a"})
+    assert response.status_code == 400
+    assert response.json()["error"] == "InvalidInput"
+
+
+@pytest.mark.parametrize("cursor", ["garbage", "abc123", "docs/a.txt"])
+def test_list_with_a_cursor_this_api_did_not_produce_is_400(client, cursor):
+    send_file(client, "POST", "docs/a.txt", b"x")
+
+    response = client.get("/files", params={"prefix": "docs/", "cursor": cursor})
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "InvalidInput"
+
+
+def test_list_with_a_cursor_from_another_prefix_is_400(client):
+    for name in ("docs/a.txt", "docs/b.txt", "img/c.png"):
+        send_file(client, "POST", name, b"x")
+    cursor = client.get("/files", params={"prefix": "docs/", "limit": 1}).json()["next_cursor"]
+
+    response = client.get("/files", params={"prefix": "img/", "cursor": cursor})
+
     assert response.status_code == 400
     assert response.json()["error"] == "InvalidInput"
 
@@ -420,6 +441,38 @@ def test_s3_list_rejected_by_the_provider_raises_our_error(stubbed_s3, code, sta
     # The provider's code is kept for the logs, not put in the message.
     assert raised.value.provider_code == code
     assert code not in str(raised.value)
+
+
+def test_s3_list_turns_a_rejected_cursor_into_invalid_input(stubbed_s3):
+    storage, stubber = stubbed_s3
+    # OCI answers a cursor it cannot decode with InvalidArgument; so does AWS S3.
+    stubber.add_client_error(
+        "list_objects_v2",
+        service_error_code="InvalidArgument",
+        service_message="Illegal argument: unable to decode the token",
+        http_status_code=400,
+        expected_params={**LIST_PARAMS, "ContinuationToken": "garbage"},
+    )
+
+    with pytest.raises(InvalidInput) as raised:
+        storage.list_files("docs/", 2, "garbage")
+    # The provider's code stays inside s3.py.
+    assert "InvalidArgument" not in str(raised.value)
+
+
+def test_s3_list_invalid_argument_without_a_cursor_is_still_a_provider_error(stubbed_s3):
+    storage, stubber = stubbed_s3
+    # Without a cursor the caller sent nothing the provider could reject, so this is
+    # a provider or configuration problem.
+    stubber.add_client_error(
+        "list_objects_v2",
+        service_error_code="InvalidArgument",
+        http_status_code=400,
+        expected_params=LIST_PARAMS,
+    )
+
+    with pytest.raises(ProviderError):
+        storage.list_files("docs/", 2, None)
 
 
 def test_s3_list_that_cannot_reach_the_provider_raises_provider_unavailable(

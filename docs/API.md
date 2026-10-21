@@ -177,10 +177,8 @@ reads and explicit `NoSuchKey` responses do not need the probe.
 
 ### Known bugs
 
-On OCI, the remaining known error-mapping bug is:
-
-* A malformed list cursor returns 502 `ProviderError`. See
-  [FIX-3](../fixesRequired.md#fix-3-a-malformed-list-cursor-returns-the-wrong-error).
+No known error-mapping bugs remain on OCI. Fixed bugs and their records are in
+[fixesRequired.md](../fixesRequired.md).
 
 ## Filling in an operation section
 
@@ -627,13 +625,9 @@ The body uses the [error format](#error-format).
 | Status | `error` | When |
 |---|---|---|
 | 400 | `InvalidInput` | `limit` is not a whole number from 1 to 1000 (for example `0`, `1001`, or `abc`), or `prefix` is longer than 1024 bytes. The provider is not contacted. |
-| 403 | `AccessDenied` | The provider denied the service's credentials or permissions. |
-| 502 | `ProviderError` | The provider refused the request, for example because of a missing bucket. |
+| 400 | `InvalidInput` | `cursor` is not a `next_cursor` this API returned for this `prefix`, for example `garbage`, or a key name. |
+| 502 | `ProviderError` | The provider refused the request, for example bad credentials, a denied permission, or a missing bucket. |
 | 503 | `ProviderUnavailable` | The provider could not be reached or timed out. |
-
-A cursor this API did not produce should be 400 `InvalidInput`. Today it gives 200 with
-an empty page on the in-memory backend, and 502 `ProviderError` on OCI. See
-[Known bugs](#known-bugs).
 
 ### Retry
 
@@ -649,8 +643,10 @@ retrying later sometimes succeeds (see [Error types](#error-types)).
 * **No snapshot.** Each page is read from the bucket as it is at that moment. A file
   created or deleted while a caller is paging may or may not appear.
 * **Cursors belong to one prefix.** Send a cursor back only with the `prefix` it came
-  with. What happens with another prefix is not settled yet (BUG-CURSOR). How long a
-  cursor stays usable has not been tested.
+  with. The in-memory backend answers a cursor from another prefix with 400
+  `InvalidInput`. An S3-compatible provider decides for itself: it may reject the
+  cursor (400), or continue from where that cursor points, which can skip or repeat
+  files. How long a cursor stays usable has not been tested.
 * **Cursor strings change.** On OCI, two requests for the same page return different
   `next_cursor` strings, and both work. Compare pages by their files, not by cursor.
 * **`content_type` is `null`**, because the S3 list call does not return it. Use

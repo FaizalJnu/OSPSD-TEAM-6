@@ -1014,6 +1014,10 @@ Tests: [tests/test_list.py](tests/test_list.py).
 * The prefix is plain text matched at the start of the key, at every depth.
 * `limit` from 1 to 1000 and a `prefix` of up to 1024 bytes are accepted. The values
   just outside are 400 `InvalidInput`.
+* A cursor this API did not produce, or one from another prefix, is 400 `InvalidInput`
+  on the in-memory backend. `S3Storage` turns the provider's `InvalidArgument` for a
+  sent cursor into `InvalidInput`, and keeps it a `ProviderError` when no cursor was
+  sent.
 * A file that exists for the whole traversal appears once, even when other files are
   created between pages.
 * The service makes exactly one storage call per request, with `prefix`, `limit`, and
@@ -1046,6 +1050,11 @@ written out by hand, not computed with the code under test.
   from `é`, two bytes each, to show that the limit counts bytes, not characters.
 * **Changes between pages.** After the first page, one file is created before the
   position reached so far and one after it.
+* **Cursors this API did not produce.** A plain string (`garbage`), a string shaped
+  like a provider token (`abc123`), and a key name (`docs/a.txt`, which the old
+  in-memory cursor format accepted), plus a real cursor sent with another prefix. On
+  S3, the same provider code with and without a cursor, to show that only a sent
+  cursor becomes `InvalidInput`.
 * **What storage answers (controlled storage).** A page with a cursor, given the
   caller's own cursor; the default parameters; each kind of invalid input; and each of
   the two provider errors.
@@ -1106,6 +1115,11 @@ HTTP behavior, on the in-memory backend through `create_app(service)`:
   then 400 `InvalidInput`.
 * [`test_files_present_for_the_whole_traversal_appear_once_despite_changes`](tests/test_list.py):
   the three original files appear exactly once each.
+* [`test_list_with_a_cursor_this_api_did_not_produce_is_400`](tests/test_list.py):
+  `garbage`, `abc123`, and a key name (`docs/a.txt`, which the old in-memory cursor
+  format accepted) each return 400 `InvalidInput`.
+* [`test_list_with_a_cursor_from_another_prefix_is_400`](tests/test_list.py): a real
+  `next_cursor` from `docs/` sent with `img/` returns 400 `InvalidInput`.
 * [`test_list_pages_through_files_with_a_cursor`](tests/test_list.py) and
   [`test_list_rejects_an_out_of_range_limit`](tests/test_list.py), from before this
   section: two pages with a prefix; `limit` 0 and 1001 return 400. The error body for
@@ -1141,9 +1155,14 @@ Translation, with `stubbed_s3` (no network):
 * [`test_s3_list_returns_keys_decoded_when_the_provider_sends_them_url_encoded`](tests/test_list.py):
   boto3 asks for `EncodingType=url` and decodes the keys itself, so
   `docs/r%C3%A9sum%C3%A9.pdf` reaches callers as `docs/résumé.pdf`.
-* [`test_s3_list_rejected_by_the_provider_raises_our_error`](tests/test_list.py):
-  `AccessDenied` becomes `AccessDenied` and `NoSuchBucket` becomes `ProviderError`. The
-  provider's code is in `provider_code`, not in the message.
+* [`test_s3_list_rejected_by_the_provider_raises_provider_error`](tests/test_list.py):
+  `AccessDenied` and `NoSuchBucket` both become `ProviderError`.
+* [`test_s3_list_turns_a_rejected_cursor_into_invalid_input`](tests/test_list.py):
+  `InvalidArgument` (OCI's "unable to decode the token") for a request with a
+  `ContinuationToken` becomes `InvalidInput`, and the provider's code is not in the
+  message.
+* [`test_s3_list_invalid_argument_without_a_cursor_is_still_a_provider_error`](tests/test_list.py):
+  the same code without a cursor stays `ProviderError`.
 * [`test_s3_list_that_cannot_reach_the_provider_raises_provider_unavailable`](tests/test_list.py):
   a connection failure becomes `ProviderUnavailable`. The Stubber cannot simulate one,
   so the test replaces the boto3 call. It also checks that the cause is the
@@ -1154,6 +1173,8 @@ Every backend, in
 [tests/test_storage_contract.py](tests/test_storage_contract.py) (in-memory in the fast
 suite, S3 with `-m provider`):
 
+* `test_list_with_a_cursor_this_backend_did_not_produce_is_invalid_input`: `garbage`
+  raises `InvalidInput`. On S3 this is the check that OCI really rejects it.
 * `test_list_matches_the_prefix_as_text_at_every_depth_in_byte_order`: `docs/` lists
   `docs/B.txt`, `docs/a.txt`, `docs/sub/b.txt`, and `docs/é.txt`, in that order, and
   not `docs2/c.txt`.
@@ -1248,8 +1269,11 @@ same bucket. Its output is the one shown there, and its prefix was empty afterwa
   Level 2 needs two people, so the reviewer should run
   `uv run --env-file .env pytest -m provider -k list` against their own bucket and add a
   record above.
-* **Malformed cursors**, and cursors reused with another prefix, belong to BUG-CURSOR
-  ([FIX-3](fixesRequired.md#fix-3-a-malformed-list-cursor-returns-the-wrong-error)).
+* **Malformed cursors on a real provider.** FIX-3's contract test has not yet been run
+  against OCI. Until it is, the S3 mapping rests on the error OCI returned in
+  [FIX-3](fixesRequired.md#fix-3-a-malformed-list-cursor-returns-the-wrong-error).
+* **A cursor from another prefix on a real provider** is passed to the provider
+  unchanged, and what OCI does with it is not tested.
 * **The Stubber checks shapes, not real answers.** Whether OCI really sends what the
   translation tests feed in is shown only by the provider tests.
 * **Connection failures are simulated by replacing the boto3 call**, so botocore's own

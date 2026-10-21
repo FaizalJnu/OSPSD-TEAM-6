@@ -102,9 +102,10 @@ class StorageClient(Protocol):
         exactly once. Pages are not a snapshot: a file created or deleted between calls
         may or may not appear.
 
-        Raises ``ProviderError`` or ``ProviderUnavailable`` if the provider fails. No
-        matches is an empty page, not an error. What happens with a cursor this backend
-        did not produce is not settled yet (BUG-CURSOR in fixesRequired.md, FIX-3).
+        Raises ``InvalidInput`` for a cursor this backend did not produce, and
+        ``ProviderError`` or ``ProviderUnavailable`` if the provider fails. No matches is
+        an empty page, not an error. A backend that cannot recognize its own cursors, such
+        as S3, raises ``InvalidInput`` when the provider rejects the cursor.
         """
         ...
 

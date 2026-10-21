@@ -95,9 +95,24 @@ curl -F "file=@cat.jpg" $B/files/photos/cat.jpg             # again   -> 409
 curl $B/metadata/photos/cat.jpg                             # info    -> 200
 curl -o back.jpg $B/files/photos/cat.jpg                    # download
 cmp cat.jpg back.jpg && echo "identical"
-curl "$B/files?prefix=photos/&limit=10"                     # list
+curl "$B/files?prefix=photos/&limit=10"                     # list    -> 200
 curl -X PUT -F "file=@other.jpg" $B/files/photos/cat.jpg    # replace -> 200
 curl -i -X DELETE $B/files/photos/cat.jpg                   # delete  -> 204
+```
+
+The same steps in Windows `cmd.exe`:
+
+```bat
+set B=http://127.0.0.1:8000
+
+curl.exe -F "file=@cat.jpg" %B%/files/photos/cat.jpg            & rem create: 201
+curl.exe -F "file=@cat.jpg" %B%/files/photos/cat.jpg            & rem again: 409
+curl.exe %B%/metadata/photos/cat.jpg                            & rem info: 200
+curl.exe -o back.jpg %B%/files/photos/cat.jpg                   & rem download
+fc /b cat.jpg back.jpg                                          & rem "no differences"
+curl.exe "%B%/files?prefix=photos/&limit=10"                    & rem list
+curl.exe -X PUT -F "file=@other.jpg" %B%/files/photos/cat.jpg   & rem replace: 200
+curl.exe -i -X DELETE %B%/files/photos/cat.jpg                  & rem delete: 204
 ```
 
 Add `-i` to any command to show the status code and response headers.
@@ -115,6 +130,10 @@ Add `-i` to any command to show the status code and response headers.
 
 The key rules, response fields, statuses, and errors are in
 [docs/API.md](docs/API.md).
+
+Metadata's complete contract and example are in
+[docs/API.md](docs/API.md#metadata); verification is recorded in
+[TESTING.md](TESTING.md#metadata).
 
 ## Tests
 
@@ -152,9 +171,8 @@ up, the test layout and fixtures, and what each operation's tests check.
 
 ## Design notes
 
-* **Layers.** Requests go from `routers/` (HTTP) to `service.py` (validation
-  and rules) to a storage backend, through the contract in `storage/base.py`.
-  boto3 is only used in `storage/s3.py`. See `AGENTS.md` for the full code map.
+* **Layers.** The layers, the provider boundary, and how the backend is wired in
+  are explained in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 * **No database.** The provider is the single source of truth. S3 already
   stores each object's size, content type, ETag, and modification time, and a
   separate database would be a second copy that can fall out of sync. We plan

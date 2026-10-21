@@ -10,7 +10,13 @@ from storage_service.routers.deps import Service
 router = APIRouter()
 
 
-@router.get("/files/{key:path}")
+@router.get(
+    "/files/{key:path}",
+    response_class=StreamingResponse,
+    responses={
+        200: {"description": "The file's bytes", "content": {"application/octet-stream": {}}}
+    },
+)
 def download_file(key: str, service: Service) -> StreamingResponse:
     download = service.download(key)
     info = download.info

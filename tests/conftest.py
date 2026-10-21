@@ -24,6 +24,7 @@ from fastapi.testclient import TestClient
 from storage_service.config import ConfigError, Settings, load_settings
 from storage_service.main import build_storage, create_app
 from storage_service.service import FileService
+from storage_service.storage.base import StorageClient
 from storage_service.storage.memory import InMemoryStorage
 from storage_service.storage.s3 import S3Storage
 from tests.fakes import FakeStorage
@@ -70,6 +71,24 @@ def load_provider_settings() -> Settings:
     return settings
 
 
+def delete_everything_under(storage: StorageClient, prefix: str) -> None:
+    """Delete every file under ``prefix``, following every page of the listing.
+
+    Used to clean up after provider tests. A page can be short, or even empty, and
+    still have a cursor, so stop only when there is no cursor.
+    """
+    keys: list[str] = []
+    cursor: str | None = None
+    while True:
+        page = storage.list_files(prefix, 1000, cursor)
+        keys += [info.key for info in page.files]
+        cursor = page.next_cursor
+        if cursor is None:
+            break
+    for key in keys:  # list everything first, so deleting cannot disturb the cursor
+        storage.delete(key)
+
+
 @pytest.fixture
 def provider_prefix() -> str:
     """A unique folder-like prefix per test, so runs never collide in a real bucket."""
@@ -88,9 +107,7 @@ def provider_client(provider_prefix: str) -> Iterator[TestClient]:
         yield client
     # Clean up through a separate storage client, so cleanup still works when the
     # API under test is broken.
-    storage = build_storage(settings)
-    for info in storage.list_files(provider_prefix, 1000, None).files:
-        storage.delete(info.key)
+    delete_everything_under(build_storage(settings), provider_prefix)
 
 
 class StubbedS3(NamedTuple):

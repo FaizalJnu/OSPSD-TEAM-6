@@ -56,6 +56,7 @@ delete their files afterwards.
 | [tests/test_invalid_input.py](tests/test_invalid_input.py) | Invalid input that FastAPI rejects first (a bad List `limit`, a missing `file` field) returns 400 `InvalidInput` |
 | [tests/test_injection.py](tests/test_injection.py) | Application tests over a controlled backend: storage calls made, provider failures, and how the app is built |
 | [tests/fakes.py](tests/fakes.py) | `FakeStorage`, the controlled backend (below) |
+| [tests/test_cleanup.py](tests/test_cleanup.py) | `delete_everything_under`, the cleanup helper the provider tests rely on |
 
 Each operation's file holds all of that operation's tests. There are three kinds:
 
@@ -133,6 +134,9 @@ From [tests/conftest.py](tests/conftest.py):
 * **`provider_prefix`:** a unique prefix per test, `api-tests/<random hex>/`. Put every
   key a provider test writes under it. `provider_client` deletes everything there
   afterwards through a separate storage client, even when the test fails.
+* **`delete_everything_under(storage, prefix)`:** a helper that deletes every file
+  under `prefix`, following every page of the listing. `provider_client` and the
+  contract tests clean up with it.
 * **`load_provider_settings()`:** a helper that returns the settings from the
   environment, or fails the test with a hint if they do not configure the `s3`
   backend. The contract tests use it too.
@@ -168,9 +172,6 @@ the OCI namespace and the bucket name.
 
 * Known provider bugs, with their reproductions and planned fixes, are in
   [fixesRequired.md](fixesRequired.md).
-* `provider_client` and the contract tests clean up with one listing of at most 1000
-  keys. A test that writes more than 1000 files under its prefix leaves the rest
-  behind.
 * The provider tests never run in CI. The release manager runs them before each
   release (see "Releases" in [CONTRIBUTING.md](CONTRIBUTING.md)).
 

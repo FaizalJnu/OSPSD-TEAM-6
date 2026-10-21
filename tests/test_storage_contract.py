@@ -17,7 +17,7 @@ from storage_service.errors import FileNotFound
 from storage_service.main import build_storage
 from storage_service.storage.base import StorageClient
 from storage_service.storage.memory import InMemoryStorage
-from tests.conftest import load_provider_settings
+from tests.conftest import delete_everything_under, load_provider_settings
 
 
 @pytest.fixture
@@ -34,8 +34,7 @@ def storage(request, prefix) -> Iterator[StorageClient]:
         backend = build_storage(load_provider_settings())
     yield backend
     # Clean up whatever the test wrote. This matters for the real provider.
-    for info in backend.list_files(prefix, 1000, None).files:
-        backend.delete(info.key)
+    delete_everything_under(backend, prefix)
 
 
 def put_bytes(storage: StorageClient, key: str, data: bytes = b"hello") -> None:

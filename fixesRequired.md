@@ -7,8 +7,8 @@ the bug.
 
 | ID | Problem | Impact | Owner | Reviewer |
 |---|---|---|---|---|
-| FIX-1 | OCI rejects every upload | Blocks everyone using OCI | Faizal | Debasmith |
-| FIX-2 (implemented) | A missing bucket is reported as a missing file | Fixed by the bucket probe; independent review pending (#23) | Darsh | Faizal |
+| FIX-1 (fixed) | OCI rejects every upload | Fixed in #31: `S3Storage` sends checksums only when an operation requires them | Faizal | Debasmith |
+| FIX-2 (fixed) | A missing bucket is reported as a missing file | Fixed in #23 by the bucket probe; verified on OCI by Darsh and Faizal | Darsh | Faizal |
 | FIX-3 | A malformed list cursor returns 502 on OCI and 200 in memory | Wrong error for a caller mistake | Prateek | Vikram |
 
 ## How to work on a fix
@@ -20,8 +20,7 @@ the bug.
 * Install uv (`brew install uv`), then run `uv sync` and `uv run pytest`. Every
   test should pass.
 * Use your own S3-compatible bucket and keys in `.env`. The README walks through
-  OCI. Never commit `.env`, and never paste keys into Slack, issues, or PRs. On
-  OCI, add the two FIX-1 lines below to your `.env` until FIX-1 is merged.
+  OCI. Never commit `.env`, and never paste keys into Slack, issues, or PRs.
 * Branch from the latest `dev`. The test-foundation PR, which adds the fixtures
   below, is merged there.
 
@@ -144,7 +143,7 @@ You are responsible for every line the agent writes.
 
 ## FIX-1: OCI rejects every upload
 
-**Fixed.** `S3Storage` now sets both options in its botocore `Config`, which takes
+**Fixed in #31.** `S3Storage` now sets both options in its botocore `Config`, which takes
 precedence over the environment. Before the fix, OCI users added these two lines to
 their `.env`:
 
@@ -192,11 +191,10 @@ multipart path (`UploadPart`), which no current test covers.
 
 ## FIX-2: A missing bucket is reported as a missing file
 
-**Status: implementation done in PR #23.** `S3Storage.stat` uses option (b)
-below. Offline and real-provider evidence is recorded in
-[TESTING.md](TESTING.md#missing-bucket-regression-fix-2). Author review and
-Faizal's independent provider verification/approval remain required before merge.
-The symptom and reproduction below describe the original bug.
+**Fixed in #23.** `S3Storage.stat` uses option (b) below. Darsh's and Faizal's
+OCI runs, and the offline tests, are recorded in
+[TESTING.md](TESTING.md#missing-bucket-regression-fix-2). The symptom and
+reproduction below describe the original bug.
 
 **Symptom.** With `S3_BUCKET` set to a bucket that does not exist, some
 operations say the *file* is missing instead of reporting a configuration

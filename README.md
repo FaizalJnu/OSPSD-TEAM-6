@@ -187,6 +187,9 @@ up, the test layout and fixtures, and what each operation's tests check.
 
 ## Known limitations
 
+* Ambiguous S3 HEAD misses require an extra bucket check and bucket-read
+  permissions. See [Bucket checks](docs/API.md#bucket-checks) for error behavior
+  and concurrency limitations.
 * Uploads are written to a temporary file before being sent to the provider.
   The server needs free temp space equal to the upload size, and the size limit
   is only checked after the upload finishes. On Fedora, `/tmp` is stored in RAM,

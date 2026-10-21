@@ -48,6 +48,7 @@ delete their files afterwards.
 | [tests/test_upload.py](tests/test_upload.py) | Create and Replace: `POST` and `PUT /files/{key}` |
 | [tests/test_download.py](tests/test_download.py) | Download: `GET /files/{key}` |
 | [tests/test_metadata.py](tests/test_metadata.py) | Metadata: `GET /metadata/{key}` |
+| [tests/test_bucket_errors.py](tests/test_bucket_errors.py) | FIX-2: missing/denied buckets, probe failures, and HTTP checks before writes |
 | [tests/test_delete.py](tests/test_delete.py) | Delete: `DELETE /files/{key}` |
 | [tests/test_list.py](tests/test_list.py) | List: `GET /files` |
 | [tests/test_service.py](tests/test_service.py) | The key rules and the content-type choice, without HTTP |
@@ -158,6 +159,127 @@ the OCI namespace and the bucket name.
   release (see "Releases" in [CONTRIBUTING.md](CONTRIBUTING.md)).
 
 Gaps that belong to one operation go in that operation's section.
+
+## Missing-bucket regression (FIX-2)
+
+Owner: **Darsh Shani**. Tests: [test_bucket_errors.py](tests/test_bucket_errors.py).
+This regression spans metadata and the shared existence check used by create,
+replace, and delete, so it has a separate test file rather than duplicating
+the same provider setup in each operation's tests.
+
+### Expected behavior and cause
+
+A HEAD object response can represent a missing key and a missing bucket with
+the same generic 404. Previously, every such response became `FileNotFound`,
+so a broken bucket configuration incorrectly produced HTTP 404 for metadata,
+delete, and replace. The regression test reproduced metadata returning 404
+when its expected status was 502, without network or credentials.
+
+`S3Storage.stat` now probes `head_bucket` only after ambiguous 404/NotFound
+object errors. A successful probe confirms the bucket is accessible and the
+original error becomes `FileNotFound`. A failed probe is translated as
+`ProviderError` or `ProviderUnavailable`, never as a missing file. A failed
+probe does not establish whether the bucket is absent or access is denied.
+
+The change stays in [storage/s3.py](src/storage_service/storage/s3.py).
+`service.py`, startup wiring, and the shared error translator are unchanged.
+Compared with a startup check, the probe keeps startup free of network calls
+and handles bucket failures discovered after startup. It costs an extra SDK
+call on each ambiguous miss and needs bucket-read permissions. Every successful
+Create on a provider returning generic HEAD 404s pays this extra call, because
+its existence check must miss. Separate HEAD calls are not an atomic snapshot.
+
+### Verification
+
+Offline cases cover both generic error codes, accessible versus missing or
+denied buckets, probe connection failure, and unchanged successful metadata,
+explicit `NoSuchKey`, and object permission-denial paths. HTTP tests check
+GET metadata, DELETE, PUT, and POST return 502 before a write; only HEAD calls
+are queued in Stubber, so an attempted upload or delete fails the test.
+
+```bash
+uv run pytest tests/test_bucket_errors.py
+uv run --env-file .env pytest -m provider tests/test_bucket_errors.py
+```
+
+The provider suite uses a unique bucket name that is never created to check
+metadata, delete, and replace errors. A second test checks a missing file in
+the configured real bucket still returns 404. It does not modify the configured
+bucket or its contents.
+
+### Real-provider evidence and gaps
+
+Run from Darsh's Windows checkout with Codex assistance on **2026-10-14**,
+against OCI Object Storage in **us-ashburn-1**, using Darsh's own private test
+bucket and keys from the ignored local `.env`.
+
+Before the fix, source commit `0453b66` (metadata branch, unchanged S3 adapter)
+was exercised through `TestClient(create_app(build_service(settings)))` with
+the bucket changed only in memory to a unique nonexistent name. Observed:
+
+| Request | Expected | Observed before the fix |
+|---|---|---|
+| `GET /metadata/missing.txt` | 502 `ProviderError` | 404 `FileNotFound` |
+| `DELETE /files/missing.txt` | 502 `ProviderError` | 404 `FileNotFound` |
+| `PUT /files/missing.txt` with a file form field | 502 `ProviderError` | 404 `FileNotFound` |
+
+All three returned `{"error": "FileNotFound", "detail": "no file named 'missing.txt'"}`.
+The original `.env` was unchanged, and no bucket was created or modified.
+
+The original post-fix run used a pre-squash local commit that was not reachable
+from the PR branch. It is superseded by the following run.
+
+#### Review follow-up, 2026-10-20
+
+- Run with Codex using Darsh's configured OCI test provider.
+- Source commit: `46910b00fe7914912cb5b1dab0a09d2b6d850f2e` on
+  `22-missing-bucket`, including `dev` at `fd2d127`. This is a committed ancestor
+  of the documentation record, not a discarded pre-squash commit. The latest
+  branch-head verification is also recorded in PR #23.
+- Before the error-detail change: **11 failed, 6 passed, 2 deselected** in
+  `tests/test_bucket_errors.py`. The assertions observed raw `(404)`, `(NotFound)`,
+  `(NoSuchBucket)`, or `(403)` details instead of the clear bucket message.
+- After the change: **120 passed, 15 deselected** in the fast suite, including
+  all 17 offline bucket cases. Ruff lint, Ruff format check (42 files), and
+  mypy (31 files) passed.
+- Live provider result on that source commit: **2 passed, 17 deselected**.
+  Missing buckets returned 502 with detail "the configured bucket does not
+  exist or is not accessible" for GET metadata, DELETE, and PUT. A missing key
+  in the accessible bucket remained 404 `FileNotFound`. No objects were written.
+- The existing virtualenv's Windows launcher was blocked by application control,
+  including outside the sandbox. Checks therefore used installed CPython 3.13.16
+  with that virtualenv's existing packages and this checkout's `src` on
+  `PYTHONPATH`. No dependency, lockfile, or check configuration changed.
+- Provider access was blocked inside the sandbox; rerunning with network access
+  passed. Tracebacks and captured output were suppressed to keep account details
+  out of the record. The ignored `.env` was neither changed nor displayed.
+
+Commands from this worktree (the env-file path points to the main checkout):
+
+```powershell
+$env:PYTHONPATH = "$PWD\.venv\Lib\site-packages;$PWD\src"
+$python = '../../../.tools/python/cpython-3.13.16-windows-x86_64-none/python.exe'
+& $python -m pytest --tb=short --show-capture=no
+& $python -m ruff check .
+& $python -m ruff format --check .
+& $python -m mypy
+& '../../../.tools/uv/uv.exe' run --no-project --offline --python $python `
+  --env-file '../../../OSPSD-TEAM-6/.env' python -m pytest -m provider `
+  tests/test_bucket_errors.py --tb=no --show-capture=no -p no:cacheprovider
+```
+
+The normal command in a single checkout with a working virtualenv launcher remains
+`uv run --env-file .env pytest -m provider tests/test_bucket_errors.py`.
+
+`test_nonexistent_real_bucket_is_a_provider_error` observed 502 `ProviderError`
+with the public error shape for all three requests above. It used a unique
+bucket name that was never created. `test_missing_file_in_real_bucket_remains_404`
+observed 404 `FileNotFound` for a unique nonexistent key in the accessible test
+bucket. Both checks passed; the provider fixture also completed cleanup.
+
+No objects were written by these checks. Provider tests remain explicitly
+selectable and fail rather than skip if configuration is missing. Human review
+and a second person's independent verification by Faizal remain pending.
 
 ## Filling in an operation section
 
@@ -554,14 +676,15 @@ made the same provider test pass. No production upload fix is included here.
 
 HEAD and LIST returned equal UTC timestamps with whole-second precision for
 this sample. This observation does not promise identical precision on every
-provider or request. Ambiguous HEAD 404s (FIX-2) remain a separate change.
+provider or request. Ambiguous HEAD 404s are now covered by the
+[FIX-2 regression](#missing-bucket-regression-fix-2).
 
 ### Gaps
 
 * Darsh's local automated and manual OCI verification is recorded above. A
   second person's independent provider run and Faizal's review remain pending.
-* The missing-bucket HEAD 404 ambiguity is intentionally handled in a separate
-  FIX-2 / BUG-BUCKET change; no missing-bucket fix is claimed here.
+* Missing-bucket behavior and its independent-verification status are recorded
+  in the [FIX-2 section](#missing-bucket-regression-fix-2).
 * The controlled fake does not validate authentication, provider availability,
   or SDK retry behavior. Stubber validates request parameters and translation,
   not whether the provider actually returns these responses.

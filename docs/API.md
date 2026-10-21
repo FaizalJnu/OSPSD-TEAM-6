@@ -123,12 +123,25 @@ Invalid input that FastAPI catches first, such as `limit=abc` or a missing `file
 uses our format: 400 `InvalidInput`, with the field name at the start of `detail`.
 Moving the three responses above to our format is tracked as a follow-up.
 
+### Bucket checks
+
+After an ambiguous S3 HEAD 404/NotFound, Metadata and the existence checks for
+Create, Replace, and Delete probe the bucket before reporting a missing file.
+An accessible bucket preserves 404 `FileNotFound`; a missing or denied bucket
+returns 502 `ProviderError` with detail "the configured bucket does not exist or
+is not accessible". The detail contains neither the bucket name nor the raw
+provider error code. A connection failure during the probe returns
+503 `ProviderUnavailable`. Create, Replace, and Delete stop before writing if
+this check fails.
+
+The probe adds one SDK call per ambiguous miss and requires bucket-read
+permissions. It does not lock the bucket against concurrent changes. Successful
+reads and explicit `NoSuchKey` responses do not need the probe.
+
 ### Known bugs
 
-On OCI, two cases currently return a different response than the table above says:
+On OCI, the remaining known error-mapping bug is:
 
-* A missing bucket is reported as 404 `FileNotFound` by Metadata, Replace, and Delete.
-  See [FIX-2](../fixesRequired.md#fix-2-a-missing-bucket-is-reported-as-a-missing-file).
 * A malformed list cursor returns 502 `ProviderError`. See
   [FIX-3](../fixesRequired.md#fix-3-a-malformed-list-cursor-returns-the-wrong-error).
 
@@ -217,6 +230,13 @@ contents of a file that already exists. Both change stored files.
 * Create and Replace check whether the key exists and then write, in two separate
   provider calls. Two clients racing on the same key can both pass the check, and the
   last write wins.
+* With S3-compatible providers that return generic HEAD 404s, every successful Create
+  makes an extra `head_bucket` call: its existence check must miss. A small upload
+  therefore takes four SDK calls instead of three: `head_object`, `head_bucket`,
+  `upload_fileobj` (one `put_object`), then `head_object` to read back metadata.
+  Multipart uploads require more calls. Replace of an existing file does not probe
+  the bucket; Replace, Delete, and Metadata of a missing file do. These probes
+  require bucket-read permissions; see [Bucket checks](#bucket-checks).
 * For uploads larger than 8 MB, the S3 backend uses a multipart upload, and `etag` is
   not an MD5 of the file.
 
@@ -380,7 +400,9 @@ Responses use the shared [error format](#error-format):
 | 502 | `ProviderError` | The provider rejects the request, including configuration or permission problems. |
 | 503 | `ProviderUnavailable` | The provider cannot be reached. |
 
-The missing-bucket error mapping is implemented separately in #22.
+An ambiguous HEAD 404 is checked against the bucket before reporting a missing
+file. A missing or inaccessible bucket returns 502 `ProviderError`; a connection
+failure during that check returns 503. See [Bucket checks](#bucket-checks).
 
 ### Retry
 

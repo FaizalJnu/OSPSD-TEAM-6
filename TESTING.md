@@ -227,8 +227,49 @@ All three returned `{"error": "FileNotFound", "detail": "no file named 'missing.
 The original `.env` was unchanged, and no bucket was created or modified.
 
 The original post-fix run used a pre-squash local commit that was not reachable
-from the PR branch. That run is superseded by the commit-pinned rerun recorded
-in PR #23; it should not be used as verification of the current branch.
+from the PR branch. It is superseded by the following run.
+
+#### Review follow-up, 2026-10-20
+
+- Run with Codex using Darsh's configured OCI test provider.
+- Source commit: `46910b00fe7914912cb5b1dab0a09d2b6d850f2e` on
+  `22-missing-bucket`, including `dev` at `fd2d127`. This is a committed ancestor
+  of the documentation record, not a discarded pre-squash commit. The latest
+  branch-head verification is also recorded in PR #23.
+- Before the error-detail change: **11 failed, 6 passed, 2 deselected** in
+  `tests/test_bucket_errors.py`. The assertions observed raw `(404)`, `(NotFound)`,
+  `(NoSuchBucket)`, or `(403)` details instead of the clear bucket message.
+- After the change: **120 passed, 15 deselected** in the fast suite, including
+  all 17 offline bucket cases. Ruff lint, Ruff format check (42 files), and
+  mypy (31 files) passed.
+- Live provider result on that source commit: **2 passed, 17 deselected**.
+  Missing buckets returned 502 with detail "the configured bucket does not
+  exist or is not accessible" for GET metadata, DELETE, and PUT. A missing key
+  in the accessible bucket remained 404 `FileNotFound`. No objects were written.
+- The existing virtualenv's Windows launcher was blocked by application control,
+  including outside the sandbox. Checks therefore used installed CPython 3.13.16
+  with that virtualenv's existing packages and this checkout's `src` on
+  `PYTHONPATH`. No dependency, lockfile, or check configuration changed.
+- Provider access was blocked inside the sandbox; rerunning with network access
+  passed. Tracebacks and captured output were suppressed to keep account details
+  out of the record. The ignored `.env` was neither changed nor displayed.
+
+Commands from this worktree (the env-file path points to the main checkout):
+
+```powershell
+$env:PYTHONPATH = "$PWD\.venv\Lib\site-packages;$PWD\src"
+$python = '../../../.tools/python/cpython-3.13.16-windows-x86_64-none/python.exe'
+& $python -m pytest --tb=short --show-capture=no
+& $python -m ruff check .
+& $python -m ruff format --check .
+& $python -m mypy
+& '../../../.tools/uv/uv.exe' run --no-project --offline --python $python `
+  --env-file '../../../OSPSD-TEAM-6/.env' python -m pytest -m provider `
+  tests/test_bucket_errors.py --tb=no --show-capture=no -p no:cacheprovider
+```
+
+The normal command in a single checkout with a working virtualenv launcher remains
+`uv run --env-file .env pytest -m provider tests/test_bucket_errors.py`.
 
 `test_nonexistent_real_bucket_is_a_provider_error` observed 502 `ProviderError`
 with the public error shape for all three requests above. It used a unique

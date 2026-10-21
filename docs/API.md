@@ -626,7 +626,8 @@ The body uses the [error format](#error-format).
 |---|---|---|
 | 400 | `InvalidInput` | `limit` is not a whole number from 1 to 1000 (for example `0`, `1001`, or `abc`), or `prefix` is longer than 1024 bytes. The provider is not contacted. |
 | 400 | `InvalidInput` | `cursor` is not a `next_cursor` this API returned for this `prefix`, for example `garbage`, or a key name. |
-| 502 | `ProviderError` | The provider refused the request, for example bad credentials, a denied permission, or a missing bucket. |
+| 403 | `AccessDenied` | The provider denied the service's credentials or permissions. |
+| 502 | `ProviderError` | The provider refused the request, for example because of a missing bucket. |
 | 503 | `ProviderUnavailable` | The provider could not be reached or timed out. |
 
 ### Retry

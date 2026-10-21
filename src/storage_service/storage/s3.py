@@ -17,7 +17,14 @@ from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 from botocore.response import StreamingBody
 
-from storage_service.errors import FileNotFound, InvalidInput, ProviderError, ProviderUnavailable
+from storage_service.errors import (
+    AccessDenied,
+    FileNotFound,
+    InvalidInput,
+    ProviderError,
+    ProviderUnavailable,
+    StorageError,
+)
 from storage_service.models import FileDownload, FileInfo, FilePage
 
 # How much to read from the provider at a time while streaming a download.
@@ -122,10 +129,11 @@ class S3Storage:
             except ClientError as err:
                 # The service has already checked prefix and limit, so when a cursor
                 # was sent, a rejected argument means the cursor is not one we made.
-                code = err.response.get("Error", {}).get("Code")
+                code = _error_code(err)
                 if cursor is not None and code == "InvalidArgument":
                     raise InvalidInput(
-                        "cursor is not a next_cursor this API returned for this prefix"
+                        "cursor is not a next_cursor this API returned for this prefix",
+                        provider_code=code,
                     ) from err
                 raise
         files = [

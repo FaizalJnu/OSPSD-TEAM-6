@@ -12,7 +12,7 @@ import pytest
 from botocore.exceptions import EndpointConnectionError
 from fastapi.testclient import TestClient
 
-from storage_service.errors import InvalidInput, ProviderError, ProviderUnavailable
+from storage_service.errors import AccessDenied, InvalidInput, ProviderError, ProviderUnavailable
 from storage_service.main import create_app
 from storage_service.models import FileInfo, FilePage
 from storage_service.service import FileService

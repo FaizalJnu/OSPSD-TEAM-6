@@ -1155,8 +1155,9 @@ Translation, with `stubbed_s3` (no network):
 * [`test_s3_list_returns_keys_decoded_when_the_provider_sends_them_url_encoded`](tests/test_list.py):
   boto3 asks for `EncodingType=url` and decodes the keys itself, so
   `docs/r%C3%A9sum%C3%A9.pdf` reaches callers as `docs/résumé.pdf`.
-* [`test_s3_list_rejected_by_the_provider_raises_provider_error`](tests/test_list.py):
-  `AccessDenied` and `NoSuchBucket` both become `ProviderError`.
+* [`test_s3_list_rejected_by_the_provider_raises_our_error`](tests/test_list.py):
+  `AccessDenied` becomes `AccessDenied` and `NoSuchBucket` becomes `ProviderError`. The
+  provider's code is in `provider_code`, not in the message.
 * [`test_s3_list_turns_a_rejected_cursor_into_invalid_input`](tests/test_list.py):
   `InvalidArgument` (OCI's "unable to decode the token") for a request with a
   `ContinuationToken` becomes `InvalidInput`, and the provider's code is not in the

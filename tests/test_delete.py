@@ -62,6 +62,20 @@ def test_delete_returns_502_when_the_provider_rejects_the_delete(fake, fake_clie
     assert fake.calls == [("stat", "old.txt"), ("delete", "old.txt")]
 
 
+def test_delete_that_removes_the_file_then_fails_returns_503_and_a_retry_is_404(fake, fake_client):
+    send_file(fake_client, "POST", "old.txt", b"bye")
+    unavailable = ProviderUnavailable("could not reach the storage provider")
+    fake.fail("delete", unavailable, after_applying=True)
+
+    response = fake_client.delete("/files/old.txt")
+
+    assert response.status_code == 503
+    assert response.json() == {"error": "ProviderUnavailable", "detail": str(unavailable)}
+    # The 503 did not mean nothing changed: the file is gone.
+    assert fake_client.get("/metadata/old.txt").status_code == 404
+    assert fake_client.delete("/files/old.txt").status_code == 404
+
+
 def test_s3_delete_rejected_by_the_provider_raises_provider_error(stubbed_s3):
     storage, stubber = stubbed_s3
     stubber.add_client_error(

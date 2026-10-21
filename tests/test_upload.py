@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from botocore.stub import ANY
 
-from storage_service.errors import ProviderError
+from storage_service.errors import ProviderError, ProviderUnavailable
 from tests.conftest import MAX_UPLOAD_BYTES, send_file
 
 
@@ -119,6 +119,19 @@ def test_replace_changes_etag_and_size(client):
     assert info["size"] == len(b"second, longer")
     assert info["etag"] != first["etag"]
     assert client.get("/metadata/notes.txt").json() == info
+
+
+def test_create_that_stores_the_file_then_fails_returns_503_and_a_retry_is_409(fake, fake_client):
+    unavailable = ProviderUnavailable("could not reach the storage provider")
+    fake.fail("put", unavailable, after_applying=True)
+
+    response = send_file(fake_client, "POST", "notes.txt", b"data")
+
+    assert response.status_code == 503
+    assert response.json() == {"error": "ProviderUnavailable", "detail": str(unavailable)}
+    # The 503 did not mean nothing changed: the file was stored.
+    assert fake_client.get("/metadata/notes.txt").status_code == 200
+    assert send_file(fake_client, "POST", "notes.txt", b"data").status_code == 409
 
 
 # --- Level 3: how S3Storage.put translates provider replies (no network) ---

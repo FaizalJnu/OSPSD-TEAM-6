@@ -479,8 +479,10 @@ Responses use the shared [error format](#error-format):
 | 502 | `ProviderError` | The provider rejects the check or the delete, including configuration or permission problems. |
 | 503 | `ProviderUnavailable` | The provider cannot be reached. |
 
-On OCI, a missing bucket is currently reported as 404 `FileNotFound`. See
-[Known bugs](#known-bugs).
+An ambiguous HEAD 404 is checked against the bucket before reporting a missing
+file, and nothing is deleted if that check fails. A missing or inaccessible bucket
+returns 502 `ProviderError`; a connection failure during that check returns 503. See
+[Bucket checks](#bucket-checks).
 
 ### Retry
 

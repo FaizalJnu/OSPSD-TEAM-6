@@ -393,6 +393,63 @@ All in [tests/test_upload.py](tests/test_upload.py):
   ```
 - Cleanup: deleted through the API (204). Local files removed.
 
+#### Run by Darsh Shani: Create, Replace, and multipart round trip (R17)
+
+- Provider: OCI Object Storage, us-ashburn-1, using Darsh's own private test bucket
+  and the existing ignored `.env`. Executed with Codex assistance.
+- Date: 2026-10-20 (America/New_York).
+- Source commit: `fd2d127f5a9cf0e0fc3a4af0b04ea764a997e561` (`dev`). The
+  verification branch starts at this commit; this record changes documentation only.
+- Configuration: the documented FIX-1 workaround was applied to the test process:
+  `AWS_REQUEST_CHECKSUM_CALCULATION=when_required` and
+  `AWS_RESPONSE_CHECKSUM_VALIDATION=when_required`. The effective SDK configuration
+  confirmed both values. No `.env`, source, dependency, or check configuration was
+  changed. This run does not verify that the production FIX-1 change has landed.
+- Test selection:
+  ```bash
+  uv run --env-file .env pytest -m provider tests/test_upload.py
+  ```
+  On this Windows machine, application control blocks the virtualenv's Python
+  launcher. The run used installed CPython 3.13.16 with the existing locked
+  environment's packages and this checkout's `src` on `PYTHONPATH`, with uv loading
+  the main checkout's `.env`. A local audit helper invoked the existing pytest
+  selection, observed each `provider_prefix` fixture without replacing it, and
+  checked those prefixes after all fixture teardown. The command from the worktree
+  was:
+  ```powershell
+  $env:PYTHONPATH = "$PWD\..\missing-bucket\.venv\Lib\site-packages;$PWD\src"
+  & '../../../.tools/uv/uv.exe' run --no-project --offline `
+    --python '../../../.tools/python/cpython-3.13.16-windows-x86_64-none/python.exe' `
+    --env-file '../../../OSPSD-TEAM-6/.env' python '../../../.tools/r17_verify.py'
+  ```
+  The helper calls `pytest.main` with `-m provider tests/test_upload.py --tb=no
+  --show-capture=no -p no:cacheprovider`; it does not replace test functions, app
+  wiring, or provider calls. Account identifiers and credentials are omitted from
+  the evidence.
+- Expected and observed (all assertions passed):
+
+  | Existing test | Expected | Observed |
+  |---|---|---|
+  | `test_create_and_replace_against_the_real_provider` | Create `first`: 201, size 5. Replace with `second, longer`: 200, size 14, changed ETag. Download matches the replacement bytes; Metadata equals the replacement info. | Pass |
+  | `test_multipart_upload_round_trips_against_the_real_provider` | Create 9 MiB (9437184 bytes): 201 and matching size. Download is byte-identical. This exceeds boto3's 8 MB multipart threshold. | Pass |
+
+  Pytest reported **2 passed, 14 deselected**. The first audit invocation also
+  reported one `PytestAssertRewriteWarning` for already-imported `anyio`, caused by
+  importing the app before pytest initialized its plugins; no test failed.
+- Cleanup: the existing provider fixture deleted its objects. A separate storage
+  client then queried each exact prefix with `list_files(prefix, 1000, None)`:
+
+  | Test prefix | Files remaining | `next_cursor` |
+  |---|---|---|
+  | `api-tests/1cd2a2f838724deda8864c658409c0df/` | 0 | `null` |
+  | `api-tests/9bcbf96d5ce54919943440978764c2f5/` | 0 | `null` |
+
+  Only test-prefixed objects were created, replaced, and deleted. No local upload
+  files were created: both tests use in-memory bytes.
+- Scope: this is a second runner's automated HTTP/provider verification for Create
+  and Replace, alongside Debasmith's records above. It does not add live checks of
+  error cases, concurrency, or the 1 GiB boundary.
+
 ### Provider observations
 
 - OCI returns AWS-style multipart ETags: a 12 MiB upload came back as `<hash>-2`, two
@@ -407,8 +464,6 @@ All in [tests/test_upload.py](tests/test_upload.py):
 
 ### Gaps
 
-* Level 2 asks for two people per operation. Replace has only been run on OCI by its
-  owner so far; Create was also exercised in Darsh's metadata run.
 * Error cases (409, 413) and files near the 1 GiB limit have not been run on OCI.
 * The race between the existence check and the write is documented in
   [docs/API.md](docs/API.md#create-and-replace) but not tested.

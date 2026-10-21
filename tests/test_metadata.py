@@ -167,8 +167,11 @@ def test_s3_metadata_translates_connection_failure(stubbed_s3, monkeypatch):
         raise EndpointConnectionError(endpoint_url="https://s3.example.invalid")
 
     monkeypatch.setattr(storage._client, "head_object", unreachable)
-    with pytest.raises(ProviderUnavailable, match="could not reach the storage provider"):
+    with pytest.raises(ProviderUnavailable, match="could not reach the storage provider") as raised:
         storage.stat("report.pdf")
+    # An unstubbed call also ends as ProviderUnavailable (the Stubber's error is a
+    # BotoCoreError), so check the cause to be sure this is the connection failure.
+    assert isinstance(raised.value.__cause__, EndpointConnectionError)
 
 
 def test_metadata_openapi_documents_the_response_and_expected_errors(client):

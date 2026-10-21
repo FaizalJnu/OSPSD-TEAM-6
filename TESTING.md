@@ -54,7 +54,7 @@ delete their files afterwards.
 | [tests/test_service.py](tests/test_service.py) | The key rules and the content-type choice, without HTTP |
 | [tests/test_storage_contract.py](tests/test_storage_contract.py) | The same tests for every storage backend |
 | [tests/test_invalid_input.py](tests/test_invalid_input.py) | Invalid input that FastAPI rejects first (a bad List `limit`, a missing `file` field) returns 400 `InvalidInput` |
-| [tests/test_injection.py](tests/test_injection.py) | Application tests over a controlled backend: storage calls made, provider failures, and how the app is built |
+| [tests/test_injection.py](tests/test_injection.py) | Application tests over a controlled backend: storage calls made, provider failures, how the app is built, and the routes it serves |
 | [tests/test_failures.py](tests/test_failures.py) | The error model across operations (Level 5): access denial, sanitized errors, and the failure log |
 | [tests/fakes.py](tests/fakes.py) | `FakeStorage`, the controlled backend (below) |
 | [tests/test_cleanup.py](tests/test_cleanup.py) | `delete_everything_under`, the cleanup helper the provider tests rely on |

@@ -72,8 +72,11 @@ def test_bucket_probe_connection_failure_is_provider_unavailable(stubbed_s3, mon
         raise EndpointConnectionError(endpoint_url="https://s3.example.invalid")
 
     monkeypatch.setattr(storage._client, "head_bucket", unreachable)
-    with pytest.raises(ProviderUnavailable, match="could not reach the storage provider"):
+    with pytest.raises(ProviderUnavailable, match="could not reach the storage provider") as raised:
         storage.stat("missing.txt")
+    # An unstubbed call also ends as ProviderUnavailable (the Stubber's error is a
+    # BotoCoreError), so check the cause to be sure this is the connection failure.
+    assert isinstance(raised.value.__cause__, EndpointConnectionError)
 
 
 def test_unambiguous_missing_key_does_not_probe_the_bucket(stubbed_s3):

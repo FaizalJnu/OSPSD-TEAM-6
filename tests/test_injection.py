@@ -5,7 +5,7 @@ Most tests use the ``fake_client`` fixture from ``tests/conftest.py``, an app ov
 failure reaches the caller. See ``tests/fakes.py``. The last tests build their own
 apps to check how the app is built: an injected service is used as is, apps do not
 share storage, and without one the backend and the upload limit come from the
-environment.
+environment. The last test pins the routes the app serves.
 """
 
 from fastapi.testclient import TestClient
@@ -93,3 +93,25 @@ def test_create_app_without_a_service_builds_storage_from_the_environment(monkey
     assert too_big.status_code == 413
     assert too_big.json()["error"] == "FileTooLarge"
     assert client.get("/metadata/too-big.bin").status_code == 404
+
+
+def test_the_app_serves_the_six_operations_and_nothing_else(client):
+    paths = client.get("/openapi.json").json()["paths"]
+    routes = {(method.upper(), path) for path, methods in paths.items() for method in methods}
+    assert routes == {
+        ("GET", "/files"),
+        ("POST", "/files/{key}"),
+        ("PUT", "/files/{key}"),
+        ("GET", "/files/{key}"),
+        ("DELETE", "/files/{key}"),
+        ("GET", "/metadata/{key}"),
+    }
+
+    # The schema shows {key} whether or not it may contain "/", so check that a key with
+    # folders reaches every keyed route instead of FastAPI's 404 for an unknown path.
+    key = "a/b/notes.txt"
+    assert send_file(client, "POST", key, b"data").status_code == 201
+    assert send_file(client, "PUT", key, b"more").status_code == 200
+    assert client.get(f"/files/{key}").content == b"more"
+    assert client.get(f"/metadata/{key}").json()["key"] == key
+    assert client.delete(f"/files/{key}").status_code == 204

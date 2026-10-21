@@ -20,6 +20,7 @@ tests/
   test_upload.py           POST and PUT /files/{key} (create and replace)
   test_download.py         GET /files/{key}
   test_metadata.py         GET /metadata/{key}
+  test_bucket_errors.py    Missing-bucket errors across metadata and existence checks
   test_delete.py           DELETE /files/{key}
   test_list.py             GET /files
   test_service.py          Input rules

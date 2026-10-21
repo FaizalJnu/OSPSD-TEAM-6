@@ -25,6 +25,8 @@ DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 
 # Error codes S3-compatible providers use for "this key does not exist".
 _NOT_FOUND_CODES = {"404", "NoSuchKey", "NotFound"}
+# HEAD cannot distinguish a missing key from a missing/inaccessible bucket.
+_AMBIGUOUS_HEAD_NOT_FOUND_CODES = {"404", "NotFound"}
 
 
 class S3Storage:
@@ -78,10 +80,14 @@ class S3Storage:
             except ClientError as err:
                 # A HEAD error has no body: 404/NotFound may mean the bucket,
                 # not the key. Only report a missing file if the bucket is
-                # accessible. Bucket failures are translated without a key.
-                if err.response.get("Error", {}).get("Code") in {"404", "NotFound"}:
-                    with _translate_errors():
+                # accessible. Never expose the bucket name or raw probe code.
+                if err.response.get("Error", {}).get("Code") in _AMBIGUOUS_HEAD_NOT_FOUND_CODES:
+                    try:
                         self._client.head_bucket(Bucket=self._bucket)
+                    except ClientError as bucket_err:
+                        raise ProviderError(
+                            "the configured bucket does not exist or is not accessible"
+                        ) from bucket_err
                 raise
         return _info_from_response(key, response)
 

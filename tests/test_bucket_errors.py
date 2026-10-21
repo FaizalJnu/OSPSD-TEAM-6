@@ -25,17 +25,19 @@ def queue_head_miss(stubber: Stubber, code: str = "404") -> None:
 
 
 @pytest.mark.parametrize("code", ["404", "NotFound"])
-def test_ambiguous_head_miss_with_missing_bucket_is_provider_error(stubbed_s3, code):
+@pytest.mark.parametrize("bucket_code", ["404", "NotFound", "NoSuchBucket"])
+def test_ambiguous_head_miss_with_missing_bucket_is_provider_error(stubbed_s3, code, bucket_code):
     storage, stubber = stubbed_s3
     queue_head_miss(stubber, code)
     stubber.add_client_error(
         "head_bucket",
-        service_error_code="404",
+        service_error_code=bucket_code,
         http_status_code=404,
         expected_params={"Bucket": "test-bucket"},
     )
-    with pytest.raises(ProviderError):
+    with pytest.raises(ProviderError) as caught:
         storage.stat("missing.txt")
+    assert str(caught.value) == "the configured bucket does not exist or is not accessible"
 
 
 @pytest.mark.parametrize("code", ["404", "NotFound"])
@@ -56,8 +58,9 @@ def test_bucket_permission_denial_is_not_reported_as_missing_file(stubbed_s3):
         http_status_code=403,
         expected_params={"Bucket": "test-bucket"},
     )
-    with pytest.raises(ProviderError):
+    with pytest.raises(ProviderError) as caught:
         storage.stat("missing.txt")
+    assert str(caught.value) == "the configured bucket does not exist or is not accessible"
 
 
 def test_bucket_probe_connection_failure_is_provider_unavailable(stubbed_s3, monkeypatch):
@@ -131,7 +134,7 @@ def test_missing_bucket_returns_502_before_any_write(stubbed_s3, method, path):
     assert response.status_code == 502
     assert response.json() == {
         "error": "ProviderError",
-        "detail": "storage provider rejected the request (404)",
+        "detail": "the configured bucket does not exist or is not accessible",
     }
 
 
@@ -151,8 +154,10 @@ def test_nonexistent_real_bucket_is_a_provider_error():
             files = {"file": ("upload", b"hello")} if method == "PUT" else None
             response = client.request(method, path, files=files)
             assert response.status_code == 502
-            assert set(response.json()) == {"error", "detail"}
-            assert response.json()["error"] == "ProviderError"
+            assert response.json() == {
+                "error": "ProviderError",
+                "detail": "the configured bucket does not exist or is not accessible",
+            }
 
 
 @pytest.mark.provider

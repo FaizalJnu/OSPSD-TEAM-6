@@ -48,6 +48,7 @@ delete their files afterwards.
 | [tests/test_upload.py](tests/test_upload.py) | Create and Replace: `POST` and `PUT /files/{key}` |
 | [tests/test_download.py](tests/test_download.py) | Download: `GET /files/{key}` |
 | [tests/test_metadata.py](tests/test_metadata.py) | Metadata: `GET /metadata/{key}` |
+| [tests/test_bucket_errors.py](tests/test_bucket_errors.py) | FIX-2: missing/denied buckets, probe failures, and HTTP checks before writes |
 | [tests/test_delete.py](tests/test_delete.py) | Delete: `DELETE /files/{key}` |
 | [tests/test_list.py](tests/test_list.py) | List: `GET /files` |
 | [tests/test_service.py](tests/test_service.py) | The key rules and the content-type choice, without HTTP |
@@ -184,8 +185,9 @@ The change stays in [storage/s3.py](src/storage_service/storage/s3.py).
 `service.py`, startup wiring, and the shared error translator are unchanged.
 Compared with a startup check, the probe keeps startup free of network calls
 and handles bucket failures discovered after startup. It costs an extra SDK
-call on each ambiguous miss and needs bucket-read permissions. Separate HEAD
-calls are not an atomic snapshot.
+call on each ambiguous miss and needs bucket-read permissions. Every successful
+Create on a provider returning generic HEAD 404s pays this extra call, because
+its existence check must miss. Separate HEAD calls are not an atomic snapshot.
 
 ### Verification
 
@@ -224,13 +226,9 @@ the bucket changed only in memory to a unique nonexistent name. Observed:
 All three returned `{"error": "FileNotFound", "detail": "no file named 'missing.txt'"}`.
 The original `.env` was unchanged, and no bucket was created or modified.
 
-After the fix, source commit `e487ada`, the command
-`uv run --locked --env-file ../../../OSPSD-TEAM-6/.env pytest -m provider
-tests/test_bucket_errors.py --tb=short --show-capture=no -p no:cacheprovider`
-observed **2 passed, 13 deselected**. The env-file path refers to the existing
-configuration in the main checkout; credentials were not copied or displayed.
-The normal command in a single checkout remains `uv run --env-file .env pytest
--m provider tests/test_bucket_errors.py`.
+The original post-fix run used a pre-squash local commit that was not reachable
+from the PR branch. That run is superseded by the commit-pinned rerun recorded
+in PR #23; it should not be used as verification of the current branch.
 
 `test_nonexistent_real_bucket_is_a_provider_error` observed 502 `ProviderError`
 with the public error shape for all three requests above. It used a unique
@@ -637,14 +635,15 @@ made the same provider test pass. No production upload fix is included here.
 
 HEAD and LIST returned equal UTC timestamps with whole-second precision for
 this sample. This observation does not promise identical precision on every
-provider or request. Ambiguous HEAD 404s (FIX-2) remain a separate change.
+provider or request. Ambiguous HEAD 404s are now covered by the
+[FIX-2 regression](#missing-bucket-regression-fix-2).
 
 ### Gaps
 
 * Darsh's local automated and manual OCI verification is recorded above. A
   second person's independent provider run and Faizal's review remain pending.
-* The missing-bucket HEAD 404 ambiguity is intentionally handled in a separate
-  FIX-2 / BUG-BUCKET change; no missing-bucket fix is claimed here.
+* Missing-bucket behavior and its independent-verification status are recorded
+  in the [FIX-2 section](#missing-bucket-regression-fix-2).
 * The controlled fake does not validate authentication, provider availability,
   or SDK retry behavior. Stubber validates request parameters and translation,
   not whether the provider actually returns these responses.

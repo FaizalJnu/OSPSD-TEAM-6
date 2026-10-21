@@ -2,7 +2,7 @@
 
 import pytest
 
-from storage_service.errors import ProviderError
+from storage_service.errors import ProviderError, ProviderUnavailable
 from tests.conftest import send_file
 
 
@@ -11,6 +11,55 @@ def test_delete_removes_the_file_and_deleting_again_is_404(client):
     assert client.delete("/files/old.txt").status_code == 204
     assert client.get("/files/old.txt").status_code == 404
     assert client.delete("/files/old.txt").status_code == 404
+
+
+def test_delete_checks_the_file_exists_then_deletes_it(fake, fake_client):
+    send_file(fake_client, "POST", "old.txt", b"bye")
+    fake.calls.clear()
+
+    response = fake_client.delete("/files/old.txt")
+
+    assert response.status_code == 204
+    assert response.content == b""
+    assert fake.calls == [("stat", "old.txt"), ("delete", "old.txt")]
+
+
+def test_delete_of_a_missing_file_is_404_and_never_calls_delete(fake, fake_client):
+    response = fake_client.delete("/files/old.txt")
+
+    assert response.status_code == 404
+    assert response.json()["error"] == "FileNotFound"
+    assert fake.calls == [("stat", "old.txt")]
+
+
+def test_delete_returns_503_and_never_deletes_when_the_check_cannot_reach_the_provider(
+    fake, fake_client
+):
+    fake.fail("stat", ProviderUnavailable("could not reach the storage provider"))
+
+    response = fake_client.delete("/files/old.txt")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "error": "ProviderUnavailable",
+        "detail": "could not reach the storage provider",
+    }
+    assert fake.calls == [("stat", "old.txt")]
+
+
+def test_delete_returns_502_when_the_provider_rejects_the_delete(fake, fake_client):
+    send_file(fake_client, "POST", "old.txt", b"bye")
+    fake.calls.clear()
+    fake.fail("delete", ProviderError("storage provider rejected the request (AccessDenied)"))
+
+    response = fake_client.delete("/files/old.txt")
+
+    assert response.status_code == 502
+    assert response.json() == {
+        "error": "ProviderError",
+        "detail": "storage provider rejected the request (AccessDenied)",
+    }
+    assert fake.calls == [("stat", "old.txt"), ("delete", "old.txt")]
 
 
 def test_s3_delete_rejected_by_the_provider_raises_provider_error(stubbed_s3):

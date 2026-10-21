@@ -69,9 +69,9 @@ in that file, not in `conftest.py`.
 
 ### Controlled storage
 
-[`FakeStorage`](tests/fakes.py) is a `StorageClient` for application tests. Build the
-app with `create_app(FileService(fake, max_upload_bytes=...))`, as
-[tests/test_injection.py](tests/test_injection.py) does. It:
+[`FakeStorage`](tests/fakes.py) is a `StorageClient` for application tests. The
+`fake` and `fake_client` fixtures build the app over it with
+`create_app(FileService(fake, max_upload_bytes=...))`. It:
 
 * records each call in `fake.calls` as `(method, key)`, in order. `list_files` records
   its prefix instead of a key.
@@ -101,6 +101,9 @@ From [tests/conftest.py](tests/conftest.py):
 * **`client`:** a `TestClient` for a fresh app over empty in-memory storage, so tests
   never share state. Its upload limit is `MAX_UPLOAD_BYTES`, 1024 bytes, so size tests
   stay small.
+* **`fake` and `fake_client`:** a fresh [`FakeStorage`](#controlled-storage), and a
+  `TestClient` for an app over it with the same upload limit as `client`. Configure
+  failures on `fake` and read `fake.calls` to check which storage calls a request made.
 * **`send_file(client, method, key, data)`:** a helper, not a fixture. Sends `data` to
   `/files/{key}` as the `file` form field, with `method` `"POST"` or `"PUT"`.
 * **`stubbed_s3`:** a `StubbedS3(storage, stubber)` pair. `storage` is a real
@@ -120,8 +123,8 @@ From [tests/conftest.py](tests/conftest.py):
   environment, or fails the test with a hint if they do not configure the `s3`
   backend. The contract tests use it too.
 
-[tests/test_delete.py](tests/test_delete.py) has one example test for `stubbed_s3` and
-one for `provider_client`.
+[tests/test_delete.py](tests/test_delete.py) has examples for `client`, `fake_client`,
+`stubbed_s3`, and `provider_client`.
 
 ## Recording a real-provider verification
 
@@ -570,19 +573,70 @@ provider or request. Ambiguous HEAD 404s (FIX-2) remain a separate change.
 ## Delete
 
 Owner: **Faizal Rahman**. Contract: [docs/API.md](docs/API.md#delete).
-Tests: [tests/test_delete.py](tests/test_delete.py). Not written yet.
+Tests: [tests/test_delete.py](tests/test_delete.py).
 
 ### Contract checked
 
+`DELETE /files/{key}` returns 204 with an empty body and removes the file, so a later
+Download or Delete returns 404. The service checks that the file exists with `stat`
+before it calls `delete`. A missing file returns 404 `FileNotFound` and `delete` is
+never called. A failed check returns 503 `ProviderUnavailable` or 502 `ProviderError`
+and `delete` is never called. A rejected delete returns 502 with the full error body.
+`S3Storage.delete` turns a provider rejection into `ProviderError`.
+
 ### Cases and boundaries
+
+* Existing file, then the same request again: the 404 on the second request is our
+  rule, because S3 deletes a missing key silently.
+* Missing file: shows the existence check stops the request before `delete`.
+* A failure on each of the two provider calls: `stat` unavailable (503) and `delete`
+  rejected (502). Together they show which call failed and that nothing runs after a
+  failed check.
+* Invalid keys are covered once for every operation in
+  [tests/test_service.py](tests/test_service.py) and
+  [tests/test_injection.py](tests/test_injection.py).
 
 ### Tests
 
+Run them with `uv run pytest tests/test_delete.py`.
+
+* `test_delete_removes_the_file_and_deleting_again_is_404`: in-memory HTTP round
+  trip: 204, then Download 404, then Delete 404.
+* `test_delete_checks_the_file_exists_then_deletes_it`: 204, empty body, and calls
+  `[("stat", k), ("delete", k)]`.
+* `test_delete_of_a_missing_file_is_404_and_never_calls_delete`: 404 `FileNotFound`,
+  calls `[("stat", k)]`.
+* `test_delete_returns_503_and_never_deletes_when_the_check_cannot_reach_the_provider`:
+  503 with the full body, calls `[("stat", k)]`.
+* `test_delete_returns_502_when_the_provider_rejects_the_delete`: 502 with the full
+  body, calls `[("stat", k), ("delete", k)]`.
+* `test_s3_delete_rejected_by_the_provider_raises_provider_error`: Stubber test that
+  `DeleteObject` is sent with the right bucket and key, and that `AccessDenied` becomes
+  `ProviderError`.
+* `test_delete_removes_the_file_from_the_real_provider` (marked `provider`): create,
+  delete (204), then Metadata 404 against a real bucket.
+
+Removing the existence check from `service.delete` makes all five HTTP tests above
+fail.
+
 ### Real-provider verification
+
+None recorded yet. See Gaps.
 
 ### Provider observations
 
+None yet.
+
 ### Gaps
+
+* No real-provider run is recorded. Level 2 needs two people's runs (R17 in the #29
+  fix plan: Prateek and Faizal).
+* On OCI, a missing bucket returns 404 `FileNotFound` instead of 502 until #23
+  (FIX-2) merges. No test here claims the missing-bucket behavior.
+* What a failed delete leaves behind (the provider deleted the file and then the
+  response failed) is not tested: `FakeStorage` raises before touching the store.
+  R3 adds that.
+* The race between the check and the delete is documented, not tested.
 
 ## List
 

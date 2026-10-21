@@ -420,23 +420,84 @@ See [Metadata in TESTING.md](../TESTING.md#metadata) for recorded responses.
 
 ## Delete
 
-`DELETE /files/{key}`. Owner: **Faizal Rahman**. Not written yet.
+`DELETE /files/{key}`. Owner: **Faizal Rahman**.
 
 ### Meaning
 
+Remove one file. This changes stored files.
+
 ### Request
+
+The required path `key` is the full, decoded file name, as for Metadata:
+`/files/docs/report.pdf` deletes `docs/report.pdf`. It follows the shared
+[key rules](#keys). There is no request body and no query parameter. Invalid keys
+are rejected before storage is called.
 
 ### Success
 
+**204** with an empty body.
+
 ### Side effects
+
+The file under `key` is gone: Download and Metadata return 404 for it, and List no
+longer includes it. Nothing else in the bucket changes.
+
+The service makes two provider calls. It first checks that the file exists (`stat`,
+an S3 `HeadObject`), then deletes it (`delete`, an S3 `DeleteObject`). If the check
+fails, the delete is never sent and nothing changes.
 
 ### Errors
 
+Responses use the shared [error format](#error-format):
+
+| Status | Error | When |
+|---|---|---|
+| 400 | `InvalidInput` | The decoded key breaks a key rule. The provider is not contacted. |
+| 404 | `FileNotFound` | No file exists under the key. Nothing is deleted. |
+| 502 | `ProviderError` | The provider rejects the check or the delete, including configuration or permission problems. |
+| 503 | `ProviderUnavailable` | The provider cannot be reached. |
+
+On OCI, a missing bucket is currently reported as 404 `FileNotFound`. See
+[Known bugs](#known-bugs).
+
 ### Retry
+
+* After a success, repeating the request returns 404.
+* After a 400 or 404, repeating it unchanged gives the same result.
+* After a 502 or 503, the file may or may not be gone (see
+  [After a failed write](#after-a-failed-write)). Check with Metadata: 404 means it
+  is gone. A 502 is usually a configuration problem, but it can also be a
+  provider-side failure that outlasted the client's retries, so retrying later
+  sometimes succeeds. Retrying later may help after a 503.
 
 ### Assumptions
 
+* The 404 for a missing file is our rule, not the provider's. S3's `DeleteObject`
+  succeeds silently for a missing key, so the service checks first.
+* The check and the delete are two separate calls. If another client deletes the
+  file between them, this request still returns 204. If another client replaces the
+  file between them, the new contents are deleted. The same race is listed under
+  [Known limitations](../README.md#known-limitations).
+
 ### Example
+
+With the memory backend or a configured test bucket, choose a unique key:
+
+```bash
+B=http://127.0.0.1:8000
+K="delete-demo-$(date +%s)-$$/old.txt"
+printf 'bye' > delete-sample.txt
+curl -i -F 'file=@delete-sample.txt' "$B/files/$K"   # 201
+curl -i -X DELETE "$B/files/$K"                     # 204, empty body
+curl -i -X DELETE "$B/files/$K"                     # 404 FileNotFound
+curl -i "$B/metadata/$K"                             # 404 FileNotFound
+rm delete-sample.txt
+```
+
+The second delete returns
+`{"error":"FileNotFound","detail":"no file named '<key>'"}`. The first delete
+already removed the sample from the bucket, so only the local file needs cleaning up.
+See [Delete in TESTING.md](../TESTING.md#delete) for the recorded tests.
 
 ## List
 

@@ -16,7 +16,7 @@ src/storage_service/
   storage/s3.py      S3-compatible backend (the only module that imports boto3)
   storage/memory.py  In-memory backend for tests and local experiments
 tests/
-  conftest.py              Shared fixtures: in-memory client, stubbed S3, real-provider client
+  conftest.py              Shared fixtures: in-memory client, FakeStorage client, stubbed S3, real-provider client
   test_upload.py           POST and PUT /files/{key} (create and replace)
   test_download.py         GET /files/{key}
   test_metadata.py         GET /metadata/{key}

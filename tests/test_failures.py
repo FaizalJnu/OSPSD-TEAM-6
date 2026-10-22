@@ -1,5 +1,5 @@
-"""The error model across operations (Level 5): access denial, sanitized errors, and
-the failure log.
+"""The error model across operations (Level 5): access denial, sanitized errors, the
+failure log, errors outside any operation, and the errors /openapi.json lists.
 
 Most tests run the app over ``FakeStorage`` (the ``fake`` and ``fake_client``
 fixtures) and check both the response and the one JSON line logged for it. See
@@ -9,14 +9,15 @@ fixtures) and check both the response and the one JSON line logged for it. See
 import json
 import logging
 from dataclasses import replace
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
-from storage_service.errors import AccessDenied, ProviderUnavailable
+from storage_service.errors import AccessDenied, ProviderUnavailable, StorageError
 from storage_service.main import build_service, create_app
 from storage_service.service import FileService
-from tests.conftest import load_provider_settings, send_file
+from tests.conftest import MAX_UPLOAD_BYTES, load_provider_settings, send_file
 
 LOGGER = "storage_service.routers.error_handlers"
 
@@ -30,7 +31,8 @@ def failure_log(caplog, response) -> dict[str, object]:
     """Return the one failure log line, after checking it matches ``response``."""
     records = [record for record in caplog.records if record.name == LOGGER]
     assert len(records) == 1
-    assert records[0].exc_info is None  # expected failures get no traceback
+    # Expected failures get no traceback. Only an unexpected 500 has one.
+    assert (records[0].exc_info is not None) == (response.status_code == 500)
     event: dict[str, object] = json.loads(records[0].getMessage())
     assert event["level"] == records[0].levelname
     assert event["event"] == "request_failed"
@@ -162,6 +164,148 @@ def test_provider_messages_stay_out_of_responses_and_logs(stubbed_s3, caplog):
     assert event["provider_code"] == "NoSuchBucket"
     for secret in ("secretnamespace", "team-bucket", "Traceback"):
         assert secret not in caplog.text
+
+
+def test_a_path_with_no_route_is_route_not_found_not_a_missing_file(fake, fake_client, caplog):
+    response = fake_client.get("/nothing")
+
+    assert response.status_code == 404
+    assert response.json() == {"error": "RouteNotFound", "detail": "no route matches this path"}
+    event = failure_log(caplog, response)
+    assert event["operation"] is None  # no operation ran
+    assert event["provider_involved"] is False
+    assert event["storage_call"] is None
+    assert caplog.records[0].levelno == logging.WARNING
+    assert fake.calls == []
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "allowed"),
+    [
+        ("POST", "/files", "GET"),
+        # Starlette's own Allow names only the first route that matches the path: POST.
+        ("PATCH", "/files/notes.txt", "DELETE, GET, POST, PUT"),
+    ],
+)
+def test_a_method_the_path_does_not_accept_is_405_with_every_allowed_method(
+    fake, fake_client, caplog, method, path, allowed
+):
+    response = fake_client.request(method, path)
+
+    assert response.status_code == 405
+    assert response.json() == {
+        "error": "MethodNotAllowed",
+        "detail": f"this path does not accept {method}",
+    }
+    assert response.headers["allow"] == allowed
+    event = failure_log(caplog, response)
+    # Starlette matched the path to a route of another method. It was not run.
+    assert event["operation"] is None
+    assert "write_outcome" not in event
+    assert caplog.records[0].levelno == logging.WARNING
+    assert fake.calls == []
+
+
+# Request bodies Starlette cannot read, with the parser's message. Its limits are
+# 1000 files and 1 MB per text field.
+UNREADABLE_BODIES: dict[str, tuple[dict[str, Any], str]] = {
+    "no boundary": (
+        {"content": b"data", "headers": {"Content-Type": "multipart/form-data"}},
+        "Missing boundary in multipart.",
+    ),
+    "1001 files": (
+        {"files": [("file", ("upload", b"x"))] * 1001},
+        "Too many files. Maximum number of files is 1000.",
+    ),
+    "a text field over 1 MB": (
+        {"files": {"file": ("upload", b"x")}, "data": {"note": "x" * (1024 * 1024 + 1)}},
+        "Part exceeded maximum size of 1024KB.",
+    ),
+}
+
+
+@pytest.mark.parametrize("body", UNREADABLE_BODIES)
+@pytest.mark.parametrize(
+    ("method", "operation"), [("POST", "create_file"), ("PUT", "replace_file")]
+)
+def test_a_multipart_body_that_cannot_be_read_is_invalid_input(
+    fake, fake_client, caplog, method, operation, body
+):
+    request, message = UNREADABLE_BODIES[body]
+
+    response = fake_client.request(method, "/files/notes.txt", **request)
+
+    assert response.status_code == 400
+    assert response.json() == {"error": "InvalidInput", "detail": f"file: {message}"}
+    event = failure_log(caplog, response)
+    assert event["operation"] == operation
+    assert event["provider_involved"] is False
+    assert event["write_outcome"] == "not_attempted"
+    assert fake.calls == []
+
+
+def test_a_bug_is_a_500_internal_error_that_claims_nothing_about_the_write(fake, caplog):
+    fake.fail("put", RuntimeError("bug: the backend's secret internals"))
+    # A real server still reports the exception after our handler, so TestClient
+    # would re-raise it unless told not to.
+    client = TestClient(
+        create_app(FileService(fake, max_upload_bytes=MAX_UPLOAD_BYTES)),
+        raise_server_exceptions=False,
+    )
+
+    response = send_file(client, "POST", "notes.txt", b"data")
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "error": "InternalError",
+        "detail": "the service failed unexpectedly",
+    }
+    assert "secret internals" not in response.text
+    event = failure_log(caplog, response)  # also checks that the traceback is logged
+    assert event["operation"] == "create_file"
+    assert event["provider_involved"] is None  # unknown: the bug may be anywhere
+    assert event["storage_call"] is None
+    assert event["write_outcome"] == "unknown"
+    assert caplog.records[0].levelno == logging.ERROR
+
+
+def test_a_storage_error_with_no_status_of_its_own_is_an_internal_error(fake, fake_client, caplog):
+    # Only StorageError's subclasses have a status. Raising the base class is a bug.
+    fake.fail("stat", StorageError("raised without a subclass"))
+
+    response = fake_client.get("/metadata/notes.txt")
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "error": "InternalError",
+        "detail": "the service failed unexpectedly",
+    }
+    event = failure_log(caplog, response)
+    assert event["operation"] == "get_metadata"
+    assert event["provider_involved"] is None
+
+
+def test_openapi_lists_each_routes_errors_with_our_body_and_no_422(client):
+    schema = client.get("/openapi.json").json()
+
+    every_route = {"400", "403", "500", "502", "503"}
+    expected = {
+        ("GET", "/files"): every_route,
+        ("POST", "/files/{key}"): every_route | {"409", "413"},
+        ("PUT", "/files/{key}"): every_route | {"404", "413"},
+        ("GET", "/files/{key}"): every_route | {"404"},
+        ("DELETE", "/files/{key}"): every_route | {"404"},
+        ("GET", "/metadata/{key}"): every_route | {"404"},
+    }
+    error_body = {"$ref": "#/components/schemas/ErrorBody"}
+    for (method, path), statuses in expected.items():
+        responses = schema["paths"][path][method.lower()]["responses"]
+        errors = {status for status in responses if int(status) >= 400}
+        assert errors == statuses, (method, path)
+        for status in errors:
+            assert responses[status]["content"]["application/json"]["schema"] == error_body
+    assert set(schema["components"]["schemas"]["ErrorBody"]["properties"]) == {"error", "detail"}
+    assert "HTTPValidationError" not in schema["components"]["schemas"]
 
 
 @pytest.mark.provider

@@ -6,6 +6,7 @@ from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
 from storage_service.routers.deps import Service
+from storage_service.routers.error_handlers import error_responses
 
 router = APIRouter()
 
@@ -14,7 +15,16 @@ router = APIRouter()
     "/files/{key:path}",
     response_class=StreamingResponse,
     responses={
-        200: {"description": "The file's bytes", "content": {"application/octet-stream": {}}}
+        200: {"description": "The file's bytes", "content": {"application/octet-stream": {}}},
+        **error_responses(
+            {
+                400: "InvalidInput: the key violates a key rule.",
+                403: "AccessDenied: the provider denied the service access.",
+                404: "FileNotFound: no file exists under the key.",
+                502: "ProviderError: the storage provider rejected the request.",
+                503: "ProviderUnavailable: the storage provider could not be reached.",
+            }
+        ),
     },
 )
 def download_file(key: str, service: Service) -> StreamingResponse:

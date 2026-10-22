@@ -5,10 +5,9 @@ What each operation accepts and returns, and how it fails. The shared sections
 one owner, who keeps it in agreement with the code and the tests.
 
 The running service also serves interactive docs at `/docs` and the schema at
-`/openapi.json`. Both are generated from the code. They show the routes, inputs, and
-response fields. Metadata also lists its expected error statuses. Other routes may
-still advertise 422, although invalid input returns 400 `InvalidInput`; use this page
-for their error contracts.
+`/openapi.json`. Both are generated from the code. They show the routes, inputs,
+response fields, and each route's error statuses with the [error format](#error-format).
+This page explains when each error happens and whether retrying helps.
 
 Examples assume the server runs locally, as in the README:
 
@@ -78,7 +77,9 @@ Example, from the in-memory backend:
 
 ### Error format
 
-Every error the service reports itself has this JSON body:
+Every error response has this JSON body, including a path with no route, a method
+the path does not accept, a request body that cannot be read, and a bug in the
+service:
 
 ```json
 {"error": "FileNotFound", "detail": "no file named 'photos/2026/cat.jpg'"}
@@ -91,13 +92,25 @@ Every error the service reports itself has this JSON body:
 
 | `error` | Status | When it happens | Does retrying help? |
 |---|---|---|---|
-| `InvalidInput` | 400 | A key breaks a [key rule](#keys), the List `prefix` is longer than 1024 bytes, the List `limit` is not a whole number from 1 to 1000, or Create or Replace is missing the `file` form field. | No. Change the input. |
+| `InvalidInput` | 400 | A key breaks a [key rule](#keys), the List `prefix` is longer than 1024 bytes, the List `limit` is not a whole number from 1 to 1000, or Create or Replace is missing the `file` form field or sends a `multipart/form-data` body that cannot be read (for example, no boundary). | No. Change the input. |
 | `AccessDenied` | 403 | The provider refused the service's credentials or permissions, for example a wrong secret key or a bucket policy that does not allow the operation. This is the service's configuration, not the caller's. | No, not until whoever runs the service fixes the credentials or permissions. |
 | `FileNotFound` | 404 | No file exists under the key (Download, Metadata, Replace, Delete). | Not until a file is created under that key. |
 | `FileAlreadyExists` | 409 | Create was called for a key that already has a file. | No. Use Replace, or Delete the file first. |
 | `FileTooLarge` | 413 | The upload to Create or Replace is larger than `MAX_UPLOAD_BYTES` (default 1 GiB). | No, not with the same file. |
 | `ProviderError` | 502 | The provider refused the request for another reason: a missing bucket, an unsupported request, and so on. Usually a configuration problem, but it can also be a provider-side failure, such as throttling or an internal error, that lasted through the client's own retries. | Usually not: fix the configuration first. If the configuration is correct, retrying later sometimes succeeds. |
 | `ProviderUnavailable` | 503 | The provider could not be reached: network failure, timeout, and so on. | Retrying later may help. |
+| `RouteNotFound` | 404 | The path matches no route, for example `GET /nothing`. Unlike `FileNotFound`, it means the URL is wrong. | No. Fix the URL. |
+| `MethodNotAllowed` | 405 | The path exists, but not for this method, for example `POST /files`. The `Allow` header lists every method the path accepts, such as `DELETE, GET, POST, PUT` for `/files/{key}`. | No. Use an allowed method. |
+| `InternalError` | 500 | A bug in the service. `detail` is always `the service failed unexpectedly`, whatever went wrong. | Not until it is fixed. After a failed Create, Replace, or Delete, check with Metadata first: the write may have happened. |
+
+`RouteNotFound` and `MethodNotAllowed` happen before any operation runs, and
+`InternalError` can happen in any operation, so the operation sections below do not
+repeat them.
+
+When FastAPI or Starlette rejects the input before our code runs, `detail` starts with
+the field's name: `limit: ...` for `limit=abc`, `file: Field required` for a missing
+`file` field, and `file: Missing boundary in multipart.` for a multipart body without a
+boundary.
 
 ### After a failed write
 
@@ -128,37 +141,21 @@ Every failed request writes one JSON line to the server's log (stderr), for exam
 
 | Field | Meaning |
 |---|---|
-| `level` | `WARNING` when the caller can fix it (400, 404, 409, 413). `ERROR` when whoever runs the service has to act (403 `AccessDenied`, 502, 503, 500). |
-| `operation` | `create_file`, `replace_file`, `download_file`, `get_metadata`, `delete_file`, or `list_files`. |
+| `level` | `WARNING` when the caller can fix it (400, 404, 405, 409, 413). `ERROR` when whoever runs the service has to act (403 `AccessDenied`, 500, 502, 503). |
+| `operation` | `create_file`, `replace_file`, `download_file`, `get_metadata`, `delete_file`, or `list_files`. `null` when the request matched no operation (404 `RouteNotFound`, 405 `MethodNotAllowed`). |
 | `status`, `error`, `detail` | Exactly what the caller received. |
-| `provider_involved` | `true` when a storage call raised the error or decided it (a 404 or 409 from the existence check). `false` when the request was rejected before storage was called. |
+| `provider_involved` | `true` when a storage call raised the error or decided it (a 404 or 409 from the existence check). `false` when the request was rejected before storage was called. `null` after a 500 `InternalError`: a bug can strike anywhere, so we cannot tell. |
 | `storage_call` | The storage call involved: `stat`, `put`, `get`, `list_files`, or `delete`, or `null`. |
 | `provider_code` | Only when the provider or its SDK named the failure, for example `NoSuchBucket`, `403`, or `EndpointConnectionError`. Never sent to the caller. |
-| `write_outcome` | Create, Replace, and Delete only. `not_attempted` when the request failed before the write call, so nothing changed. `unknown` when the write call itself failed: the provider may have completed it (see [After a failed write](#after-a-failed-write)). |
+| `write_outcome` | Create, Replace, and Delete only. `not_attempted` when the request failed before the write call, so nothing changed. `unknown` when the write call itself failed, or after a 500 `InternalError`: the provider may have completed it (see [After a failed write](#after-a-failed-write)). |
 
-Expected failures are logged without a traceback. Only an unexpected 500 includes one.
-The log never contains credentials or the provider's message. With no logging
-configured, Python prints these lines (`WARNING` and above) to stderr, as uvicorn
-does.
+Expected failures are logged without a traceback. Only a 500 `InternalError` includes
+one, after its JSON line. Starlette then hands the exception to the server, so uvicorn
+prints the same traceback a second time, starting with `Exception in ASGI application`.
 
-### Responses in another format
-
-Some responses come from FastAPI before our code runs, and do not use the error format
-above:
-
-| Status | When | Body |
-|---|---|---|
-| 404 | The path matches no route, for example `GET /nothing`. | `{"detail": "Not Found"}` |
-| 405 | The path exists but not for that method, for example `POST /files`. | `{"detail": "Method Not Allowed"}` |
-| 400 | Create or Replace with a `multipart/form-data` body that cannot be parsed: no boundary, more than 1000 files, or a text field over 1 MB. | `{"detail": "<message>"}`, for example `{"detail": "Missing boundary in multipart."}` |
-| 500 | An unexpected failure inside the service. | Plain text: `Internal Server Error` |
-
-A 404 without an `error` field means the path is wrong, not that the file is missing.
-
-Other invalid input that FastAPI catches first, such as `limit=abc` or a missing `file`
-field, uses our format: 400 `InvalidInput`, with the field name at the start of
-`detail`. Moving the four responses above to our format is tracked in
-[#10](https://github.com/FaizalJnu/OSPSD-TEAM-6/issues/10).
+The JSON lines never contain credentials or the provider's message. A 500's traceback
+shows the bug's own exception, including its message. With no logging configured,
+Python prints these lines (`WARNING` and above) to stderr, as uvicorn does.
 
 ### Bucket checks
 
@@ -242,7 +239,7 @@ contents of a file that already exists. Both change stored files.
 
 | Status | `error` | When |
 |---|---|---|
-| 400 | `InvalidInput` | The key breaks a [key rule](#keys), or the `file` form field is missing. |
+| 400 | `InvalidInput` | The key breaks a [key rule](#keys), the `file` form field is missing, or the `multipart/form-data` body cannot be read: no boundary, more than 1000 files, or a text field over 1 MB. |
 | 403 | `AccessDenied` | The provider denied the service's credentials or permissions. |
 | 404 | `FileNotFound` | Replace only: no file exists under the key. |
 | 409 | `FileAlreadyExists` | Create only: a file already exists under the key. |

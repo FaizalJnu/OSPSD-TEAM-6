@@ -2,7 +2,8 @@
 
 ``FakeStorage`` wraps ``InMemoryStorage``. It records every call and can be told to
 make a method raise one of our errors, so tests can check which storage calls a request
-made and how a provider failure reaches the caller, without network or credentials.
+made and how a provider failure reaches the caller, without network or credentials. It
+can also raise any other exception, to stand in for a bug in a backend.
 A failure can happen before the store is touched (the call changes nothing) or after
 (the change is made, then the error is raised, like a provider that completed a write
 but whose response was lost).
@@ -11,7 +12,6 @@ but whose response was lost).
 from collections.abc import Callable
 from typing import BinaryIO, Literal
 
-from storage_service.errors import StorageError
 from storage_service.models import FileDownload, FileInfo, FilePage
 from storage_service.storage.base import StorageClient
 from storage_service.storage.memory import InMemoryStorage
@@ -24,9 +24,9 @@ class FakeStorage:
         # One (method, key) pair per call, in order. list_files records its prefix.
         self.calls: list[tuple[Method, str]] = []
         self._store = InMemoryStorage()
-        self._failures: dict[Method, tuple[StorageError, bool]] = {}
+        self._failures: dict[Method, tuple[Exception, bool]] = {}
 
-    def fail(self, method: Method, error: StorageError, *, after_applying: bool = False) -> None:
+    def fail(self, method: Method, error: Exception, *, after_applying: bool = False) -> None:
         """Make every later call to ``method`` raise ``error``.
 
         By default the error is raised before the store is touched, so the call changes

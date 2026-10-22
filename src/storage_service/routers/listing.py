@@ -6,6 +6,7 @@ from fastapi import APIRouter, Query
 
 from storage_service.models import FilePage
 from storage_service.routers.deps import Service
+from storage_service.routers.error_handlers import error_responses
 from storage_service.service import MAX_KEY_BYTES, MAX_PAGE_SIZE
 
 router = APIRouter()
@@ -14,12 +15,14 @@ router = APIRouter()
 @router.get(
     "/files",
     summary="List files",
-    responses={
-        400: {"description": "InvalidInput: limit is not 1 to 1000, or prefix is too long."},
-        403: {"description": "AccessDenied: the provider denied the service access."},
-        502: {"description": "ProviderError: the storage provider rejected the request."},
-        503: {"description": "ProviderUnavailable: the storage provider could not be reached."},
-    },
+    responses=error_responses(
+        {
+            400: "InvalidInput: limit is not 1 to 1000, or prefix is too long.",
+            403: "AccessDenied: the provider denied the service access.",
+            502: "ProviderError: the storage provider rejected the request.",
+            503: "ProviderUnavailable: the storage provider could not be reached.",
+        }
+    ),
 )
 def list_files(
     service: Service,

@@ -55,7 +55,7 @@ delete their files afterwards.
 | [tests/test_storage_contract.py](tests/test_storage_contract.py) | The same tests for every storage backend |
 | [tests/test_invalid_input.py](tests/test_invalid_input.py) | Invalid input that FastAPI rejects first (a bad List `limit`, a missing `file` field) returns 400 `InvalidInput` |
 | [tests/test_injection.py](tests/test_injection.py) | Application tests over a controlled backend: storage calls made, provider failures, how the app is built, and the routes it serves |
-| [tests/test_failures.py](tests/test_failures.py) | The error model across operations (Level 5): access denial, sanitized errors, and the failure log |
+| [tests/test_failures.py](tests/test_failures.py) | The error model across operations (Level 5): access denial, sanitized errors, the failure log, errors outside any operation (no route, wrong method, unreadable body, a bug), and the errors `/openapi.json` lists |
 | [tests/fakes.py](tests/fakes.py) | `FakeStorage`, the controlled backend (below) |
 | [tests/test_cleanup.py](tests/test_cleanup.py) | `delete_everything_under`, the cleanup helper the provider tests rely on |
 
@@ -79,7 +79,8 @@ in that file, not in `conftest.py`.
 * records each call in `fake.calls` as `(method, key)`, in order. `list_files` records
   its prefix instead of a key.
 * raises a given error from a given method after `fake.fail(method, error)`, on every
-  later call. The method name is typed, so mypy rejects a misspelled one.
+  later call. The method name is typed, so mypy rejects a misspelled one. The error is
+  usually one of ours, but can be any exception, to stand in for a bug in a backend.
 * with `fake.fail(method, error, after_applying=True)`, applies the call to the store
   first and then raises, like a provider that completed a write but whose response was
   lost. Without it, the error is raised before the store is touched.
@@ -343,8 +344,18 @@ operation's file.
   so on) becomes `AccessDenied`, on every operation.
 * No response contains the provider's code or message. The code is kept on the error as
   `provider_code` for the log.
+* Every error response is `{"error", "detail"}` with a type from the
+  [Error types](docs/API.md#error-types) table, including those Starlette raises
+  itself: a path with no route is 404 `RouteNotFound`, a method the path does not
+  accept is 405 `MethodNotAllowed` with every allowed method in `Allow`, and a
+  multipart body that cannot be read is 400 `InvalidInput` with no storage call.
+* A bug is 500 `InternalError`, and the response does not contain the exception's text.
 * Every failed request logs exactly one JSON line whose `status`, `error`, and `detail`
-  match the response, without a traceback, and without the provider's message.
+  match the response, without the provider's message. Only a 500 has a traceback.
+* The log claims no more than we know: `operation` is `null` when no operation ran (404
+  `RouteNotFound`, 405 `MethodNotAllowed`), and after a 500, `provider_involved` is
+  `null` and a write's `write_outcome` is `unknown`.
+* `/openapi.json` lists each route's error statuses with the error body, and no 422.
 * For Create, Replace, and Delete, `write_outcome` is `not_attempted` when the request
   failed before the write call, and `unknown` when the write call failed.
 
@@ -372,11 +383,35 @@ noted:
   `NoSuchBucket` whose message names a namespace and bucket. The response is the
   generic 502, the log has `provider_code` `NoSuchBucket`, and neither contains the
   namespace, the bucket, or a traceback.
+* `test_a_path_with_no_route_is_route_not_found_not_a_missing_file`: `GET /nothing`
+  is 404 `RouteNotFound`, logged at `WARNING` with `operation` `null`.
+* `test_a_method_the_path_does_not_accept_is_405_with_every_allowed_method`: `POST
+  /files` gives `Allow: GET`, and `PATCH /files/notes.txt` gives `Allow: DELETE, GET,
+  POST, PUT`. Starlette's own header named only `POST`, the first route matching the
+  path. `operation` is `null`, although Starlette matched the path to another route.
+* `test_a_multipart_body_that_cannot_be_read_is_invalid_input`: Create and Replace
+  with no boundary, 1001 files, or a text field over 1 MB (Starlette's limits) return
+  400 `InvalidInput` with `file: ` and the parser's message, `write_outcome`
+  `not_attempted`, and no storage call.
+* `test_a_bug_is_a_500_internal_error_that_claims_nothing_about_the_write`: `put`
+  raises a `RuntimeError`. Create returns 500 `InternalError` without the exception's
+  text, and the log line has the traceback, `provider_involved` `null`, and
+  `write_outcome` `unknown`.
+* `test_a_storage_error_with_no_status_of_its_own_is_an_internal_error`: raising the
+  base `StorageError` is a bug, so it is 500 `InternalError` too, not an `error` named
+  `StorageError`.
+* `test_openapi_lists_each_routes_errors_with_our_body_and_no_422`: pins each route's
+  error statuses to its Errors table in docs/API.md, plus 500, each with the
+  `ErrorBody` schema, and checks that no 422 or `HTTPValidationError` is left.
 * `test_wrong_credentials_are_access_denied_on_the_real_provider` (marked `provider`):
   with a wrong secret key, Metadata, List, and Create return 403 `AccessDenied`, and
   nothing is written.
 
-The new tests fail on `dev` at `a9b8258`: they cannot import `AccessDenied`.
+The first tests here failed on `dev` at `a9b8258`: they could not import
+`AccessDenied`. The six tests for errors outside any operation, bugs, and `/openapi.json`
+(12 cases) fail on `dev` at `d80e145`, which returned FastAPI's own bodies, a plain-text
+500, `"error": "StorageError"`, `Allow: POST` for `PATCH /files/notes.txt`, and a 422 on
+every route.
 
 ### Real-provider verification
 
@@ -402,11 +437,15 @@ The new tests fail on `dev` at `a9b8258`: they cannot import `AccessDenied`.
 
 ### Gaps
 
-* The failure log covers errors our handlers see. FastAPI's own 404 and 405, a 500 from
-  a bug, and Starlette's multipart 400s still bypass it, and still use another format
-  ([#10](https://github.com/FaizalJnu/OSPSD-TEAM-6/issues/10)).
-* An error while a download streams is not logged by us
+* An error while a download streams reaches our 500 handler, so its log line says 500
+  `InternalError` although the caller received a 200 and a cut-off body
   ([#26](https://github.com/FaizalJnu/OSPSD-TEAM-6/issues/26)).
+* Starlette passes a 500's exception on to the server after our handler, so uvicorn
+  prints the traceback a second time (`Exception in ASGI application`). Seen with a
+  backend whose `stat` raised `KeyError` under uvicorn: one JSON line with its
+  traceback, then uvicorn's.
+* The 500 test raises from one storage call. Every bug reaches the same handler,
+  wherever it happens, but only this path is tested.
 * `write_outcome` is `unknown` for any failure of the write call, including an explicit
   403 from it. That is conservative: a refused write most likely changed nothing.
 * Throttling and provider-side 5xx errors are still 502 `ProviderError` (F1).
@@ -782,9 +821,11 @@ Real provider (marked `provider`):
   the status can no longer change. Verified with a test double whose chunks raise
   `ProviderUnavailable` after 11 of 100 bytes, served by uvicorn: curl received
   `200`, `content-length: 100`, then 11 bytes, and exited with code 18 (partial file);
-  there was no error body. The server logged `Exception in ASGI application`. Callers
-  can detect the cut by comparing the received size with `Content-Length`. Not covered
-  by an automated test.
+  there was no error body. The server logged `Exception in ASGI application`, and our
+  500 handler now also logs a 500 `InternalError` line, which does not match the 200
+  the caller received ([#26](https://github.com/FaizalJnu/OSPSD-TEAM-6/issues/26)).
+  Callers can detect the cut by comparing the received size with `Content-Length`. Not
+  covered by an automated test.
 * **`S3Storage` lets a mid-stream SDK error escape.** When the connection drops while
   chunks are being read, botocore's `ResponseStreamingError` leaves the backend instead
   of becoming `ProviderUnavailable`, which breaks the `get` contract and the AGENTS.md

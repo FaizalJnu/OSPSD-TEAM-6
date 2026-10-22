@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from storage_service.models import FileInfo
 from storage_service.routers.deps import Service
+from storage_service.routers.error_handlers import error_responses
 
 router = APIRouter()
 
@@ -11,13 +12,15 @@ router = APIRouter()
 @router.get(
     "/metadata/{key:path}",
     summary="Read file metadata",
-    responses={
-        400: {"description": "InvalidInput: the decoded key violates a key rule."},
-        403: {"description": "AccessDenied: the provider denied the service access."},
-        404: {"description": "FileNotFound: no file exists under the key."},
-        502: {"description": "ProviderError: the storage provider rejected the request."},
-        503: {"description": "ProviderUnavailable: the storage provider could not be reached."},
-    },
+    responses=error_responses(
+        {
+            400: "InvalidInput: the decoded key violates a key rule.",
+            403: "AccessDenied: the provider denied the service access.",
+            404: "FileNotFound: no file exists under the key.",
+            502: "ProviderError: the storage provider rejected the request.",
+            503: "ProviderUnavailable: the storage provider could not be reached.",
+        }
+    ),
 )
 def get_metadata(key: str, service: Service) -> FileInfo:
     """Return key, byte size, stored content type, unquoted ETag, and UTC modification time.

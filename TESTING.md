@@ -81,6 +81,9 @@ in that file, not in `conftest.py`.
 * raises a given error from a given method after `fake.fail(method, error)`, on every
   later call. The method name is typed, so mypy rejects a misspelled one. The error is
   usually one of ours, but can be any exception, to stand in for a bug in a backend.
+* with `fake.cut_downloads(error, after_bytes=n)`, lets every later `get` succeed but
+  makes its chunks raise `error` after the first `n` bytes, like a provider connection
+  that drops while the body is being read.
 * with `fake.fail(method, error, after_applying=True)`, applies the call to the store
   first and then raises, like a provider that completed a write but whose response was
   lost. Without it, the error is raised before the store is touched.
@@ -356,6 +359,9 @@ operation's file.
   `RouteNotFound`, 405 `MethodNotAllowed`), and after a 500, `provider_involved` is
   `null` and a write's `write_outcome` is `unknown`.
 * `/openapi.json` lists each route's error statuses with the error body, and no 422.
+* A download that fails after its 200 headers is left unfinished, so the caller
+  receives fewer bytes than `Content-Length`. It logs one line with `"status": 200`,
+  `"interrupted": true`, `bytes_sent`, and `size`, at `ERROR`.
 * For Create, Replace, and Delete, `write_outcome` is `not_attempted` when the request
   failed before the write call, and `unknown` when the write call failed.
 
@@ -403,6 +409,13 @@ noted:
 * `test_openapi_lists_each_routes_errors_with_our_body_and_no_422`: pins each route's
   error statuses to its Errors table in docs/API.md, plus 500, each with the
   `ErrorBody` schema, and checks that no 422 or `HTTPValidationError` is left.
+* `test_a_download_cut_off_after_its_headers_is_left_unfinished_and_logs_the_200`:
+  `FakeStorage` cuts a 100-byte download off after 11 bytes, with `ProviderUnavailable`
+  or with a bug. The app is run the way uvicorn runs it, because TestClient shows an
+  unfinished response as an empty body. It sends 200 with `content-length: 100`, then
+  11 bytes, and never the message that ends the body. The log line has
+  `"status": 200`, `storage_call` `get` (or `null` for the bug), `interrupted`,
+  `bytes_sent` 11, and `size` 100. Only the bug's line has a traceback.
 * `test_wrong_credentials_are_access_denied_on_the_real_provider` (marked `provider`):
   with a wrong secret key, Metadata, List, and Create return 403 `AccessDenied`, and
   nothing is written.
@@ -411,7 +424,9 @@ The first tests here failed on `dev` at `a9b8258`: they could not import
 `AccessDenied`. The six tests for errors outside any operation, bugs, and `/openapi.json`
 (12 cases) fail on `dev` at `d80e145`, which returned FastAPI's own bodies, a plain-text
 500, `"error": "StorageError"`, `Allow: POST` for `PATCH /files/notes.txt`, and a 422 on
-every route.
+every route. The interrupted-download tests fail on `59788d2` (step B of
+[#69](https://github.com/FaizalJnu/OSPSD-TEAM-6/issues/69)), where the failure reached
+the 500 handler and was logged as a 500.
 
 ### Real-provider verification
 
@@ -437,9 +452,6 @@ every route.
 
 ### Gaps
 
-* An error while a download streams reaches our 500 handler, so its log line says 500
-  `InternalError` although the caller received a 200 and a cut-off body
-  ([#26](https://github.com/FaizalJnu/OSPSD-TEAM-6/issues/26)).
 * Starlette passes a 500's exception on to the server after our handler, so uvicorn
   prints the traceback a second time (`Exception in ASGI application`). Seen with a
   backend whose `stat` raised `KeyError` under uvicorn: one JSON line with its
@@ -652,8 +664,11 @@ Tests: [tests/test_download.py](tests/test_download.py).
   `FileNotFound`, and a provider outage in `get` returns 503 `ProviderUnavailable`,
   all in the error format.
 * The `get` contract in `storage/base.py` holds for `S3Storage`: a `get_object` answer
-  becomes `FileInfo` plus chunks, provider errors become our errors, and the provider
-  stream is closed after reading.
+  becomes `FileInfo` plus chunks, provider errors become our errors (also while the
+  chunks are read), and the provider stream is closed after reading.
+* A failure after the 200 headers leaves the response unfinished and is logged as an
+  interrupted download (tested with the Level 5 tests in
+  [tests/test_failures.py](tests/test_failures.py)).
 
 ### Cases and boundaries
 
@@ -671,7 +686,9 @@ Tests: [tests/test_download.py](tests/test_download.py).
   that read the whole body first and then split it would still pass the chunk-size
   test, but not this one.
 * **Provider errors:** `NoSuchKey` (404) and `AccessDenied` (403), which become
-  `FileNotFound` and `AccessDenied`.
+  `FileNotFound` and `AccessDenied`, and a connection that breaks after the first read,
+  which botocore reports as `ResponseStreamingError` and we report as
+  `ProviderUnavailable`.
 * **Stream cleanup:** a body read to the end, and a body closed after the first chunk.
 
 ### Tests
@@ -717,6 +734,12 @@ Translation, with `stubbed_s3` (no network):
 * [`test_s3_get_closes_the_provider_stream_when_no_chunk_was_read`](tests/test_download.py):
   the provider stream is closed when a caller closes the chunks before reading any
   (regression test for [#15](https://github.com/FaizalJnu/OSPSD-TEAM-6/issues/15)).
+* [`test_s3_get_translates_a_connection_dropped_mid_download`](tests/test_download.py):
+  a provider stream returns 5 bytes, then raises urllib3's `ProtocolError`, as in
+  [#26](https://github.com/FaizalJnu/OSPSD-TEAM-6/issues/26). The first chunk arrives;
+  the next raises `ProviderUnavailable` with `provider_code` `ResponseStreamingError`
+  and without the SDK's message, and the stream is closed. On `59788d2`, botocore's
+  `ResponseStreamingError` escaped instead.
 * [`test_s3_get_denied_by_the_provider_raises_access_denied`](tests/test_download.py):
   `AccessDenied` becomes our `AccessDenied`, with the provider's code kept in
   `provider_code` and out of the message.
@@ -817,19 +840,22 @@ Real provider (marked `provider`):
 
 ### Gaps
 
-* **A provider failure mid-stream cuts the body off.** Once the 200 headers are sent,
-  the status can no longer change. Verified with a test double whose chunks raise
-  `ProviderUnavailable` after 11 of 100 bytes, served by uvicorn: curl received
-  `200`, `content-length: 100`, then 11 bytes, and exited with code 18 (partial file);
-  there was no error body. The server logged `Exception in ASGI application`, and our
-  500 handler now also logs a 500 `InternalError` line, which does not match the 200
-  the caller received ([#26](https://github.com/FaizalJnu/OSPSD-TEAM-6/issues/26)).
-  Callers can detect the cut by comparing the received size with `Content-Length`. Not
-  covered by an automated test.
-* **`S3Storage` lets a mid-stream SDK error escape.** When the connection drops while
-  chunks are being read, botocore's `ResponseStreamingError` leaves the backend instead
-  of becoming `ProviderUnavailable`, which breaks the `get` contract and the AGENTS.md
-  rule. Tracked in [#26](https://github.com/FaizalJnu/OSPSD-TEAM-6/issues/26).
+* **A failure mid-stream cuts the body off.** Once the 200 headers are sent, the status
+  can no longer change, so the service logs the failure and leaves the response
+  unfinished. Verified with a `FakeStorage` whose chunks raise `ProviderUnavailable`
+  after 11 of 100 bytes, served by uvicorn: curl received `200`,
+  `content-length: 100`, then 11 bytes, and exited with code 18 (partial file). The
+  server logged our one line with `"status": 200` and `"interrupted": true`, then
+  uvicorn's one line `ASGI callable returned without completing response.`, and served
+  the next request normally. Ending the body normally instead made uvicorn's HTTP
+  library raise `Too little data for declared Content-Length`, which reached the 500
+  handler: a second, wrong JSON line with `"status": 500` and a traceback, then
+  uvicorn's `Exception in ASGI application` traceback, about 150 lines in all. Callers
+  detect the cut by comparing the received size with `Content-Length`.
+* **The mid-stream S3 translation is tested with a stub, not a real dropped
+  connection.** The stub stream raises the urllib3 error that a broken connection
+  raises, and botocore wraps it the same way. `ReadTimeoutError` takes the same path
+  (it is also a `BotoCoreError`) but has no test of its own.
 * **`ProviderUnavailable` from `get` is tested over `FakeStorage`, not through
   `S3Storage`.** The Stubber can only queue answers and client errors, not connection
   failures, so `test_download_returns_503_when_the_provider_is_unavailable` checks the

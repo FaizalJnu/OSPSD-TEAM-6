@@ -185,7 +185,10 @@ class _ChunkReader:
 
     def __next__(self) -> bytes:
         try:
-            return next(self._chunks)
+            # A connection that drops mid-read raises botocore's ResponseStreamingError
+            # or ReadTimeoutError here, long after get() returned.
+            with _translate_errors():
+                return next(self._chunks)
         except BaseException:  # the last chunk was read, or reading failed
             self.close()
             raise

@@ -148,8 +148,5 @@ Replacing S3 with another provider means one new module in `storage/` that imple
   two writers racing on one key can both pass the check. See the
   [README](../README.md#known-limitations).
 * A provider failure after a download's headers are sent cuts the body off instead of
-  returning an error. See the Download gaps in [TESTING.md](../TESTING.md#download).
-* When the connection drops while a download is being read, botocore's
-  `ResponseStreamingError` escapes `S3Storage` instead of becoming
-  `ProviderUnavailable`, against the `get` contract in `storage/base.py`:
-  [#26](https://github.com/FaizalJnu/OSPSD-TEAM-6/issues/26).
+  returning an error. It is logged as an interrupted download. See the Download gaps
+  in [TESTING.md](../TESTING.md#download).

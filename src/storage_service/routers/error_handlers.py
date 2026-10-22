@@ -49,6 +49,9 @@ class ErrorBody:
     detail: str
 
 
+# What the caller sees when the service has a bug, whatever went wrong.
+_INTERNAL_ERROR = ErrorBody("InternalError", "the service failed unexpectedly")
+
 # How each of our errors appears over HTTP. Anything not listed is a bug: a 500.
 _STATUS_FOR_ERROR: dict[type[StorageError], int] = {
     InvalidInput: 400,
@@ -127,9 +130,43 @@ def internal_error_handler(request: Request, exc: Exception) -> JSONResponse:
     calls this for an exception nothing else handled, it re-raises the exception
     afterwards, so the server prints it as well.
     """
-    body = ErrorBody("InternalError", "the service failed unexpectedly")
-    _log_failure(500, body, operation=_operation(request), provider_involved=None, exc_info=exc)
-    return _error_response(500, body)
+    _log_failure(
+        500, _INTERNAL_ERROR, operation=_operation(request), provider_involved=None, exc_info=exc
+    )
+    return _error_response(500, _INTERNAL_ERROR)
+
+
+def log_interrupted_download(
+    request: Request, exc: Exception, *, bytes_sent: int, size: int
+) -> None:
+    """Log a download that failed after its 200 status and headers were sent.
+
+    The caller cannot be sent an error any more: it sees a body shorter than
+    ``Content-Length`` instead. So the line says ``"status": 200``, names the error the
+    caller could not be told about, and adds ``"interrupted": true``, the bytes sent,
+    and the file's size. A ``StorageError`` here came from reading the chunks of the
+    storage call ``get``. Anything else is a bug, logged with its traceback.
+    """
+    extra = {"interrupted": True, "bytes_sent": bytes_sent, "size": size}
+    if isinstance(exc, StorageError):
+        _log_failure(
+            200,
+            ErrorBody(type(exc).__name__, str(exc)),
+            operation=_operation(request),
+            provider_involved=True,
+            storage_call="get",
+            provider_code=exc.provider_code,
+            extra=extra,
+        )
+    else:
+        _log_failure(
+            200,
+            _INTERNAL_ERROR,
+            operation=_operation(request),
+            provider_involved=None,
+            exc_info=exc,
+            extra=extra,
+        )
 
 
 def error_responses(descriptions: Mapping[int, str]) -> dict[int | str, dict[str, Any]]:
@@ -219,10 +256,13 @@ def _log_failure(
     storage_call: str | None = None,
     provider_code: str | None = None,
     exc_info: BaseException | None = None,
+    extra: Mapping[str, object] | None = None,
 ) -> None:
     """Write one JSON line describing a failed request.
 
-    ``status`` and ``body`` are what the caller received. ``operation`` is ``None`` when
+    ``status`` is what the caller received, and ``body`` the error it was sent (or, for
+    an interrupted download, could not be sent). ``extra`` adds fields at the end.
+    ``operation`` is ``None`` when
     the request matched no operation, and ``provider_involved`` is ``None`` when we
     cannot know (a bug). ``write_outcome`` (Create, Replace, and Delete only) is
     ``not_attempted`` when the request failed before the write call, and ``unknown``
@@ -230,10 +270,11 @@ def _log_failure(
     may have completed it (see "After a failed write" in docs/API.md). Only a bug is
     logged with its traceback.
     """
-    # The caller can fix a 4xx. A 5xx, or a denial of the service's own credentials,
-    # needs whoever runs the service.
-    needs_operator = status >= 500 or body.error == AccessDenied.__name__
-    level = logging.ERROR if needs_operator else logging.WARNING
+    # The caller can fix a 4xx, except a denial of the service's own credentials.
+    # Anything else (a 5xx, or a 200 whose body was cut off) needs whoever runs the
+    # service.
+    caller_can_fix = 400 <= status < 500 and body.error != AccessDenied.__name__
+    level = logging.WARNING if caller_can_fix else logging.ERROR
     event: dict[str, object] = {
         "level": logging.getLevelName(level),
         "event": "request_failed",
@@ -249,4 +290,6 @@ def _log_failure(
     if operation in _WRITE_OPERATIONS:
         may_have_written = provider_involved is None or storage_call in _WRITE_CALLS
         event["write_outcome"] = "unknown" if may_have_written else "not_attempted"
+    if extra is not None:
+        event.update(extra)
     logger.log(level, json.dumps(event), exc_info=exc_info)

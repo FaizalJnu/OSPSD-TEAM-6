@@ -29,7 +29,7 @@ tests/
   test_injection.py        Application tests: storage calls, provider failures, how the app is built
   test_failures.py         The error model across operations: access denial, sanitized errors, failure logs,
                            errors outside any operation, and the errors /openapi.json lists
-  fakes.py                 FakeStorage: records calls and raises configured errors
+  fakes.py                 FakeStorage: records calls, raises configured errors, cuts downloads off
   test_cleanup.py          The provider-test cleanup helper follows every page
 docs/
   API.md             HTTP contract: keys, file info, errors, one section per operation

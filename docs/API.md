@@ -141,17 +141,19 @@ Every failed request writes one JSON line to the server's log (stderr), for exam
 
 | Field | Meaning |
 |---|---|
-| `level` | `WARNING` when the caller can fix it (400, 404, 405, 409, 413). `ERROR` when whoever runs the service has to act (403 `AccessDenied`, 500, 502, 503). |
+| `level` | `WARNING` when the caller can fix it (400, 404, 405, 409, 413). `ERROR` when whoever runs the service has to act (403 `AccessDenied`, 500, 502, 503, and an interrupted download). |
 | `operation` | `create_file`, `replace_file`, `download_file`, `get_metadata`, `delete_file`, or `list_files`. `null` when the request matched no operation (404 `RouteNotFound`, 405 `MethodNotAllowed`). |
-| `status`, `error`, `detail` | Exactly what the caller received. |
+| `status`, `error`, `detail` | Exactly what the caller received. For an interrupted download, `status` is the 200 the caller received, and `error` and `detail` name the failure it could not be told about. |
 | `provider_involved` | `true` when a storage call raised the error or decided it (a 404 or 409 from the existence check). `false` when the request was rejected before storage was called. `null` after a 500 `InternalError`: a bug can strike anywhere, so we cannot tell. |
 | `storage_call` | The storage call involved: `stat`, `put`, `get`, `list_files`, or `delete`, or `null`. |
 | `provider_code` | Only when the provider or its SDK named the failure, for example `NoSuchBucket`, `403`, or `EndpointConnectionError`. Never sent to the caller. |
 | `write_outcome` | Create, Replace, and Delete only. `not_attempted` when the request failed before the write call, so nothing changed. `unknown` when the write call itself failed, or after a 500 `InternalError`: the provider may have completed it (see [After a failed write](#after-a-failed-write)). |
+| `interrupted`, `bytes_sent`, `size` | Download only, when reading the file failed after the 200 status and headers were sent: `interrupted` is `true`, `bytes_sent` is how many bytes the caller was sent, and `size` is the file's size, the `Content-Length` it was promised. |
 
-Expected failures are logged without a traceback. Only a 500 `InternalError` includes
-one, after its JSON line. Starlette then hands the exception to the server, so uvicorn
-prints the same traceback a second time, starting with `Exception in ASGI application`.
+Expected failures are logged without a traceback. Only a bug includes one, after its
+JSON line: a 500 `InternalError`, or a download interrupted by one. After a 500,
+Starlette hands the exception to the server, so uvicorn prints the same traceback a
+second time, starting with `Exception in ASGI application`.
 
 The JSON lines never contain credentials or the provider's message. A 500's traceback
 shows the bug's own exception, including its message. With no logging configured,
@@ -339,9 +341,13 @@ The body uses the [error format](#error-format).
 | 502 | `ProviderError` | The provider refused the request, for example because of a missing bucket. |
 | 503 | `ProviderUnavailable` | The provider could not be reached or timed out. |
 
-These statuses are only possible before the body starts. If the provider fails after
-the 200 headers are sent, the response is cut off before `Content-Length` bytes arrive,
-with no error body. Compare the received size with `Content-Length` to detect this.
+These statuses are only possible before the body starts. If reading the file fails
+after the 200 status and headers are sent, the service stops sending and the server
+closes the connection before `Content-Length` bytes arrive. There is no error body.
+Compare the received size with `Content-Length` to detect this: curl, for example,
+exits with code 18 (partial file). The service still logs the failure, as one line
+with `"status": 200` and `"interrupted": true` (see [Failure logs](#failure-logs)).
+uvicorn also logs `ASGI callable returned without completing response.`
 
 ### Retry
 

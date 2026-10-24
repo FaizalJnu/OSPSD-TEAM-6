@@ -6,10 +6,12 @@ made and how a provider failure reaches the caller, without network or credentia
 can also raise any other exception, to stand in for a bug in a backend.
 A failure can happen before the store is touched (the call changes nothing) or after
 (the change is made, then the error is raised, like a provider that completed a write
-but whose response was lost).
+but whose response was lost). A download can also fail partway through its chunks, like
+a provider connection that drops while the body is being read.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from dataclasses import replace
 from typing import BinaryIO, Literal
 
 from storage_service.models import FileDownload, FileInfo, FilePage
@@ -25,6 +27,7 @@ class FakeStorage:
         self.calls: list[tuple[Method, str]] = []
         self._store = InMemoryStorage()
         self._failures: dict[Method, tuple[Exception, bool]] = {}
+        self._cut_downloads: tuple[Exception, int] | None = None
 
     def fail(self, method: Method, error: Exception, *, after_applying: bool = False) -> None:
         """Make every later call to ``method`` raise ``error``.
@@ -35,11 +38,23 @@ class FakeStorage:
         """
         self._failures[method] = (error, after_applying)
 
+    def cut_downloads(self, error: Exception, *, after_bytes: int) -> None:
+        """Make every later download raise ``error`` once ``after_bytes`` bytes are read.
+
+        ``get`` itself succeeds and returns the file's info. The error comes from its
+        chunks, after the first ``after_bytes`` bytes of the file.
+        """
+        self._cut_downloads = (error, after_bytes)
+
     def put(self, key: str, stream: BinaryIO, content_type: str) -> FileInfo:
         return self._run("put", key, lambda: self._store.put(key, stream, content_type))
 
     def get(self, key: str) -> FileDownload:
-        return self._run("get", key, lambda: self._store.get(key))
+        download = self._run("get", key, lambda: self._store.get(key))
+        if self._cut_downloads is None:
+            return download
+        error, after_bytes = self._cut_downloads
+        return replace(download, chunks=_cut_off(download.chunks, error, after_bytes))
 
     def stat(self, key: str) -> FileInfo:
         return self._run("stat", key, lambda: self._store.stat(key))
@@ -62,6 +77,13 @@ class FakeStorage:
         if after_applying:
             apply()
         raise error
+
+
+def _cut_off(chunks: Iterator[bytes], error: Exception, after_bytes: int) -> Iterator[bytes]:
+    """Yield the first ``after_bytes`` bytes of ``chunks``, then raise ``error``."""
+    data = b"".join(chunks)  # files in tests are small
+    yield data[:after_bytes]
+    raise error
 
 
 # Exists only so mypy proves that FakeStorage satisfies StorageClient.

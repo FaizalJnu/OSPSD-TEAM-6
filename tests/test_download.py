@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 import pytest
 from botocore.response import StreamingBody
+from urllib3.exceptions import ProtocolError
 
 from storage_service.errors import AccessDenied, FileNotFound, ProviderUnavailable
 from storage_service.models import FileInfo
@@ -80,7 +81,24 @@ class RecordingStream(io.BytesIO):
         return super().read(size)
 
 
-def queue_get_object(stubber, key: str, data: bytes, raw: io.BytesIO | None = None) -> io.BytesIO:
+class DropsAfterFirstRead(io.RawIOBase):
+    """A provider stream whose connection breaks after its first read, as in #26."""
+
+    def __init__(self, first: bytes) -> None:
+        self.first = first
+        self.reads = 0
+
+    def readable(self) -> bool:
+        return True
+
+    def read(self, size: int = -1, /) -> bytes:
+        self.reads += 1
+        if self.reads == 1:
+            return self.first
+        raise ProtocolError("Connection broken: IncompleteRead")
+
+
+def queue_get_object(stubber, key: str, data: bytes, raw: io.IOBase | None = None) -> io.IOBase:
     """Queue a get_object answer for ``key`` and return the raw stream behind its body.
 
     Pass ``raw`` to use your own stream holding ``data``, for example a RecordingStream.
@@ -172,6 +190,21 @@ def test_s3_get_closes_the_provider_stream_when_no_chunk_was_read(stubbed_s3):
     storage.get("a.pdf").chunks.close()
 
     assert raw.closed
+
+
+def test_s3_get_translates_a_connection_dropped_mid_download(stubbed_s3):
+    storage, stubber = stubbed_s3
+    raw = queue_get_object(stubber, "a.pdf", b"x" * 100, DropsAfterFirstRead(b"first"))
+
+    chunks = storage.get("a.pdf").chunks
+    assert next(chunks) == b"first"
+    # botocore turns the broken read into ResponseStreamingError, which must not escape.
+    with pytest.raises(ProviderUnavailable) as raised:
+        next(chunks)
+
+    assert raised.value.provider_code == "ResponseStreamingError"
+    assert "IncompleteRead" not in str(raised.value)
+    assert raw.closed  # the connection is released
 
 
 def test_s3_get_denied_by_the_provider_raises_access_denied(stubbed_s3):

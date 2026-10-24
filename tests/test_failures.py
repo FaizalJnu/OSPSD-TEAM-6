@@ -11,6 +11,7 @@ import logging
 from dataclasses import replace
 from typing import Any
 
+import anyio
 import pytest
 from fastapi.testclient import TestClient
 
@@ -283,6 +284,105 @@ def test_a_storage_error_with_no_status_of_its_own_is_an_internal_error(fake, fa
     event = failure_log(caplog, response)
     assert event["operation"] == "get_metadata"
     assert event["provider_involved"] is None
+
+
+def serve_get(app, path: str) -> list[dict[str, Any]]:
+    """Send one GET to ``app`` the way uvicorn does, and return every message it sends.
+
+    For a response the app leaves unfinished, TestClient returns an empty body instead
+    of the bytes that were sent, so it cannot show what the caller received.
+    """
+    messages: list[dict[str, Any]] = []
+    requested = False
+
+    async def receive() -> dict[str, Any]:
+        nonlocal requested
+        if not requested:
+            requested = True
+            return {"type": "http.request", "body": b"", "more_body": False}
+        await anyio.sleep_forever()  # the client stays connected
+        raise AssertionError("unreachable")
+
+    async def send(message: dict[str, Any]) -> None:
+        messages.append(message)
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},  # as uvicorn reports
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode(),
+        "root_path": "",
+        "query_string": b"",
+        "headers": [],
+        "client": ("testclient", 50000),
+        "server": ("testserver", 80),
+    }
+    anyio.run(app, scope, receive, send)
+    return messages
+
+
+@pytest.mark.parametrize(
+    ("error", "logged"),
+    [
+        (
+            ProviderUnavailable(
+                "could not reach the storage provider", provider_code="ResponseStreamingError"
+            ),
+            {
+                "level": "ERROR",
+                "error": "ProviderUnavailable",
+                "detail": "could not reach the storage provider",
+                "provider_involved": True,
+                "storage_call": "get",
+                "provider_code": "ResponseStreamingError",
+            },
+        ),
+        (
+            RuntimeError("bug: the backend's secret internals"),
+            {
+                "level": "ERROR",
+                "error": "InternalError",
+                "detail": "the service failed unexpectedly",
+                "provider_involved": None,
+                "storage_call": None,
+            },
+        ),
+    ],
+    ids=["provider", "bug"],
+)
+def test_a_download_cut_off_after_its_headers_is_left_unfinished_and_logs_the_200(
+    fake, fake_client, caplog, error, logged
+):
+    assert send_file(fake_client, "POST", "big.bin", b"x" * 100).status_code == 201
+    fake.cut_downloads(error, after_bytes=11)
+
+    start, *body = serve_get(fake_client.app, "/files/big.bin")
+
+    # The status and Content-Length went out before the failure.
+    assert start["type"] == "http.response.start"
+    assert start["status"] == 200
+    assert (b"content-length", b"100") in start["headers"]
+    # 11 bytes, and never the message that ends the body: the server closes the
+    # connection, and the caller can tell from Content-Length that it was cut off.
+    assert b"".join(message["body"] for message in body) == b"x" * 11
+    assert all(message["more_body"] for message in body)
+    records = [record for record in caplog.records if record.name == LOGGER]
+    assert len(records) == 1
+    assert json.loads(records[0].getMessage()) == {
+        "event": "request_failed",
+        "operation": "download_file",
+        "status": 200,  # what the caller received
+        **logged,
+        "interrupted": True,
+        "bytes_sent": 11,
+        "size": 100,
+    }
+    # Only the bug is logged with its traceback.
+    assert (records[0].exc_info is not None) == isinstance(error, RuntimeError)
+    assert "secret internals" not in records[0].getMessage()
 
 
 def test_openapi_lists_each_routes_errors_with_our_body_and_no_422(client):

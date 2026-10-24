@@ -9,11 +9,18 @@ from importlib.metadata import version
 
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException
 
 from storage_service.config import Settings, load_settings
 from storage_service.errors import StorageError
 from storage_service.routers import delete, download, listing, metadata, upload
-from storage_service.routers.error_handlers import storage_error_handler, validation_error_handler
+from storage_service.routers.error_handlers import (
+    http_error_handler,
+    internal_error_handler,
+    remove_validation_responses,
+    storage_error_handler,
+    validation_error_handler,
+)
 from storage_service.service import FileService
 from storage_service.storage.base import StorageClient
 from storage_service.storage.memory import InMemoryStorage
@@ -37,6 +44,10 @@ def create_app(service: FileService | None = None) -> FastAPI:
     app.include_router(metadata.router)
     app.add_exception_handler(StorageError, storage_error_handler)
     app.add_exception_handler(RequestValidationError, validation_error_handler)
+    # Starlette's own errors (no route, wrong method, unreadable body), and bugs.
+    app.add_exception_handler(HTTPException, http_error_handler)
+    app.add_exception_handler(Exception, internal_error_handler)
+    remove_validation_responses(app)
     return app
 
 

@@ -12,6 +12,6 @@ method, and shapes the response. All decisions live in the service.
 
 Each operation lives in its own module: ``listing.py``, ``upload.py`` (create and
 replace), ``download.py``, ``metadata.py``, and ``delete.py``. ``deps.py`` hands
-every route the FileService, and ``error_handlers.py`` turns our errors into
-HTTP responses.
+every route the FileService, and ``error_handlers.py`` gives every error response,
+ours and the framework's, the same JSON format.
 """

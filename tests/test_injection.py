@@ -108,7 +108,7 @@ def test_the_app_serves_the_six_operations_and_nothing_else(client):
     }
 
     # The schema shows {key} whether or not it may contain "/", so check that a key with
-    # folders reaches every keyed route instead of FastAPI's 404 for an unknown path.
+    # folders reaches every keyed route instead of 404 RouteNotFound.
     key = "a/b/notes.txt"
     assert send_file(client, "POST", key, b"data").status_code == 201
     assert send_file(client, "PUT", key, b"more").status_code == 200

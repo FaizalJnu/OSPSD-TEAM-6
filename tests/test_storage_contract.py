@@ -101,6 +101,18 @@ def test_list_with_a_cursor_this_backend_did_not_produce_is_invalid_input(storag
         storage.list_files(prefix, 2, "garbage")
 
 
+def test_list_with_a_cursor_from_another_prefix_is_invalid_input(storage, prefix):
+    for name in ("a", "b", "c"):
+        put_bytes(storage, prefix + "docs/" + name)
+    cursor = storage.list_files(prefix + "docs/", 2, None).next_cursor
+    assert cursor is not None
+
+    # "other/" sorts before "docs/a", so a provider that just continued from the
+    # cursor's position would answer with an empty page instead of an error.
+    with pytest.raises(InvalidInput):
+        storage.list_files(prefix + "other/", 2, cursor)
+
+
 def test_list_matches_the_prefix_as_text_at_every_depth_in_byte_order(storage, prefix):
     for name in ("docs/é.txt", "docs/sub/b.txt", "docs2/c.txt", "docs/a.txt", "docs/B.txt"):
         put_bytes(storage, prefix + name)

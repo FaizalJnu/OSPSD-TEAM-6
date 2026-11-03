@@ -631,7 +631,7 @@ The body uses the [error format](#error-format).
 | Status | `error` | When |
 |---|---|---|
 | 400 | `InvalidInput` | `limit` is not a whole number from 1 to 1000 (for example `0`, `1001`, or `abc`), or `prefix` is longer than 1024 bytes. The provider is not contacted. |
-| 400 | `InvalidInput` | `cursor` is not a `next_cursor` this API returned for this `prefix`, for example `garbage`, or a key name. |
+| 400 | `InvalidInput` | `cursor` is not a `next_cursor` this API returned for this `prefix`, for example `garbage`, a key name, or a cursor from another `prefix`. The provider is not contacted. |
 | 403 | `AccessDenied` | The provider denied the service's credentials or permissions. |
 | 502 | `ProviderError` | The provider refused the request, for example because of a missing bucket. |
 | 503 | `ProviderUnavailable` | The provider could not be reached or timed out. |
@@ -650,11 +650,10 @@ retrying later sometimes succeeds (see [Error types](#error-types)).
 * **No snapshot.** Each page is read from the bucket as it is at that moment. A file
   created or deleted while a caller is paging may or may not appear.
 * **Cursors belong to one prefix.** Send a cursor back only with the `prefix` it came
-  with. The in-memory backend answers a cursor from another prefix with 400
-  `InvalidInput`. An S3-compatible provider decides for itself: it may reject the
-  cursor (400), or continue from where that cursor points, which can skip or repeat
-  files. OCI does the second: a cursor sent with a prefix that sorts before it
-  returned 200 with an empty page. How long a cursor stays usable has not been tested.
+  with. Every backend answers a cursor from another prefix with 400 `InvalidInput`.
+  On S3 the cursor carries its prefix, because providers do not all check: OCI
+  continued from the cursor's position and returned 200 with a wrong (empty) page.
+  How long a cursor stays usable depends on the provider and has not been tested.
 * **Cursor strings change.** On OCI, two requests for the same page return different
   `next_cursor` strings, and both work. Compare pages by their files, not by cursor.
 * **`content_type` is `null`**, because the S3 list call does not return it. Use

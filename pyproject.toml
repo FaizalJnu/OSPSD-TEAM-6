@@ -24,12 +24,15 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "conformance/tests"]
 # Tests that need a real bucket are opt-in: `uv run --env-file .env pytest -m provider`.
 # A later -m on the command line replaces the one here. --strict-markers turns a
 # misspelled marker into an error instead of a test that silently runs in the fast suite.
 addopts = "-m 'not provider' --strict-markers"
-markers = ["provider: needs a real S3-compatible bucket configured in .env"]
+markers = [
+    "provider: needs a real S3-compatible bucket configured in .env",
+    "proposed(source): checks a shared-contract rule that is not agreed yet (conformance/)",
+]
 
 [tool.ruff]
 line-length = 100
@@ -39,7 +42,7 @@ select = ["E", "F", "I", "B", "UP"]
 
 [tool.mypy]
 strict = true
-files = ["src", "tests"]
+files = ["src", "tests", "conformance"]
 mypy_path = "src"
 explicit_package_bases = true  # names test files tests.test_*, so the override below applies
 
@@ -50,7 +53,7 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 # Tests take pytest fixtures and stay unannotated. Their bodies are still checked.
-module = ["tests.*"]
+module = ["tests.*", "conformance.tests.*"]
 disallow_untyped_defs = false
 disallow_incomplete_defs = false
 check_untyped_defs = true

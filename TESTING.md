@@ -70,6 +70,10 @@ Each operation's file holds all of that operation's tests. There are three kinds
 Add tests to your own operation's file. A fixture that only one operation needs goes
 in that file, not in `conftest.py`.
 
+`conformance/tests/` is separate: a draft of the suite that all three Document Storage
+services must pass, run against its own reference service. It tests the shared contract,
+not this service's current API. See [conformance/README.md](conformance/README.md).
+
 ### Controlled storage
 
 [`FakeStorage`](tests/fakes.py) is a `StorageClient` for application tests. The

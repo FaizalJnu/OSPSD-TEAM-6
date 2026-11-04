@@ -35,6 +35,8 @@ docs/
   API.md             HTTP contract: keys, file info, errors, one section per operation
   PROVIDERS.md       Settings and provider-test results for each S3-compatible provider
 TESTING.md           Check commands, test layout, fixtures, and each operation's test record
+conformance/         Draft of the shared conformance suite for all three Document Storage
+                     services, with its in-memory reference service (see its README.md)
 ```
 
 Each operation's file holds all of its tests: HTTP behavior on the in-memory

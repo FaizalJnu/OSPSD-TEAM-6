@@ -1,7 +1,7 @@
 # HTTP API
 
 What each operation accepts and returns, and how it fails. The shared sections
-(keys, file info, and errors) apply to every operation. Each operation section has
+(keys, paths, file info, and errors) apply to every operation. Each operation section has
 one owner, who keeps it in agreement with the code and the tests.
 
 The running service also serves interactive docs at `/docs` and the schema at
@@ -23,7 +23,7 @@ B=http://127.0.0.1:8000
 | [Replace](#create-and-replace) | `PUT /files/{key}` | Debasmith Mandal |
 | [Download](#download) | `GET /files/{key}` | Vikram Markali |
 | [Metadata](#metadata) | `GET /metadata/{key}` | Darsh Shani |
-| [Delete](#delete) | `DELETE /files/{key}` | Faizal Rahman |
+| [Delete](#delete) | `DELETE /files?path=` | Faizal Rahman |
 | [List](#list) | `GET /files` | Prateek Saxena |
 
 ## Keys
@@ -47,6 +47,31 @@ In a URL, the key is everything after `/files/` or `/metadata/`, slashes include
 Percent-encode characters that cannot appear in a URL path. For example,
 `with spaces.txt` is sent as `/files/with%20spaces.txt`. The rules apply to the
 decoded key.
+
+## Paths
+
+Delete names its file with a **path** in the `path` query parameter. The other
+operations still take a [key](#keys) in the URL until they move to the shared routes.
+
+A path can be sent with or without its leading `/`: `docs/report.pdf` and
+`/docs/report.pdf` name the same file. Its canonical form always starts with `/`, and
+the file's key is the canonical path without that `/`, so a file stored under the key
+`docs/report.pdf` is at the path `/docs/report.pdf`. Files already in the bucket keep
+their keys.
+
+A path must:
+
+* be non-empty, and not be `/` alone
+* be at most 1024 bytes when encoded as UTF-8, counting the leading `/`
+* contain no ASCII control characters (code points 0 to 31, and 127)
+* not end with `/`, and not contain `//`
+* not have a segment (the text between slashes) that is exactly `.` or `..`
+
+An operation given a path that breaks a rule, or no `path` at all, returns 400
+`InvalidInput` without contacting the provider.
+
+Percent-encode the path in a query string. A `+` there means a space, so a literal `+`
+must be sent as `%2B`. `curl -G --data-urlencode "path=$P"` does the encoding for you.
 
 ## File info
 
@@ -289,7 +314,7 @@ curl -s -F "file=@hello.txt" $B/files/demo/me/hello.txt           # 201
 curl -s -F "file=@hello.txt" $B/files/demo/me/hello.txt           # 409 FileAlreadyExists
 printf 'hello again' > hello2.txt
 curl -s -X PUT -F "file=@hello2.txt" $B/files/demo/me/hello.txt   # 200, size 11, new etag
-curl -s -X DELETE $B/files/demo/me/hello.txt                      # clean up: 204
+curl -s -X DELETE "$B/files?path=demo/me/hello.txt"               # clean up: 204
 ```
 
 The Create response looks like this (`etag` and `last_modified` will differ):
@@ -383,7 +408,7 @@ echo hello from the download example> hello.txt
 curl.exe -s -F "file=@hello.txt" %B%/files/examples/hello.txt
 curl.exe -s -D - -o back.txt %B%/files/examples/hello.txt
 fc /b hello.txt back.txt
-curl.exe -i -X DELETE %B%/files/examples/hello.txt
+curl.exe -i -X DELETE "%B%/files?path=examples/hello.txt"
 del hello.txt back.txt
 ```
 
@@ -477,7 +502,7 @@ K="metadata-demo-$(date +%s)-$$/report.txt"
 printf 'hello' > metadata-sample.txt
 curl -i -F 'file=@metadata-sample.txt' "$B/files/$K"   # 201
 curl -i "$B/metadata/$K"                             # 200
-curl -i -X DELETE "$B/files/$K"                     # 204
+curl -i -X DELETE "$B/files?path=$K"                 # 204
 curl -i "$B/metadata/$K"                             # 404 FileNotFound
 rm metadata-sample.txt
 ```
@@ -490,7 +515,10 @@ See [Metadata in TESTING.md](../TESTING.md#metadata) for recorded responses.
 
 ## Delete
 
-`DELETE /files/{key}`. Owner: **Faizal Rahman**.
+`DELETE /files?path=`. Owner: **Faizal Rahman**.
+
+**Changed:** `DELETE /files/{key}` no longer exists. Send the key as `?path=` instead.
+Stored files keep their names, so no data moves.
 
 ### Meaning
 
@@ -498,10 +526,10 @@ Remove one file. This changes stored files.
 
 ### Request
 
-The required path `key` is the full, decoded file name, as for Metadata:
-`/files/docs/report.pdf` deletes `docs/report.pdf`. It follows the shared
-[key rules](#keys). There is no request body and no query parameter. Invalid keys
-are rejected before storage is called.
+The required query parameter `path` names the file: `/files?path=docs/report.pdf`
+deletes the file stored as `docs/report.pdf`. It follows the shared
+[path rules](#paths). There is no request body. A missing or invalid path is rejected
+before storage is called.
 
 ### Success
 
@@ -509,7 +537,7 @@ are rejected before storage is called.
 
 ### Side effects
 
-The file under `key` is gone: Download and Metadata return 404 for it, and List no
+The file at `path` is gone: Download and Metadata return 404 for it, and List no
 longer includes it. Nothing else in the bucket changes.
 
 The service makes two provider calls. It first checks that the file exists (`stat`,
@@ -522,9 +550,9 @@ Responses use the shared [error format](#error-format):
 
 | Status | Error | When |
 |---|---|---|
-| 400 | `InvalidInput` | The decoded key breaks a key rule. The provider is not contacted. |
+| 400 | `InvalidInput` | The path is missing or breaks a path rule. The provider is not contacted. |
 | 403 | `AccessDenied` | The provider denied the service's credentials or permissions. |
-| 404 | `FileNotFound` | No file exists under the key. Nothing is deleted. |
+| 404 | `FileNotFound` | No file exists at the path. Nothing is deleted. |
 | 502 | `ProviderError` | The provider rejects the check or the delete, for example because of a missing bucket. |
 | 503 | `ProviderUnavailable` | The provider cannot be reached. |
 
@@ -561,14 +589,14 @@ B=http://127.0.0.1:8000
 K="delete-demo-$(date +%s)-$$/old.txt"
 printf 'bye' > delete-sample.txt
 curl -i -F 'file=@delete-sample.txt' "$B/files/$K"   # 201
-curl -i -X DELETE "$B/files/$K"                     # 204, empty body
-curl -i -X DELETE "$B/files/$K"                     # 404 FileNotFound
+curl -i -X DELETE "$B/files?path=$K"                 # 204, empty body
+curl -i -X DELETE "$B/files?path=$K"                 # 404 FileNotFound
 curl -i "$B/metadata/$K"                             # 404 FileNotFound
 rm delete-sample.txt
 ```
 
 The second delete returns
-`{"error":"FileNotFound","detail":"no file named '<key>'"}`. The first delete
+`{"error":"FileNotFound","detail":"no file at '/<key>'"}`. The first delete
 already removed the sample from the bucket, so only the local file needs cleaning up.
 See [Delete in TESTING.md](../TESTING.md#delete) for the recorded tests.
 
@@ -699,7 +727,7 @@ curl -s -G $B/files --data-urlencode "prefix=$P" --data-urlencode "limit=2" --da
 Clean up, then check that the prefix is empty again:
 
 ```bash
-for name in a b c; do curl -s -o /dev/null -w '%{http_code}\n' -X DELETE "$B/files/$P$name.txt"; done
+for name in a b c; do curl -s -o /dev/null -w '%{http_code}\n' -X DELETE "$B/files?path=$P$name.txt"; done
 curl -s -G $B/files --data-urlencode "prefix=$P"
 rm x.txt
 ```

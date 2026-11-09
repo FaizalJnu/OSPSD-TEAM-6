@@ -103,7 +103,7 @@ def test_the_app_serves_the_six_operations_and_nothing_else(client):
         ("POST", "/files/{key}"),
         ("PUT", "/files/{key}"),
         ("GET", "/files/{key}"),
-        ("DELETE", "/files/{key}"),
+        ("DELETE", "/files"),
         ("GET", "/metadata/{key}"),
     }
 
@@ -114,4 +114,4 @@ def test_the_app_serves_the_six_operations_and_nothing_else(client):
     assert send_file(client, "PUT", key, b"more").status_code == 200
     assert client.get(f"/files/{key}").content == b"more"
     assert client.get(f"/metadata/{key}").json()["key"] == key
-    assert client.delete(f"/files/{key}").status_code == 204
+    assert client.delete("/files", params={"path": key}).status_code == 204

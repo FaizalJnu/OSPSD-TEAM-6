@@ -229,7 +229,7 @@ def _allowed_methods(request: Request) -> str:
     """Every method some route accepts for this path, for a 405's ``Allow`` header.
 
     Starlette's own header names only the first route that matches the path: ``POST``
-    for ``/files/{key}``, which also accepts DELETE, GET, and PUT. So ask every route
+    for ``/files/{key}``, which also accepts GET and PUT. So ask every route
     whether it would accept the path with each method.
     """
     path = {

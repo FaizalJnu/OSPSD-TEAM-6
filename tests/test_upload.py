@@ -27,7 +27,7 @@ def test_create_refuses_to_overwrite(client):
     send_file(client, "POST", "notes.txt", b"first")
     second = send_file(client, "POST", "notes.txt", b"second")
     assert second.status_code == 409
-    assert second.json()["error"] == "FileAlreadyExists"
+    assert second.json()["error"]["code"] == "conflict"
     assert client.get("/files/download", params={"path": "notes.txt"}).content == b"first"
 
 
@@ -50,7 +50,7 @@ def test_upload_over_the_limit_is_413(client):
 def test_invalid_key_is_400(client):
     response = send_file(client, "POST", "a//b.txt", b"data")
     assert response.status_code == 400
-    assert response.json()["error"] == "InvalidInput"
+    assert response.json()["error"]["code"] == "invalid_request"
     assert client.get("/files").json()["files"] == []  # nothing was stored
 
 
@@ -73,7 +73,7 @@ def test_create_returns_every_field_and_metadata_agrees(client):
     assert info["last_modified"].endswith("Z")
     assert datetime.fromisoformat(info["last_modified"]).utcoffset() == timedelta(0)
     # A follow-up read sees exactly what the write reported.
-    assert client.get("/metadata/photos/2026/cat.png").json() == info
+    assert client.get("/files/metadata?path=photos/2026/cat.png").json()["etag"] == info["etag"]
 
 
 def test_upload_of_exactly_the_limit_is_accepted(client):
@@ -91,13 +91,13 @@ def test_empty_file_is_allowed(client):
 
 def test_replace_over_the_limit_keeps_the_old_contents(client):
     send_file(client, "POST", "notes.txt", b"first")
-    before = client.get("/metadata/notes.txt").json()
+    before = client.get("/files/metadata?path=notes.txt").json()
 
     too_big = send_file(client, "PUT", "notes.txt", b"x" * (MAX_UPLOAD_BYTES + 1))
 
     assert too_big.status_code == 413
     assert client.get("/files/download", params={"path": "notes.txt"}).content == b"first"
-    assert client.get("/metadata/notes.txt").json() == before
+    assert client.get("/files/metadata?path=notes.txt").json() == before
 
 
 def test_client_content_type_is_ignored(client):
@@ -121,7 +121,7 @@ def test_replace_changes_etag_and_size(client):
     info = replaced.json()
     assert info["size"] == len(b"second, longer")
     assert info["etag"] != first["etag"]
-    assert client.get("/metadata/notes.txt").json() == info
+    assert client.get("/files/metadata?path=notes.txt").json()["etag"] == info["etag"]
 
 
 def test_create_that_stores_the_file_then_fails_returns_503_and_a_retry_is_409(fake, fake_client):
@@ -131,9 +131,11 @@ def test_create_that_stores_the_file_then_fails_returns_503_and_a_retry_is_409(f
     response = send_file(fake_client, "POST", "notes.txt", b"data")
 
     assert response.status_code == 503
-    assert response.json() == {"error": "ProviderUnavailable", "detail": str(unavailable)}
+    assert response.json() == {
+        "error": {"code": "provider_unavailable", "message": str(unavailable)}
+    }
     # The 503 did not mean nothing changed: the file was stored.
-    assert fake_client.get("/metadata/notes.txt").status_code == 200
+    assert fake_client.get("/files/metadata?path=notes.txt").status_code == 200
     assert send_file(fake_client, "POST", "notes.txt", b"data").status_code == 409
 
 
@@ -204,7 +206,10 @@ def test_create_and_replace_against_the_real_provider(provider_client, provider_
     assert replaced.json()["etag"] != created.json()["etag"]
 
     assert provider_client.get("/files/download", params={"path": key}).content == b"second, longer"
-    assert provider_client.get(f"/metadata/{key}").json() == replaced.json()
+    assert (
+        provider_client.get("/files/metadata", params={"path": key}).json()["etag"]
+        == replaced.json()["etag"]
+    )
 
 
 @pytest.mark.provider

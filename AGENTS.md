@@ -19,7 +19,7 @@ tests/
   conftest.py              Shared fixtures: in-memory client, FakeStorage client, stubbed S3, real-provider client
   test_upload.py           POST and PUT /files/{key} (create and replace)
   test_download.py         GET /files/download?path=
-  test_metadata.py         GET /metadata/{key}
+  test_metadata.py         GET /files/metadata?path=
   test_bucket_errors.py    Missing-bucket errors across metadata and existence checks
   test_delete.py           DELETE /files?path=
   test_list.py             GET /files

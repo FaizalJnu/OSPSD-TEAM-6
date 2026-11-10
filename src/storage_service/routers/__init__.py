@@ -8,7 +8,7 @@ method, and shapes the response. All decisions live in the service.
     PUT    /files/{key}        replace an existing file (same form field)
     GET    /files/download     download a file (query: path)
     DELETE /files              delete a file (query: path)
-    GET    /metadata/{key}     a file's info as JSON
+    GET    /files/metadata     a file's info as JSON (query: path)
 
 Each operation lives in its own module: ``listing.py``, ``upload.py`` (create and
 replace), ``download.py``, ``metadata.py``, and ``delete.py``. ``deps.py`` hands

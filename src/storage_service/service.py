@@ -30,15 +30,23 @@ from contextlib import contextmanager
 from itertools import batched
 from typing import BinaryIO
 
+from cloud_storage_api.errors import NotFoundError as SharedNotFoundError
+from cloud_storage_api.errors import StorageError as SharedStorageError
+
 from storage_service.errors import (
     FileAlreadyExists,
     FileNotFound,
     FileTooLarge,
     InvalidInput,
     ProviderError,
-    StorageError,
 )
-from storage_service.models import FileDownload, FileInfo, FilePage
+from storage_service.models import (
+    CommonFileInfo,
+    FileDownload,
+    FileInfo,
+    FilePage,
+    common_file_info,
+)
 from storage_service.storage.base import StorageClient
 
 MAX_KEY_BYTES = 1024  # S3's limit on key length
@@ -80,6 +88,11 @@ class FileService:
         validate_key(key)
         with _storage_call("stat"):
             return self._storage.stat(key)
+
+    def get_metadata(self, path: str) -> CommonFileInfo:
+        """Read canonical shared metadata without reading any file contents."""
+        key = path_to_key(normalize_path(path))
+        return common_file_info(self.stat(key))
 
     def list_files(self, prefix: str = "", limit: int = 100, cursor: str | None = None) -> FilePage:
         if not 1 <= limit <= MAX_PAGE_SIZE:
@@ -135,11 +148,13 @@ class FileService:
             try:
                 with _storage_call("delete_many"):
                     failed = self._storage.delete_many(batch)
-            except StorageError as err:
+            except SharedStorageError as err:
                 if number == 0:
                     raise  # no batch has finished, so report the failure as it is
                 raise ProviderError(
-                    unfinished, storage_call="delete_many", provider_code=err.provider_code
+                    unfinished,
+                    storage_call="delete_many",
+                    provider_code=getattr(err, "provider_code", None),
                 ) from err
             if failed:
                 raise ProviderError(unfinished, storage_call="delete_many")
@@ -148,7 +163,7 @@ class FileService:
         try:
             with _storage_call("stat"):
                 self._storage.stat(key)
-        except FileNotFound:
+        except SharedNotFoundError:
             return False
         return True
 
@@ -162,9 +177,10 @@ def _storage_call(name: str) -> Iterator[None]:
     """Record on any error raised inside the block that storage call ``name`` raised it."""
     try:
         yield
-    except StorageError as err:
-        if err.storage_call is None:
-            err.storage_call = name
+    except SharedStorageError as err:
+        if getattr(err, "storage_call", None) is None:
+            # Tagged exceptions have no private diagnostic fields of their own.
+            err.__dict__["storage_call"] = name
         raise
 
 

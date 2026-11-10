@@ -173,7 +173,7 @@ def test_prefix_of_1024_bytes_is_accepted_and_1025_is_400(client):
 
     response = client.get("/files", params={"prefix": at_limit + "a"})
     assert response.status_code == 400
-    assert response.json()["error"] == "InvalidInput"
+    assert response.json()["error"]["code"] == "invalid_request"
 
 
 @pytest.mark.parametrize("cursor", ["garbage", "abc123", "docs/a.txt"])
@@ -183,7 +183,7 @@ def test_list_with_a_cursor_this_api_did_not_produce_is_400(client, cursor):
     response = client.get("/files", params={"prefix": "docs/", "cursor": cursor})
 
     assert response.status_code == 400
-    assert response.json()["error"] == "InvalidInput"
+    assert response.json()["error"]["code"] == "invalid_request"
 
 
 def test_list_with_a_cursor_from_another_prefix_is_400(client):
@@ -194,7 +194,7 @@ def test_list_with_a_cursor_from_another_prefix_is_400(client):
     response = client.get("/files", params={"prefix": "img/", "cursor": cursor})
 
     assert response.status_code == 400
-    assert response.json()["error"] == "InvalidInput"
+    assert response.json()["error"]["code"] == "invalid_request"
 
 
 def test_files_present_for_the_whole_traversal_appear_once_despite_changes(client):
@@ -288,7 +288,7 @@ def test_invalid_list_input_never_reaches_storage(controlled_storage, controlled
     response = controlled_client.get("/files", params=params)
 
     assert response.status_code == 400
-    assert response.json()["error"] == "InvalidInput"
+    assert response.json()["error"]["code"] == "invalid_request"
     assert controlled_storage.mock_calls == []
 
 
@@ -308,7 +308,7 @@ def test_list_reports_storage_failures_in_our_error_format(
     response = controlled_client.get("/files", params={"prefix": "docs/"})
 
     assert response.status_code == status
-    assert response.json() == {"error": type(error).__name__, "detail": str(error)}
+    assert response.json() == {"error": {"code": error.code, "message": str(error)}}
 
 
 # Translation (Level 3): S3Storage over a stubbed boto3 client. No network.

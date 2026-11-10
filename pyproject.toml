@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "boto3>=1.43.108",
+    "cloud-storage-api",
     "fastapi>=0.142.2",
     "python-multipart>=0.0.32",
     "uvicorn>=0.54.0",
@@ -54,3 +55,6 @@ module = ["tests.*"]
 disallow_untyped_defs = false
 disallow_incomplete_defs = false
 check_untyped_defs = true
+
+[tool.uv.sources]
+cloud-storage-api = { git = "https://github.com/Dayana20/ospsd26-cloud-storage", subdirectory = "src/cloud_storage_api", rev = "0.2.0" }

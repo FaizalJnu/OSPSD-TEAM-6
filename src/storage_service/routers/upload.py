@@ -17,18 +17,18 @@ router = APIRouter()
     responses=error_responses(
         {
             400: (
-                "InvalidInput: the key violates a key rule, or the file form field is "
+                "invalid_request: the key violates a key rule, or the file form field is "
                 "missing or cannot be read."
             ),
-            403: "AccessDenied: the provider denied the service access.",
-            409: "FileAlreadyExists: a file already exists under the key.",
-            413: "FileTooLarge: the upload is larger than MAX_UPLOAD_BYTES.",
+            403: "permission_denied: the provider denied the service access.",
+            409: "conflict: a file already exists under the key.",
+            413: "file_too_large: the upload is larger than MAX_UPLOAD_BYTES.",
             502: (
-                "ProviderError: the storage provider rejected the request. "
+                "provider_error: the storage provider rejected the request. "
                 "The write may still have happened."
             ),
             503: (
-                "ProviderUnavailable: the storage provider could not be reached. "
+                "provider_unavailable: the storage provider could not be reached. "
                 "The write may still have happened."
             ),
         }
@@ -43,18 +43,18 @@ def create_file(key: str, file: UploadFile, service: Service) -> FileInfo:
     responses=error_responses(
         {
             400: (
-                "InvalidInput: the key violates a key rule, or the file form field is "
+                "invalid_request: the key violates a key rule, or the file form field is "
                 "missing or cannot be read."
             ),
-            403: "AccessDenied: the provider denied the service access.",
-            404: "FileNotFound: no file exists under the key.",
-            413: "FileTooLarge: the upload is larger than MAX_UPLOAD_BYTES.",
+            403: "permission_denied: the provider denied the service access.",
+            404: "not_found: no file exists under the key.",
+            413: "file_too_large: the upload is larger than MAX_UPLOAD_BYTES.",
             502: (
-                "ProviderError: the storage provider rejected the request. "
+                "provider_error: the storage provider rejected the request. "
                 "The write may still have happened."
             ),
             503: (
-                "ProviderUnavailable: the storage provider could not be reached. "
+                "provider_unavailable: the storage provider could not be reached. "
                 "The write may still have happened."
             ),
         }

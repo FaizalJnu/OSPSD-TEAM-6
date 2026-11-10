@@ -11,6 +11,7 @@ import base64
 import binascii
 import hashlib
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import BinaryIO
@@ -60,6 +61,11 @@ class InMemoryStorage:
 
     def delete(self, key: str) -> None:
         self._files.pop(key, None)
+
+    def delete_many(self, keys: Sequence[str]) -> list[str]:
+        for key in keys:
+            self._files.pop(key, None)
+        return []
 
     def _lookup(self, key: str) -> _StoredFile:
         stored = self._files.get(key)

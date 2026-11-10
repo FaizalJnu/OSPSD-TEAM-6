@@ -86,6 +86,7 @@ and nothing else:
 | `stat` | Metadata; the existence check before Create, Replace, and Delete | Read a file's info without its contents. "Missing" is `FileNotFound`, so no separate `exists` method is needed. |
 | `list_files` | List | One page of files under a prefix, with an opaque cursor. |
 | `delete` | Delete | Remove a file. Silent for a missing key, like S3; the service turns that into a 404 by checking with `stat` first. |
+| `delete_many` | Delete of a folder | Remove up to 1000 keys in one provider call, and return the keys it could not remove, because S3 reports those in a successful response. The service lists the keys and splits them into batches. |
 
 Everything provider-specific stays behind it: the endpoint, bucket, and credentials;
 path-style addressing; retries and timeouts; multipart uploads; ETag quoting; S3's
@@ -147,6 +148,9 @@ Replacing S3 with another provider means one new module in `storage/` that imple
 * Create, Replace, and Delete check existence and then act in two provider calls, so
   two writers racing on one key can both pass the check. See the
   [README](../README.md#known-limitations).
+* A folder Delete lists every key before deleting any, so a failed listing changes
+  nothing and deleting cannot disturb the listing's cursor. The cost is that the request
+  holds every key under the folder in memory. Only the keys, never file contents.
 * A provider failure after a download's headers are sent cuts the body off instead of
   returning an error. It is logged as an interrupted download. See the Download gaps
   in [TESTING.md](../TESTING.md#download).

@@ -66,7 +66,7 @@ _STATUS_FOR_ERROR: dict[type[StorageError], int] = {
 # Route names (the endpoint functions) of the operations that change stored files,
 # and the storage calls that do the change.
 _WRITE_OPERATIONS = {"create_file", "replace_file", "delete_file"}
-_WRITE_CALLS = {"put", "delete"}
+_WRITE_CALLS = {"put", "delete", "delete_many"}
 
 # The methods a route can accept, in the order a 405's Allow header lists them.
 _HTTP_METHODS = ("DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT")

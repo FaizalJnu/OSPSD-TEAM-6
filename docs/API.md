@@ -50,8 +50,9 @@ decoded key.
 
 ## Paths
 
-Delete names its file with a **path** in the `path` query parameter. The other
-operations still take a [key](#keys) in the URL until they move to the shared routes.
+Delete names its file or folder with a **path** in the `path` query parameter. The
+other operations still take a [key](#keys) in the URL until they move to the shared
+routes.
 
 A path can be sent with or without its leading `/`: `docs/report.pdf` and
 `/docs/report.pdf` name the same file. Its canonical form always starts with `/`, and
@@ -119,7 +120,7 @@ service:
 |---|---|---|---|
 | `InvalidInput` | 400 | A key breaks a [key rule](#keys), the List `prefix` is longer than 1024 bytes, the List `limit` is not a whole number from 1 to 1000, or Create or Replace is missing the `file` form field or sends a `multipart/form-data` body that cannot be read (for example, no boundary). | No. Change the input. |
 | `AccessDenied` | 403 | The provider refused the service's credentials or permissions, for example a wrong secret key or a bucket policy that does not allow the operation. This is the service's configuration, not the caller's. | No, not until whoever runs the service fixes the credentials or permissions. |
-| `FileNotFound` | 404 | No file exists under the key (Download, Metadata, Replace, Delete). | Not until a file is created under that key. |
+| `FileNotFound` | 404 | No file exists under the key (Download, Metadata, Replace), or no file or folder exists at the path (Delete). | Not until a file is created there. |
 | `FileAlreadyExists` | 409 | Create was called for a key that already has a file. | No. Use Replace, or Delete the file first. |
 | `FileTooLarge` | 413 | The upload to Create or Replace is larger than `MAX_UPLOAD_BYTES` (default 1 GiB). | No, not with the same file. |
 | `ProviderError` | 502 | The provider refused the request for another reason: a missing bucket, an unsupported request, and so on. Usually a configuration problem, but it can also be a provider-side failure, such as throttling or an internal error, that lasted through the client's own retries. | Usually not: fix the configuration first. If the configuration is correct, retrying later sometimes succeeds. |
@@ -144,6 +145,9 @@ Create and Replace store the file and then read its info back from the provider.
 that read fails, the caller gets the error although the new contents were stored. A
 timeout can also hide a write or delete that the provider completed. Before retrying,
 check the file with Metadata. Retrying a Create whose file was stored returns 409.
+
+A folder Delete can also fail with some of its files gone and others still there. See
+Retry under [Delete](#delete).
 
 ### What stays internal
 
@@ -170,7 +174,7 @@ Every failed request writes one JSON line to the server's log (stderr), for exam
 | `operation` | `create_file`, `replace_file`, `download_file`, `get_metadata`, `delete_file`, or `list_files`. `null` when the request matched no operation (404 `RouteNotFound`, 405 `MethodNotAllowed`). |
 | `status`, `error`, `detail` | Exactly what the caller received. For an interrupted download, `status` is the 200 the caller received, and `error` and `detail` name the failure it could not be told about. |
 | `provider_involved` | `true` when a storage call raised the error or decided it (a 404 or 409 from the existence check). `false` when the request was rejected before storage was called. `null` after a 500 `InternalError`: a bug can strike anywhere, so we cannot tell. |
-| `storage_call` | The storage call involved: `stat`, `put`, `get`, `list_files`, or `delete`, or `null`. |
+| `storage_call` | The storage call involved: `stat`, `put`, `get`, `list_files`, `delete`, or `delete_many`, or `null`. |
 | `provider_code` | Only when the provider or its SDK named the failure, for example `NoSuchBucket`, `403`, or `EndpointConnectionError`. Never sent to the caller. |
 | `write_outcome` | Create, Replace, and Delete only. `not_attempted` when the request failed before the write call, so nothing changed. `unknown` when the write call itself failed, or after a 500 `InternalError`: the provider may have completed it (see [After a failed write](#after-a-failed-write)). |
 | `interrupted`, `bytes_sent`, `size` | Download only, when reading the file failed after the 200 status and headers were sent: `interrupted` is `true`, `bytes_sent` is how many bytes the caller was sent, and `size` is the file's size, the `Content-Length` it was promised. |
@@ -522,14 +526,16 @@ Stored files keep their names, so no data moves.
 
 ### Meaning
 
-Remove one file. This changes stored files.
+Remove one file, or a folder and everything under it. This changes stored files.
 
 ### Request
 
-The required query parameter `path` names the file: `/files?path=docs/report.pdf`
-deletes the file stored as `docs/report.pdf`. It follows the shared
-[path rules](#paths). There is no request body. A missing or invalid path is rejected
-before storage is called.
+The required query parameter `path` names the file or folder:
+`/files?path=docs/report.pdf` deletes the file stored as `docs/report.pdf`, and
+`/files?path=docs` deletes every file whose key starts with `docs/`, at every depth.
+It follows the shared [path rules](#paths), so a folder has no trailing `/`, and `/`
+alone is rejected: this route cannot empty the bucket. There is no request body. A
+missing or invalid path is rejected before storage is called.
 
 ### Success
 
@@ -537,12 +543,20 @@ before storage is called.
 
 ### Side effects
 
-The file at `path` is gone: Download and Metadata return 404 for it, and List no
-longer includes it. Nothing else in the bucket changes.
+S3 has no real folders: a folder is the files whose keys share a prefix. The service
+first looks for a file at the path (`stat`, an S3 `HeadObject`).
 
-The service makes two provider calls. It first checks that the file exists (`stat`,
-an S3 `HeadObject`), then deletes it (`delete`, an S3 `DeleteObject`). If the check
-fails, the delete is never sent and nothing changes.
+* **If there is a file,** it is deleted (`delete`, an S3 `DeleteObject`). Nothing else
+  in the bucket changes. S3 allows a file and a folder at the same path, such as `docs`
+  and `docs/a.txt`. Then only the file is deleted.
+* **If there is no file,** the service lists every key under `<path>/` (`list_files`,
+  an S3 `ListObjectsV2` per 1000 keys), then deletes them (`delete_many`, an S3
+  `DeleteObjects` per 1000 keys). The `/` is part of the match, so deleting `docs`
+  leaves `docs2/a.txt` and `docs-backup/b.txt` alone.
+
+Afterwards, Download and Metadata return 404 for every deleted file, and List no longer
+includes them. If the check or the listing fails, nothing is deleted and nothing
+changes.
 
 ### Errors
 
@@ -552,8 +566,8 @@ Responses use the shared [error format](#error-format):
 |---|---|---|
 | 400 | `InvalidInput` | The path is missing or breaks a path rule. The provider is not contacted. |
 | 403 | `AccessDenied` | The provider denied the service's credentials or permissions. |
-| 404 | `FileNotFound` | No file exists at the path. Nothing is deleted. |
-| 502 | `ProviderError` | The provider rejects the check or the delete, for example because of a missing bucket. |
+| 404 | `FileNotFound` | No file exists at the path and no file is under it. Nothing is deleted. `detail` is `no file or folder at '/<path>'`. |
+| 502 | `ProviderError` | The provider rejects the check, the listing, or the delete, for example because of a missing bucket. Or a folder delete did not finish (see below). |
 | 503 | `ProviderUnavailable` | The provider cannot be reached. |
 
 An ambiguous HEAD 404 is checked against the bucket before reporting a missing
@@ -561,28 +575,50 @@ file, and nothing is deleted if that check fails. A missing bucket returns 502
 `ProviderError`, a denied one 403 `AccessDenied`, and a connection failure during that
 check 503. See [Bucket checks](#bucket-checks).
 
+A folder delete is not all-or-nothing. It stops at the first batch of up to 1000 keys
+that does not finish:
+
+| What went wrong | Response | What may have changed |
+|---|---|---|
+| The check or the listing failed | That failure's own status | Nothing. |
+| The first batch failed as a whole | That failure's own status: 403, 502, or 503 | That batch may be partly or fully deleted. |
+| A later batch failed, whatever the cause | 502 `ProviderError` | Every earlier batch is deleted. That batch may be too. |
+| The provider reported keys it could not delete, in any batch | 502 `ProviderError` | The other keys of that batch and every earlier batch are deleted. |
+
+The last two return the `detail`
+`the delete of folder '/docs' did not finish; some files may remain`, with the
+canonical path of the folder. They are always 502, even for a timeout, because the
+caller most needs to know that the folder may be partly deleted.
+
 ### Retry
 
 * After a success, repeating the request returns 404.
 * After a 400 or 404, repeating it unchanged gives the same result.
-* After a 502 or 503, the file may or may not be gone (see
+* After a 502 or 503 for a file, the file may or may not be gone (see
   [After a failed write](#after-a-failed-write)). Check with Metadata: 404 means it
   is gone. A 502 is usually a configuration problem, but it can also be a
   provider-side failure that outlasted the client's retries, so retrying later
   sometimes succeeds. Retrying later may help after a 503.
+* After an error for a folder, List with `prefix=<path>/` shows what remains, and
+  repeating the request deletes it. The retry returns 204 when it finishes, or 404
+  if the failed request had already removed everything.
 
 ### Assumptions
 
-* The 404 for a missing file is our rule, not the provider's. S3's `DeleteObject`
-  succeeds silently for a missing key, so the service checks first.
+* The 404 for a missing file or folder is our rule, not the provider's. S3's
+  `DeleteObject` succeeds silently for a missing key, so the service checks first.
 * The check and the delete are two separate calls. If another client deletes the
   file between them, this request still returns 204. If another client replaces the
   file between them, the new contents are deleted. The same race is listed under
   [Known limitations](../README.md#known-limitations).
+* A folder delete removes the keys it listed. A file added under the folder after the
+  listing stays there, even though the request returns 204.
+* `DeleteObjects` answers 200 even when it could not delete some keys, so the service
+  reads the list of failed keys in the response.
 
 ### Example
 
-With the memory backend or a configured test bucket, choose a unique key:
+With the memory backend or a configured test bucket, choose a unique name:
 
 ```bash
 B=http://127.0.0.1:8000
@@ -592,12 +628,18 @@ curl -i -F 'file=@delete-sample.txt' "$B/files/$K"   # 201
 curl -i -X DELETE "$B/files?path=$K"                 # 204, empty body
 curl -i -X DELETE "$B/files?path=$K"                 # 404 FileNotFound
 curl -i "$B/metadata/$K"                             # 404 FileNotFound
+
+F="delete-demo-$(date +%s)-$$-folder"
+curl -s -o /dev/null -F 'file=@delete-sample.txt' "$B/files/$F/a.txt"
+curl -s -o /dev/null -F 'file=@delete-sample.txt' "$B/files/$F/sub/b.txt"
+curl -i -X DELETE "$B/files?path=$F"                 # 204: both files are gone
+curl -i -X DELETE "$B/files?path=$F"                 # 404 FileNotFound
 rm delete-sample.txt
 ```
 
-The second delete returns
-`{"error":"FileNotFound","detail":"no file at '/<key>'"}`. The first delete
-already removed the sample from the bucket, so only the local file needs cleaning up.
+The second delete of each returns
+`{"error":"FileNotFound","detail":"no file or folder at '/<path>'"}`. The first delete
+already removed the samples from the bucket, so only the local file needs cleaning up.
 See [Delete in TESTING.md](../TESTING.md#delete) for the recorded tests.
 
 ## List

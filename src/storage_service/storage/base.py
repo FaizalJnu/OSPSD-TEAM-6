@@ -12,6 +12,8 @@ Rules every backend must follow:
 * Keys are used exactly as given. Validating them is the service's job.
 * ``stat`` and ``get`` raise ``FileNotFound`` when the key does not exist.
 * ``delete`` on a missing key succeeds silently, because that is how S3 behaves.
+* ``delete_many`` treats a missing key the same way, and returns the keys it could
+  not remove instead of raising for them.
 * ``list_files`` returns keys in sorted order, at most ``limit`` per page, with
   ``content_type`` set to None (S3 listings do not include it).
 * Provider failures surface as ``ProviderError`` or ``ProviderUnavailable``.
@@ -20,6 +22,7 @@ Rules every backend must follow:
 ``tests/test_storage_contract.py`` checks these rules against every backend.
 """
 
+from collections.abc import Sequence
 from typing import BinaryIO, Protocol
 
 from storage_service.models import FileDownload, FileInfo, FilePage
@@ -112,4 +115,16 @@ class StorageClient(Protocol):
 
     def delete(self, key: str) -> None:
         """Remove a file. Does nothing if it does not exist."""
+        ...
+
+    def delete_many(self, keys: Sequence[str]) -> list[str]:
+        """Remove several files in one provider call. Return the keys it could not remove.
+
+        ``keys`` holds from 1 to 1000 keys; the service splits larger sets into batches
+        before calling. A key that does not exist counts as removed, as for ``delete``.
+        An empty result means every key is gone.
+
+        Raises ``AccessDenied``, ``ProviderError`` or ``ProviderUnavailable`` if the call
+        as a whole fails. Any of the keys may or may not have been removed by then.
+        """
         ...

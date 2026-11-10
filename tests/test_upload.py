@@ -17,7 +17,7 @@ def test_upload_then_download_returns_identical_bytes(client):
     assert created.status_code == 201
     assert created.json()["size"] == len(data)
 
-    downloaded = client.get("/files/photos/cat.png")
+    downloaded = client.get("/files/download", params={"path": "photos/cat.png"})
     assert downloaded.status_code == 200
     assert downloaded.content == data
     assert downloaded.headers["content-type"] == "image/png"
@@ -28,13 +28,13 @@ def test_create_refuses_to_overwrite(client):
     second = send_file(client, "POST", "notes.txt", b"second")
     assert second.status_code == 409
     assert second.json()["error"] == "FileAlreadyExists"
-    assert client.get("/files/notes.txt").content == b"first"
+    assert client.get("/files/download", params={"path": "notes.txt"}).content == b"first"
 
 
 def test_replace_overwrites_an_existing_file(client):
     send_file(client, "POST", "notes.txt", b"first")
     assert send_file(client, "PUT", "notes.txt", b"second").status_code == 200
-    assert client.get("/files/notes.txt").content == b"second"
+    assert client.get("/files/download", params={"path": "notes.txt"}).content == b"second"
 
 
 def test_replace_of_a_missing_file_is_404(client):
@@ -44,7 +44,7 @@ def test_replace_of_a_missing_file_is_404(client):
 def test_upload_over_the_limit_is_413(client):
     too_big = b"x" * (MAX_UPLOAD_BYTES + 1)
     assert send_file(client, "POST", "big.bin", too_big).status_code == 413
-    assert client.get("/files/big.bin").status_code == 404
+    assert client.get("/files/download", params={"path": "big.bin"}).status_code == 404
 
 
 def test_invalid_key_is_400(client):
@@ -86,7 +86,7 @@ def test_empty_file_is_allowed(client):
     created = send_file(client, "POST", "empty.txt", b"")
     assert created.status_code == 201
     assert created.json()["size"] == 0
-    assert client.get("/files/empty.txt").content == b""
+    assert client.get("/files/download", params={"path": "empty.txt"}).content == b""
 
 
 def test_replace_over_the_limit_keeps_the_old_contents(client):
@@ -96,7 +96,7 @@ def test_replace_over_the_limit_keeps_the_old_contents(client):
     too_big = send_file(client, "PUT", "notes.txt", b"x" * (MAX_UPLOAD_BYTES + 1))
 
     assert too_big.status_code == 413
-    assert client.get("/files/notes.txt").content == b"first"
+    assert client.get("/files/download", params={"path": "notes.txt"}).content == b"first"
     assert client.get("/metadata/notes.txt").json() == before
 
 
@@ -106,7 +106,10 @@ def test_client_content_type_is_ignored(client):
     )
     assert response.status_code == 201
     assert response.json()["content_type"] == "image/png"
-    assert client.get("/files/a.png").headers["content-type"] == "image/png"
+    assert (
+        client.get("/files/download", params={"path": "a.png"}).headers["content-type"]
+        == "image/png"
+    )
 
 
 def test_replace_changes_etag_and_size(client):
@@ -200,7 +203,7 @@ def test_create_and_replace_against_the_real_provider(provider_client, provider_
     assert replaced.json()["size"] == len(b"second, longer")
     assert replaced.json()["etag"] != created.json()["etag"]
 
-    assert provider_client.get(f"/files/{key}").content == b"second, longer"
+    assert provider_client.get("/files/download", params={"path": key}).content == b"second, longer"
     assert provider_client.get(f"/metadata/{key}").json() == replaced.json()
 
 
@@ -213,4 +216,4 @@ def test_multipart_upload_round_trips_against_the_real_provider(provider_client,
 
     assert created.status_code == 201
     assert created.json()["size"] == len(data)
-    assert provider_client.get(f"/files/{key}").content == data
+    assert provider_client.get("/files/download", params={"path": key}).content == data

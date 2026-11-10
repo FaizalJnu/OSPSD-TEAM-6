@@ -14,7 +14,7 @@ def delete_path(client: TestClient, path: str):
 def test_delete_removes_the_file_and_deleting_again_is_404(client):
     send_file(client, "POST", "old.txt", b"bye")
     assert delete_path(client, "old.txt").status_code == 204
-    assert client.get("/files/old.txt").status_code == 404
+    assert client.get("/files/download", params={"path": "old.txt"}).status_code == 404
     assert delete_path(client, "old.txt").status_code == 404
 
 

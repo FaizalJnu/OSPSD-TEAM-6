@@ -21,7 +21,7 @@ B=http://127.0.0.1:8000
 |---|---|---|
 | [Create](#create-and-replace) | `POST /files/{key}` | Debasmith Mandal |
 | [Replace](#create-and-replace) | `PUT /files/{key}` | Debasmith Mandal |
-| [Download](#download) | `GET /files/{key}` | Vikram Markali |
+| [Download](#download) | `GET /files/download?path=` | Vikram Markali |
 | [Metadata](#metadata) | `GET /metadata/{key}` | Darsh Shani |
 | [Delete](#delete) | `DELETE /files?path=` | Faizal Rahman |
 | [List](#list) | `GET /files` | Prateek Saxena |
@@ -50,8 +50,9 @@ decoded key.
 
 ## Paths
 
-Delete names its file with a **path** in the `path` query parameter. The other
-operations still take a [key](#keys) in the URL until they move to the shared routes.
+Download and Delete name their file with a **path** in the `path` query parameter. The
+other operations still take a [key](#keys) in the URL until they move to the shared
+routes.
 
 A path can be sent with or without its leading `/`: `docs/report.pdf` and
 `/docs/report.pdf` name the same file. Its canonical form always starts with `/`, and
@@ -125,7 +126,7 @@ service:
 | `ProviderError` | 502 | The provider refused the request for another reason: a missing bucket, an unsupported request, and so on. Usually a configuration problem, but it can also be a provider-side failure, such as throttling or an internal error, that lasted through the client's own retries. | Usually not: fix the configuration first. If the configuration is correct, retrying later sometimes succeeds. |
 | `ProviderUnavailable` | 503 | The provider could not be reached: network failure, timeout, and so on. | Retrying later may help. |
 | `RouteNotFound` | 404 | The path matches no route, for example `GET /nothing`. Unlike `FileNotFound`, it means the URL is wrong. | No. Fix the URL. |
-| `MethodNotAllowed` | 405 | The path exists, but not for this method, for example `POST /files`. The `Allow` header lists every method the path accepts, such as `DELETE, GET, POST, PUT` for `/files/{key}`. | No. Use an allowed method. |
+| `MethodNotAllowed` | 405 | The path exists, but not for this method, for example `POST /files`. The `Allow` header lists every method the path accepts, such as `POST, PUT` for `/files/{key}`. | No. Use an allowed method. |
 | `InternalError` | 500 | A bug in the service. `detail` is always `the service failed unexpectedly`, whatever went wrong. | Not until it is fixed. After a failed Create, Replace, or Delete, check with Metadata first: the write may have happened. |
 
 `RouteNotFound` and `MethodNotAllowed` happen before any operation runs, and
@@ -325,17 +326,25 @@ The Create response looks like this (`etag` and `last_modified` will differ):
 
 ## Download
 
-`GET /files/{key}`. Owner: **Vikram Markali**.
+`GET /files/download?path=`. Owner: **Vikram Markali**.
+
+**Changed:** `GET /files/{key}` no longer exists. It was replaced by
+`GET /files/download?path=`, the route the shared contract uses, so send the key as
+`?path=` instead. A `GET` on the old URL now returns 405 `MethodNotAllowed`, because
+`/files/{key}` still accepts Create and Replace. Stored files keep their names, so no
+data moves.
 
 ### Meaning
 
-Returns the contents of the file stored under a key, as a download. It only reads:
-nothing in the bucket changes.
+Returns the contents of the file at a path, as a download. It only reads: nothing in
+the bucket changes.
 
 ### Request
 
-`GET /files/{key}`, where `{key}` is the file's [key](#keys) (required, slashes
-included). There are no query parameters and no body.
+The required query parameter `path` names the file:
+`/files/download?path=docs/report.pdf` downloads the file stored as `docs/report.pdf`.
+It follows the shared [path rules](#paths). There is no request body. A missing or
+invalid path is rejected before storage is called.
 
 ### Success
 
@@ -360,9 +369,9 @@ The body uses the [error format](#error-format).
 
 | Status | `error` | When |
 |---|---|---|
-| 400 | `InvalidInput` | The key breaks a [key rule](#keys). The provider is not contacted. |
+| 400 | `InvalidInput` | `path` is missing or breaks a [path rule](#paths). The provider is not contacted. |
 | 403 | `AccessDenied` | The provider denied the service's credentials or permissions. |
-| 404 | `FileNotFound` | No file exists under the key. |
+| 404 | `FileNotFound` | No file exists at the path. |
 | 502 | `ProviderError` | The provider refused the request, for example because of a missing bucket. |
 | 503 | `ProviderUnavailable` | The provider could not be reached or timed out. |
 
@@ -378,7 +387,7 @@ uvicorn also logs `ASGI callable returned without completing response.`
 
 Download only reads, so repeating it is always safe. After a 503, retrying later may
 succeed. After a 400 or 404, retrying the same request gives the same result until the
-key or the stored files change. A 502 is usually a configuration problem and repeats
+path or the stored files change. A 502 is usually a configuration problem and repeats
 until the configuration changes, but it can also be a passing provider-side failure, so
 retrying later sometimes succeeds (see [Error types](#error-types)). A cut-off body can
 be retried from the start.
@@ -395,10 +404,14 @@ be retried from the start.
   Metadata reports `content_type` as `null`.
 * The file name in `Content-Disposition` is only a suggestion to the client. The
   download is the same file whatever name it is saved under.
+* A path that names a folder (other files are stored under `path/`) returns 404
+  `FileNotFound`, because S3 has no object at that path. What Download should return
+  for a folder is still open in the shared contract (Dayana20/ospsd26-cloud-storage
+  issue #8).
 
 ### Example
 
-Pick any key, for example `examples/hello.txt`. Create a file under it first (Download
+Pick any path, for example `examples/hello.txt`. Create a file there first (Download
 needs an existing file), download it with its headers, compare the bytes, then delete
 it. In Windows `cmd.exe`:
 
@@ -406,7 +419,7 @@ it. In Windows `cmd.exe`:
 set B=http://127.0.0.1:8000
 echo hello from the download example> hello.txt
 curl.exe -s -F "file=@hello.txt" %B%/files/examples/hello.txt
-curl.exe -s -D - -o back.txt %B%/files/examples/hello.txt
+curl.exe -s -D - -o back.txt "%B%/files/download?path=examples/hello.txt"
 fc /b hello.txt back.txt
 curl.exe -i -X DELETE "%B%/files?path=examples/hello.txt"
 del hello.txt back.txt
@@ -427,8 +440,8 @@ content-type: text/plain; charset=utf-8
 ```
 
 `fc /b` then prints `FC: no differences encountered`, and the delete returns
-`HTTP/1.1 204 No Content`. To check the cleanup, `curl.exe -i %B%/files/examples/hello.txt`
-now returns `404` with `{"error":"FileNotFound",...}`. On macOS or Linux, use
+`HTTP/1.1 204 No Content`. To check the cleanup,
+`curl.exe -i "%B%/files/download?path=examples/hello.txt"` now returns `404` with `{"error":"FileNotFound",...}`. On macOS or Linux, use
 `B=http://127.0.0.1:8000`, `$B` instead of `%B%`, `curl` instead of `curl.exe`,
 `cmp hello.txt back.txt` instead of `fc /b`, and `rm` instead of `del`.
 

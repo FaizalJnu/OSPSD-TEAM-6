@@ -1,4 +1,4 @@
-"""Download: ``GET /files/{key}``."""
+"""Download: ``GET /files/download?path=``."""
 
 from collections.abc import Iterator
 from contextlib import suppress
@@ -8,30 +8,30 @@ from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from starlette.types import Send
 
-from storage_service.routers.deps import Service
+from storage_service.routers.deps import PathQuery, Service
 from storage_service.routers.error_handlers import error_responses, log_interrupted_download
 
 router = APIRouter()
 
 
 @router.get(
-    "/files/{key:path}",
+    "/files/download",
     response_class=StreamingResponse,
     responses={
         200: {"description": "The file's bytes", "content": {"application/octet-stream": {}}},
         **error_responses(
             {
-                400: "InvalidInput: the key violates a key rule.",
+                400: "InvalidInput: the path is missing or violates a path rule.",
                 403: "AccessDenied: the provider denied the service access.",
-                404: "FileNotFound: no file exists under the key.",
+                404: "FileNotFound: no file exists at the path.",
                 502: "ProviderError: the storage provider rejected the request.",
                 503: "ProviderUnavailable: the storage provider could not be reached.",
             }
         ),
     },
 )
-def download_file(key: str, service: Service, request: Request) -> StreamingResponse:
-    download = service.download(key)
+def download_file(path: PathQuery, service: Service, request: Request) -> StreamingResponse:
+    download = service.download(path)
     info = download.info
     filename = info.key.rsplit("/", 1)[-1]
     headers = {

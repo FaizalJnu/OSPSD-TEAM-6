@@ -104,8 +104,9 @@ class StorageClient(Protocol):
 
         Raises ``InvalidInput`` for a cursor this backend did not produce, and
         ``ProviderError`` or ``ProviderUnavailable`` if the provider fails. No matches is
-        an empty page, not an error. A backend that cannot recognize its own cursors, such
-        as S3, raises ``InvalidInput`` when the provider rejects the cursor.
+        an empty page, not an error. A cursor from another ``prefix`` counts as one this
+        backend did not produce. S3 wraps the provider's token with its prefix to check
+        this, and also raises ``InvalidInput`` when the provider rejects the token.
         """
         ...
 

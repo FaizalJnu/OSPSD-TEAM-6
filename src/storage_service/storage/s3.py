@@ -8,6 +8,9 @@ This is the only module that imports boto3. Every boto3 error is translated
 into one of our own errors before it leaves this file.
 """
 
+import base64
+import binascii
+import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any, BinaryIO, Self
@@ -122,7 +125,7 @@ class S3Storage:
     def list_files(self, prefix: str, limit: int, cursor: str | None) -> FilePage:
         request: dict[str, Any] = {"Bucket": self._bucket, "Prefix": prefix, "MaxKeys": limit}
         if cursor is not None:
-            request["ContinuationToken"] = cursor
+            request["ContinuationToken"] = _decode_cursor(cursor, prefix)
         with _translate_errors():
             try:
                 response = self._client.list_objects_v2(**request)
@@ -131,10 +134,7 @@ class S3Storage:
                 # was sent, a rejected argument means the cursor is not one we made.
                 code = _error_code(err)
                 if cursor is not None and code == "InvalidArgument":
-                    raise InvalidInput(
-                        "cursor is not a next_cursor this API returned for this prefix",
-                        provider_code=code,
-                    ) from err
+                    raise InvalidInput(_INVALID_CURSOR, provider_code=code) from err
                 raise
         files = [
             FileInfo(
@@ -146,7 +146,9 @@ class S3Storage:
             )
             for item in response.get("Contents", [])
         ]
-        return FilePage(files=files, next_cursor=response.get("NextContinuationToken"))
+        token = response.get("NextContinuationToken")
+        next_cursor = None if token is None else _encode_cursor(prefix, token)
+        return FilePage(files=files, next_cursor=next_cursor)
 
     def delete(self, key: str) -> None:
         with _translate_errors():
@@ -195,6 +197,35 @@ class _ChunkReader:
 
     def close(self) -> None:
         self._body.close()
+
+
+# A cursor wraps the provider's continuation token with the prefix it was made for.
+# Providers do not all reject a token sent with another prefix (OCI continues from the
+# token's position), so this backend checks the prefix itself, as the in-memory
+# backend does.
+_CURSOR_MARK = "s3v1."
+_INVALID_CURSOR = "cursor is not a next_cursor this API returned for this prefix"
+
+
+def _encode_cursor(prefix: str, token: str) -> str:
+    payload = json.dumps({"prefix": prefix, "token": token}).encode()
+    return _CURSOR_MARK + base64.urlsafe_b64encode(payload).decode()
+
+
+def _decode_cursor(cursor: str, prefix: str) -> str:
+    """Return the provider's token inside the cursor, or raise ``InvalidInput``."""
+    if not cursor.startswith(_CURSOR_MARK):
+        raise InvalidInput(_INVALID_CURSOR)
+    try:
+        fields = json.loads(base64.urlsafe_b64decode(cursor[len(_CURSOR_MARK) :]))
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        raise InvalidInput(_INVALID_CURSOR) from None
+    if not isinstance(fields, dict) or fields.get("prefix") != prefix:
+        raise InvalidInput(_INVALID_CURSOR)
+    token = fields.get("token")
+    if not isinstance(token, str) or not token:
+        raise InvalidInput(_INVALID_CURSOR)
+    return token
 
 
 @contextmanager

@@ -1170,9 +1170,10 @@ Tests: [tests/test_list.py](tests/test_list.py).
 * `limit` from 1 to 1000 and a `prefix` of up to 1024 bytes are accepted. The values
   just outside are 400 `InvalidInput`.
 * A cursor this API did not produce, or one from another prefix, is 400 `InvalidInput`
-  on the in-memory backend. `S3Storage` turns the provider's `InvalidArgument` for a
-  sent cursor into `InvalidInput`, and keeps it a `ProviderError` when no cursor was
-  sent.
+  on both backends, without a provider call. `S3Storage` wraps the provider's token
+  with its prefix, sends the token back unchanged, and turns the provider's
+  `InvalidArgument` for a sent token (for example an expired one) into `InvalidInput`.
+  It keeps `InvalidArgument` a `ProviderError` when no cursor was sent.
 * A file that exists for the whole traversal appears once, even when other files are
   created between pages.
 * The service makes exactly one storage call per request, with `prefix`, `limit`, and
@@ -1182,8 +1183,8 @@ Tests: [tests/test_list.py](tests/test_list.py).
 * The `list_files` contract in
   [storage/base.py](src/storage_service/storage/base.py) holds for `S3Storage`: a
   `list_objects_v2` answer becomes a `FilePage` with ETag quotes stripped,
-  `content_type` `None`, and `NextContinuationToken` as `next_cursor`, and provider
-  errors become `ProviderError` or `ProviderUnavailable`. Both backends match the prefix
+  `content_type` `None`, and `NextContinuationToken` wrapped in `next_cursor`, and
+  provider errors become `ProviderError` or `ProviderUnavailable`. Both backends match the prefix
   as text, at every depth, in UTF-8 byte order.
 
 ### Cases and boundaries
@@ -1208,8 +1209,11 @@ written out by hand, not computed with the code under test.
 * **Cursors this API did not produce.** A plain string (`garbage`), a string shaped
   like a provider token (`abc123`), and a key name (`docs/a.txt`, which the old
   in-memory cursor format accepted), plus a real cursor sent with another prefix. On
-  S3, the same provider code with and without a cursor, to show that only a sent
-  cursor becomes `InvalidInput`.
+  S3, also a bare provider token, a cursor with our mark but a broken body, and a real
+  cursor sent with another prefix, none of which reach the provider. Also the same
+  provider code with and without a cursor, to show that only a sent cursor becomes
+  `InvalidInput`. The contract test sends a real cursor with another prefix on every
+  backend, including OCI.
 * **What storage answers (controlled storage).** A page with a cursor, given the
   caller's own cursor; the default parameters; each kind of invalid input; and each of
   the two provider errors.
@@ -1445,11 +1449,11 @@ same bucket. Its output is the one shown there, and its prefix was empty afterwa
 * **A cursor from another prefix.** OCI does not reject it. A cursor from page 1 of
   `P`, sent with `prefix=other/`, returned 200 with an empty page and
   `next_cursor: null`, because `other/` sorts before the cursor's position. A prefix
-  that sorts after it could return files, so a caller who mixes prefixes can silently
-  miss files on S3, where the in-memory backend says 400.
-* **Cursor format.** OCI cursors are `1:` followed by about 108 base64url characters,
-  sometimes ending in `=`. They worked both percent-encoded and not, but callers should
-  encode them, as the API docs say.
+  that sorts after it could return files. That is why `S3Storage` now wraps the token
+  with its prefix and rejects the mismatch itself (#72).
+* **Cursor format.** OCI's tokens, which our cursors wrap, are `1:` followed by about
+  108 base64url characters, sometimes ending in `=`. They worked both percent-encoded
+  and not, but callers should encode them, as the API docs say.
 * **A new cursor string on every request.** Asking for the same page twice gave two
   different `next_cursor` strings, and both continued correctly. Nothing may compare
   cursor strings. This is now in the List assumptions in [docs/API.md](docs/API.md#list).
@@ -1464,9 +1468,6 @@ same bucket. Its output is the one shown there, and its prefix was empty afterwa
 
 ### Gaps
 
-* **A cursor from another prefix on S3** is passed to the provider unchanged and was
-  observed once, by hand, for a prefix that sorts before the cursor. No automated test
-  covers it.
 * **The Stubber checks shapes, not real answers.** Whether OCI really sends what the
   translation tests feed in is shown only by the provider tests.
 * **Connection failures are simulated by replacing the boto3 call**, so botocore's own

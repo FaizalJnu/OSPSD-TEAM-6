@@ -4,6 +4,7 @@ The traversal tests follow the collection example in docs/testing.txt. Expected 
 are written out by hand, never computed with the code under test.
 """
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import call, create_autospec
@@ -348,9 +349,13 @@ def test_s3_list_translates_a_provider_page_into_a_file_page(stubbed_s3):
 
     page = storage.list_files("docs/", 2, None)
 
-    # Quotes stripped, no content type, the provider's token as the cursor, and the
-    # provider-only fields (bucket name, counts, storage class) left behind.
-    assert page == FilePage(
+    # The cursor is our own string wrapping the provider's token; the next test
+    # shows the token goes back to the provider unchanged.
+    assert page.next_cursor is not None
+    assert page.next_cursor != "token-2"
+    # Quotes stripped, no content type, and the provider-only fields (bucket name,
+    # counts, storage class) left behind.
+    assert replace(page, next_cursor=None) == FilePage(
         files=[
             FileInfo(
                 key="docs/a.txt",
@@ -367,12 +372,26 @@ def test_s3_list_translates_a_provider_page_into_a_file_page(stubbed_s3):
                 last_modified=MODIFIED,
             ),
         ],
-        next_cursor="token-2",
+        next_cursor=None,
     )
+
+
+def first_page_cursor(stubbed_s3, token: str = "token-2") -> str:
+    """The cursor S3Storage returns for a first page whose provider token is ``token``."""
+    storage, stubber = stubbed_s3
+    stubber.add_response(
+        "list_objects_v2",
+        {"IsTruncated": True, "NextContinuationToken": token, "Contents": []},
+        LIST_PARAMS,
+    )
+    cursor: str | None = storage.list_files("docs/", 2, None).next_cursor
+    assert cursor is not None
+    return cursor
 
 
 def test_s3_list_sends_the_cursor_as_the_continuation_token(stubbed_s3):
     storage, stubber = stubbed_s3
+    cursor = first_page_cursor(stubbed_s3)
     stubber.add_response(
         "list_objects_v2",
         {
@@ -384,7 +403,7 @@ def test_s3_list_sends_the_cursor_as_the_continuation_token(stubbed_s3):
         {**LIST_PARAMS, "ContinuationToken": "token-2"},
     )
 
-    page = storage.list_files("docs/", 2, "token-2")
+    page = storage.list_files("docs/", 2, cursor)
 
     assert [info.key for info in page.files] == ["docs/c.txt"]
     assert page.next_cursor is None
@@ -443,19 +462,44 @@ def test_s3_list_rejected_by_the_provider_raises_our_error(stubbed_s3, code, sta
     assert code not in str(raised.value)
 
 
+@pytest.mark.parametrize("cursor", ["garbage", "token-2", "s3v1.", "s3v1.bm90IGpzb24="])
+def test_s3_list_rejects_a_cursor_it_did_not_produce_without_calling_the_provider(
+    stubbed_s3, cursor
+):
+    storage, _ = stubbed_s3
+    # Nothing is queued: a call to the provider would fail the test. "token-2" is a
+    # bare provider token, which is not one of our cursors.
+    with pytest.raises(InvalidInput):
+        storage.list_files("docs/", 2, cursor)
+
+
+def test_s3_list_rejects_a_cursor_from_another_prefix_without_calling_the_provider(
+    stubbed_s3,
+):
+    storage, _ = stubbed_s3
+    cursor = first_page_cursor(stubbed_s3)
+
+    # OCI continues from the token's position instead of rejecting it, so a caller
+    # who mixed prefixes would silently get the wrong page.
+    with pytest.raises(InvalidInput):
+        storage.list_files("other/", 2, cursor)
+
+
 def test_s3_list_turns_a_rejected_cursor_into_invalid_input(stubbed_s3):
     storage, stubber = stubbed_s3
-    # OCI answers a cursor it cannot decode with InvalidArgument; so does AWS S3.
+    cursor = first_page_cursor(stubbed_s3)
+    # The provider can still reject a token it issued, for example once it expires.
+    # OCI answers a token it cannot decode with InvalidArgument; so does AWS S3.
     stubber.add_client_error(
         "list_objects_v2",
         service_error_code="InvalidArgument",
         service_message="Illegal argument: unable to decode the token",
         http_status_code=400,
-        expected_params={**LIST_PARAMS, "ContinuationToken": "garbage"},
+        expected_params={**LIST_PARAMS, "ContinuationToken": "token-2"},
     )
 
     with pytest.raises(InvalidInput) as raised:
-        storage.list_files("docs/", 2, "garbage")
+        storage.list_files("docs/", 2, cursor)
     # The provider's code stays inside s3.py.
     assert "InvalidArgument" not in str(raised.value)
 

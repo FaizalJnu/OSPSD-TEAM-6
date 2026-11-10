@@ -117,7 +117,7 @@ def test_object_permission_denial_does_not_probe_the_bucket(stubbed_s3):
     ("method", "path"),
     [
         ("GET", "/metadata/missing.txt"),
-        ("DELETE", "/files/missing.txt"),
+        ("DELETE", "/files?path=missing.txt"),
         ("PUT", "/files/missing.txt"),
         ("POST", "/files/missing.txt"),
     ],
@@ -152,7 +152,7 @@ def test_nonexistent_real_bucket_is_a_provider_error():
     with TestClient(create_app(build_service(bad_settings))) as client:
         for method, path in (
             ("GET", "/metadata/missing.txt"),
-            ("DELETE", "/files/missing.txt"),
+            ("DELETE", "/files?path=missing.txt"),
             ("PUT", "/files/missing.txt"),
         ):
             files = {"file": ("upload", b"hello")} if method == "PUT" else None

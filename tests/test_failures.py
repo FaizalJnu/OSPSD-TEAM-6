@@ -102,7 +102,7 @@ def test_access_denied_is_403_and_logged_for_whoever_runs_the_service(fake, fake
 def test_a_write_that_failed_in_its_check_is_logged_as_not_attempted(fake, fake_client, caplog):
     fake.fail("stat", ProviderUnavailable("could not reach the storage provider"))
 
-    response = fake_client.delete("/files/old.txt")
+    response = fake_client.delete("/files", params={"path": "old.txt"})
 
     assert response.status_code == 503
     event = failure_log(caplog, response)
@@ -183,9 +183,9 @@ def test_a_path_with_no_route_is_route_not_found_not_a_missing_file(fake, fake_c
 @pytest.mark.parametrize(
     ("method", "path", "allowed"),
     [
-        ("POST", "/files", "GET"),
+        ("POST", "/files", "DELETE, GET"),
         # Starlette's own Allow names only the first route that matches the path: POST.
-        ("PATCH", "/files/notes.txt", "DELETE, GET, POST, PUT"),
+        ("PATCH", "/files/notes.txt", "GET, POST, PUT"),
     ],
 )
 def test_a_method_the_path_does_not_accept_is_405_with_every_allowed_method(
@@ -394,7 +394,7 @@ def test_openapi_lists_each_routes_errors_with_our_body_and_no_422(client):
         ("POST", "/files/{key}"): every_route | {"409", "413"},
         ("PUT", "/files/{key}"): every_route | {"404", "413"},
         ("GET", "/files/{key}"): every_route | {"404"},
-        ("DELETE", "/files/{key}"): every_route | {"404"},
+        ("DELETE", "/files"): every_route | {"404"},
         ("GET", "/metadata/{key}"): every_route | {"404"},
     }
     error_body = {"$ref": "#/components/schemas/ErrorBody"}

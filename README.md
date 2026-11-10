@@ -101,7 +101,7 @@ curl -o back.jpg $B/files/photos/cat.jpg                    # download
 cmp cat.jpg back.jpg && echo "identical"
 curl "$B/files?prefix=photos/&limit=10"                     # list    -> 200
 curl -X PUT -F "file=@other.jpg" $B/files/photos/cat.jpg    # replace -> 200
-curl -i -X DELETE $B/files/photos/cat.jpg                   # delete  -> 204
+curl -i -X DELETE "$B/files?path=photos/cat.jpg"            # delete  -> 204
 rm cat.jpg other.jpg back.jpg                               # clean up
 ```
 
@@ -119,7 +119,7 @@ curl.exe -o back.jpg %B%/files/photos/cat.jpg                   & rem download
 fc /b cat.jpg back.jpg                                          & rem "no differences"
 curl.exe "%B%/files?prefix=photos/&limit=10"                    & rem list
 curl.exe -X PUT -F "file=@other.jpg" %B%/files/photos/cat.jpg   & rem replace: 200
-curl.exe -i -X DELETE %B%/files/photos/cat.jpg                  & rem delete: 204
+curl.exe -i -X DELETE "%B%/files?path=photos/cat.jpg"           & rem delete: 204
 del cat.jpg other.jpg back.jpg                                  & rem clean up
 ```
 
@@ -132,7 +132,7 @@ Add `-i` to any command to show the status code and response headers.
 | `POST` | `/files/{key}` | Create a file (form field `file`) |
 | `PUT` | `/files/{key}` | Replace an existing file |
 | `GET` | `/files/{key}` | Download a file (streamed) |
-| `DELETE` | `/files/{key}` | Delete a file |
+| `DELETE` | `/files?path=` | Delete a file |
 | `GET` | `/metadata/{key}` | Get file info as JSON |
 | `GET` | `/files` | List files: `prefix`, `limit` (1 to 1000), `cursor` |
 
@@ -165,7 +165,7 @@ up, the test layout and fixtures, and what each operation's tests check.
 * Stop the server with Ctrl+C. With the `memory` backend, this also deletes
   every stored file.
 * Files uploaded to a real bucket stay there until you delete them, either
-  with `curl -X DELETE $B/files/<key>` or in the OCI Console. The provider
+  with `curl -X DELETE "$B/files?path=<key>"` or in the OCI Console. The provider
   tests remove their own files. If a test run is interrupted, delete anything
   left under `contract-tests/` or `api-tests/`.
 * If the server stops during a large upload, the bucket can keep an unfinished

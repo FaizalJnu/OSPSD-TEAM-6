@@ -11,6 +11,8 @@ Rules:
 * Delete of a missing file fails with FileNotFound, so typos are visible.
 * The server picks the content type from the key's extension. Whatever type
   the client claims is ignored.
+* A client names a file by its path, with or without a leading "/". The storage
+  layer only ever sees the key: the canonical path without its leading "/".
 
 Known limitation: the existence check and the write are two separate provider
 calls, so two clients racing on the same key can both pass the check. The last
@@ -37,6 +39,7 @@ from storage_service.models import FileDownload, FileInfo, FilePage
 from storage_service.storage.base import StorageClient
 
 MAX_KEY_BYTES = 1024  # S3's limit on key length
+MAX_PATH_BYTES = 1024  # the shared contract's limit, which counts the leading "/"
 MAX_PAGE_SIZE = 1000  # S3 returns at most 1000 keys per list call
 FALLBACK_CONTENT_TYPE = "application/octet-stream"
 
@@ -82,10 +85,11 @@ class FileService:
         with _storage_call("list_files"):
             return self._storage.list_files(prefix, limit, cursor)
 
-    def delete(self, key: str) -> None:
-        validate_key(key)
+    def delete(self, path: str) -> None:
+        canonical = normalize_path(path)
+        key = path_to_key(canonical)
         if not self._exists(key):
-            raise FileNotFound(f"no file named {key!r}", storage_call="stat")
+            raise FileNotFound(f"no file at {canonical!r}", storage_call="stat")
         with _storage_call("delete"):
             self._storage.delete(key)
 
@@ -124,12 +128,46 @@ def validate_key(key: str) -> None:
         raise InvalidInput("key must not be empty")
     if len(key.encode("utf-8")) > MAX_KEY_BYTES:
         raise InvalidInput(f"key is longer than {MAX_KEY_BYTES} bytes")
-    if any(ord(char) < 32 or ord(char) == 127 for char in key):
+    if _has_control_character(key):
         raise InvalidInput("key must not contain control characters")
-    if any(segment in ("", ".", "..") for segment in key.split("/")):
+    if _has_bad_segment(key):
         raise InvalidInput(
             "key must not start or end with '/', or contain '//', '.' or '..' segments"
         )
+
+
+def normalize_path(path: str) -> str:
+    """Return a client's path in its canonical form, or reject it.
+
+    "docs/a.pdf" and "/docs/a.pdf" name the same file, and both give "/docs/a.pdf".
+    Only that one leading "/" is optional: every segment after it must be a real
+    name, as in ``validate_key``. The root "/" names no file, so it is rejected here.
+    """
+    if not path:
+        raise InvalidInput("path must not be empty")
+    canonical = path if path.startswith("/") else f"/{path}"
+    if canonical == "/":
+        raise InvalidInput("path must name a file, not the root folder")
+    if len(canonical.encode("utf-8")) > MAX_PATH_BYTES:
+        raise InvalidInput(f"path is longer than {MAX_PATH_BYTES} bytes")
+    if _has_control_character(canonical):
+        raise InvalidInput("path must not contain control characters")
+    if _has_bad_segment(path_to_key(canonical)):
+        raise InvalidInput("path must not end with '/', or contain '//', '.' or '..' segments")
+    return canonical
+
+
+def path_to_key(canonical_path: str) -> str:
+    """The storage key for a canonical path: the same string without its leading "/"."""
+    return canonical_path.removeprefix("/")
+
+
+def _has_control_character(text: str) -> bool:
+    return any(ord(char) < 32 or ord(char) == 127 for char in text)
+
+
+def _has_bad_segment(name: str) -> bool:
+    return any(segment in ("", ".", "..") for segment in name.split("/"))
 
 
 def guess_content_type(key: str) -> str:

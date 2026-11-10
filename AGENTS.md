@@ -21,7 +21,7 @@ tests/
   test_download.py         GET /files/{key}
   test_metadata.py         GET /metadata/{key}
   test_bucket_errors.py    Missing-bucket errors across metadata and existence checks
-  test_delete.py           DELETE /files/{key}
+  test_delete.py           DELETE /files?path=
   test_list.py             GET /files
   test_service.py          Input rules
   test_storage_contract.py Same tests for every backend; S3 runs only with -m provider

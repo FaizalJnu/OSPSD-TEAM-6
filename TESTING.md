@@ -49,9 +49,9 @@ delete their files afterwards.
 | [tests/test_download.py](tests/test_download.py) | Download: `GET /files/{key}` |
 | [tests/test_metadata.py](tests/test_metadata.py) | Metadata: `GET /metadata/{key}` |
 | [tests/test_bucket_errors.py](tests/test_bucket_errors.py) | FIX-2: missing/denied buckets, probe failures, and HTTP checks before writes |
-| [tests/test_delete.py](tests/test_delete.py) | Delete: `DELETE /files/{key}` |
+| [tests/test_delete.py](tests/test_delete.py) | Delete: `DELETE /files?path=` |
 | [tests/test_list.py](tests/test_list.py) | List: `GET /files` |
-| [tests/test_service.py](tests/test_service.py) | The key rules and the content-type choice, without HTTP |
+| [tests/test_service.py](tests/test_service.py) | The key and path rules and the content-type choice, without HTTP |
 | [tests/test_storage_contract.py](tests/test_storage_contract.py) | The same tests for every storage backend |
 | [tests/test_invalid_input.py](tests/test_invalid_input.py) | Invalid input that FastAPI rejects first (a bad List `limit`, a missing `file` field) returns 400 `InvalidInput` |
 | [tests/test_injection.py](tests/test_injection.py) | Application tests over a controlled backend: storage calls made, provider failures, how the app is built, and the routes it serves |
@@ -1045,8 +1045,9 @@ Tests: [tests/test_delete.py](tests/test_delete.py).
 
 ### Contract checked
 
-`DELETE /files/{key}` returns 204 with an empty body and removes the file, so a later
-Download or Delete returns 404. The service checks that the file exists with `stat`
+`DELETE /files?path=` returns 204 with an empty body and removes the file, so a later
+Download or Delete returns 404. The path works with or without its leading `/`, and
+storage only ever sees the key. The service checks that the file exists with `stat`
 before it calls `delete`. A missing file returns 404 `FileNotFound` and `delete` is
 never called. A failed check returns 503 `ProviderUnavailable` or 502 `ProviderError`
 and `delete` is never called. A rejected delete returns 502 with the full error body.
@@ -1060,9 +1061,12 @@ and `delete` is never called. A rejected delete returns 502 with the full error 
 * A failure on each of the two provider calls: `stat` unavailable (503) and `delete`
   rejected (502). Together they show which call failed and that nothing runs after a
   failed check.
-* Invalid keys are covered once for every operation in
-  [tests/test_service.py](tests/test_service.py) and
-  [tests/test_injection.py](tests/test_injection.py).
+* Path rules: each rule, and the byte limit at its boundary, is covered in
+  [tests/test_service.py](tests/test_service.py). Over HTTP, this file checks that a
+  bad or missing path is 400 and calls storage zero times.
+* Query-string decoding: a literal `+` has to arrive as `%2B`, because a `+` in a query
+  string means a space.
+* The old `DELETE /files/{key}` route no longer deletes anything.
 
 ### Tests
 
@@ -1072,8 +1076,20 @@ Run them with `uv run pytest tests/test_delete.py`.
   trip: 204, then Download 404, then Delete 404.
 * `test_delete_checks_the_file_exists_then_deletes_it`: 204, empty body, and calls
   `[("stat", k), ("delete", k)]`.
+* `test_delete_finds_the_file_with_or_without_the_leading_slash`: both spellings make
+  the same storage calls, on the key without a leading `/`.
 * `test_delete_of_a_missing_file_is_404_and_never_calls_delete`: 404 `FileNotFound`,
   calls `[("stat", k)]`.
+* `test_delete_of_a_missing_file_reports_the_canonical_path`: the error names the path
+  with its leading `/`, even when the request left it out.
+* `test_delete_of_an_invalid_path_is_400_and_never_calls_storage`: empty, root, trailing
+  `/`, `//`, `..`, a control character, and too long.
+* `test_delete_without_a_path_is_400_and_never_calls_storage`: no `path` parameter gives
+  400 `InvalidInput`, and calls nothing.
+* `test_delete_decodes_the_path_from_the_query_string`: `%2B` and `%20` reach the service
+  decoded.
+* `test_the_old_keyed_delete_route_no_longer_deletes`: the file survives a request to
+  the old route.
 * `test_delete_returns_503_and_never_deletes_when_the_check_cannot_reach_the_provider`:
   503 with the full body, calls `[("stat", k)]`.
 * `test_delete_returns_502_when_the_provider_rejects_the_delete`: 502 with the full
@@ -1084,7 +1100,7 @@ Run them with `uv run pytest tests/test_delete.py`.
 * `test_delete_removes_the_file_from_the_real_provider` (marked `provider`): create,
   delete (204), then Metadata 404 against a real bucket.
 
-Removing the existence check from `service.delete` makes all five HTTP tests above
+Removing the existence check from `service.delete` makes nine test cases in this file
 fail.
 
 ### Real-provider verification
@@ -1128,6 +1144,8 @@ fail.
 
 ### Gaps
 
+* The run above used the old `DELETE /files/{key}` route. No run of
+  `DELETE /files?path=` against a real provider is recorded yet.
 * Only one real-provider run is recorded. Level 2 needs runs by two people; Faizal
   does the second.
 * The missing-bucket behavior is tested in

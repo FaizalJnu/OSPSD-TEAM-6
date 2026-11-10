@@ -11,7 +11,7 @@ into one of our own errors before it leaves this file.
 import base64
 import binascii
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from typing import Any, BinaryIO, Self
 
@@ -153,6 +153,18 @@ class S3Storage:
     def delete(self, key: str) -> None:
         with _translate_errors():
             self._client.delete_object(Bucket=self._bucket, Key=key)
+
+    def delete_many(self, keys: Sequence[str]) -> list[str]:
+        # Quiet: the response lists only the keys that failed. DeleteObjects answers
+        # 200 even when some of them did, so the list has to be read.
+        # DeleteObjects requires a checksum, and OCI rejects boto3's default, CRC32.
+        with _translate_errors():
+            response = self._client.delete_objects(
+                Bucket=self._bucket,
+                Delete={"Objects": [{"Key": key} for key in keys], "Quiet": True},
+                ChecksumAlgorithm="SHA256",
+            )
+        return [error["Key"] for error in response.get("Errors", [])]
 
 
 def _info_from_response(key: str, response: dict[str, Any]) -> FileInfo:

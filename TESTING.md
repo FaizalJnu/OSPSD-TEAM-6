@@ -77,10 +77,14 @@ in that file, not in `conftest.py`.
 `create_app(FileService(fake, max_upload_bytes=...))`. It:
 
 * records each call in `fake.calls` as `(method, key)`, in order. `list_files` records
-  its prefix instead of a key.
+  its prefix instead of a key, and `delete_many` its keys joined with commas.
 * raises a given error from a given method after `fake.fail(method, error)`, on every
   later call. The method name is typed, so mypy rejects a misspelled one. The error is
   usually one of ours, but can be any exception, to stand in for a bug in a backend.
+  With `after_calls=n`, the first `n` calls succeed, like a provider that fails partway
+  through a series of calls.
+* leaves the keys in `fake.refused_keys` in place and has `delete_many` report them as
+  failed, like S3's `DeleteObjects` when it answers 200 and lists failures in its body.
 * with `fake.cut_downloads(error, after_bytes=n)`, lets every later `get` succeed but
   makes its chunks raise `error` after the first `n` bytes, like a provider connection
   that drops while the body is being read.
@@ -94,9 +98,10 @@ the file. Its assumptions:
 
 * Without a configured failure, it behaves exactly like `InMemoryStorage`, which
   `tests/test_storage_contract.py` checks against the real provider.
-* A failure is either all or nothing: the call changes nothing, or the whole change is
-  made. A real provider can fail in other ways too, such as a multipart upload left
-  unfinished, which the fake does not model.
+* A raised failure is either all or nothing: the call changes nothing, or the whole
+  change is made. A real provider can fail in other ways too, such as a multipart upload
+  left unfinished, which the fake does not model. The only partial result it models is
+  `refused_keys`.
 
 `after_applying` tests the "After a failed write" contract in
 [docs/API.md](docs/API.md#after-a-failed-write), that a 502 or 503 from a write does not
@@ -383,6 +388,10 @@ noted:
   `stat` is unavailable: 503, `not_attempted`, and `delete` never called.
 * `test_a_write_that_failed_in_the_write_call_is_logged_as_unknown`: Create whose `put`
   stores the file and then fails: 503, `unknown`, and Metadata then finds the file.
+* `test_a_folder_delete_that_failed_while_listing_is_logged_as_not_attempted`: 503,
+  `storage_call` `list_files`, `not_attempted`.
+* `test_a_folder_delete_that_stopped_partway_is_logged_as_unknown`: a batch reports a
+  failed key: 502, `storage_call` `delete_many`, `unknown`.
 * `test_a_create_refused_by_our_own_rules_is_logged_as_not_attempted`: 413
   (`provider_involved` false) and 409 (true, decided by the existence check).
 * `test_provider_messages_stay_out_of_responses_and_logs` (`stubbed_s3`): a
@@ -1053,11 +1062,31 @@ never called. A failed check returns 503 `ProviderUnavailable` or 502 `ProviderE
 and `delete` is never called. A rejected delete returns 502 with the full error body.
 `S3Storage.delete` turns a provider rejection into `ProviderError`.
 
+With no file at the path, the service lists every key under `<path>/`, following every
+page, and only then calls `delete_many`, with at most 1000 keys per call. A path with
+no file and nothing under it returns 404 `FileNotFound`, and `delete_many` is never
+called. A failed listing deletes nothing. A first batch that fails keeps its own status.
+A later batch that fails, or any batch that reports failed keys, returns 502
+`ProviderError` and no further batch is sent. `S3Storage.delete_many` sends a SHA-256
+checksum and returns the keys listed in the `Errors` of a 200 response.
+
 ### Cases and boundaries
 
 * Existing file, then the same request again: the 404 on the second request is our
   rule, because S3 deletes a missing key silently.
-* Missing file: shows the existence check stops the request before `delete`.
+* Missing file: shows the existence check and the empty listing stop the request before
+  anything is deleted.
+* Folder boundary: `docs` must not match `docs2/` or `docs-backup/`, and `do` must not
+  match `docs/`. Deleting a whole folder by accident is the costliest mistake here.
+* Batch boundary: 2001 files is three listings and batches of 1000, 1000, and 1, so it
+  shows both limits and the short last batch.
+* An empty page with a cursor: S3 allows it, so the listing stops only when there is no
+  cursor.
+* A file and a folder at one path: only the file is deleted.
+* Where a folder delete fails: partway through the listing, in the first batch, in a
+  later batch, and in a batch that reports failed keys. Each one has different knowledge
+  of what changed.
+* Retry after a partial delete: 502, then 204, then 404.
 * A failure on each of the two provider calls: `stat` unavailable (503) and `delete`
   rejected (502). Together they show which call failed and that nothing runs after a
   failed check.
@@ -1079,7 +1108,7 @@ Run them with `uv run pytest tests/test_delete.py`.
 * `test_delete_finds_the_file_with_or_without_the_leading_slash`: both spellings make
   the same storage calls, on the key without a leading `/`.
 * `test_delete_of_a_missing_file_is_404_and_never_calls_delete`: 404 `FileNotFound`,
-  calls `[("stat", k)]`.
+  calls `[("stat", k), ("list_files", k + "/")]`.
 * `test_delete_of_a_missing_file_reports_the_canonical_path`: the error names the path
   with its leading `/`, even when the request left it out.
 * `test_delete_of_an_invalid_path_is_400_and_never_calls_storage`: empty, root, trailing
@@ -1094,14 +1123,49 @@ Run them with `uv run pytest tests/test_delete.py`.
   503 with the full body, calls `[("stat", k)]`.
 * `test_delete_returns_502_when_the_provider_rejects_the_delete`: 502 with the full
   body, calls `[("stat", k), ("delete", k)]`.
+* `test_delete_of_a_folder_removes_everything_under_it_and_nothing_else`: 204, empty
+  body, both nested files gone, and `docs2/`, `docs-backup/`, and `other.txt` survive.
+* `test_deleting_a_folder_again_is_404`: 204, then 404.
+* `test_delete_of_a_folder_lists_it_then_deletes_its_keys`: both spellings make the
+  calls `stat`, `list_files` on `docs/`, then `delete_many` on both keys.
+* `test_delete_of_a_large_folder_reads_every_page_then_deletes_1000_keys_per_call`: 2001
+  files give three listings and batches of 1000, 1000, and 1, and nothing is left.
+* `test_delete_of_a_folder_follows_the_cursor_past_an_empty_page`: the key on the
+  second page is still deleted.
+* `test_delete_removes_only_the_file_when_a_file_and_a_folder_share_a_path`: calls
+  `stat` then `delete`, and `docs/a.txt` survives.
+* `test_delete_does_not_treat_the_start_of_a_name_as_a_folder`: `do` is 404, and
+  `docs/a.txt` survives.
+* `test_a_folder_listing_that_fails_partway_deletes_nothing`: the second page fails:
+  503, and `delete_many` is never called.
+* `test_a_folder_delete_whose_first_batch_fails_reports_that_failure_unchanged`: 503,
+  502, and 403 keep their own bodies, and only one batch is sent.
+* `test_a_folder_delete_that_fails_after_a_finished_batch_is_502_and_stops`: a timeout
+  on the second of three batches is 502 `ProviderError`, and the third is never sent.
+* `test_a_folder_delete_whose_batch_reports_failed_keys_is_502_and_stops`: one refused
+  key in the first of two batches gives 502, and the second is never sent.
+* `test_retrying_a_partly_deleted_folder_deletes_what_is_left`: 502, then 204, then 404.
 * `test_s3_delete_denied_by_the_provider_raises_access_denied`: Stubber test that
   `DeleteObject` is sent with the right bucket and key, and that `AccessDenied` becomes
   our `AccessDenied`.
+* `test_s3_delete_many_sends_the_keys_in_one_call_and_reports_no_failures`: Stubber test
+  of the exact `DeleteObjects` parameters, including `Quiet` and
+  `ChecksumAlgorithm="SHA256"`.
+* `test_s3_delete_many_returns_the_keys_the_provider_could_not_delete`: the `Errors` of
+  a 200 response come back as a list of keys.
+* `test_s3_delete_many_denied_by_the_provider_raises_access_denied` and
+  `test_s3_delete_many_rejected_by_the_provider_raises_provider_error`: a whole call
+  that fails becomes our error type.
 * `test_delete_removes_the_file_from_the_real_provider` (marked `provider`): create,
   delete (204), then Metadata 404 against a real bucket.
+* `test_delete_removes_a_nested_folder_from_the_real_provider` (marked `provider`): 204,
+  both nested files are 404, and a file beside the folder survives.
 
-Removing the existence check from `service.delete` makes nine test cases in this file
-fail.
+[tests/test_storage_contract.py](tests/test_storage_contract.py) adds
+`test_delete_many_removes_the_keys_and_ignores_missing_ones`, for both backends.
+
+Making `service.delete` skip the existence check and go straight to `delete` makes 24
+test cases in this file fail.
 
 ### Real-provider verification
 
@@ -1135,19 +1199,45 @@ fail.
   `502 {"error":"ProviderError","detail":"the configured bucket does not exist or is not accessible"}`,
   as [Bucket checks](docs/API.md#bucket-checks) says.
 
+#### Folder delete, run from Faizal Rahman's checkout
+
+- Provider: OCI Object Storage, us-ashburn-1
+- Dates: 2026-11-09, and again on 2026-11-10 after moving onto `dev`
+- Commits: 44b6b69, then c6902a0 (`dev` with #74), each plus the then-uncommitted
+  folder delete changes, boto3 1.43.108
+- Provider commands: `uv run --env-file .env pytest -m provider -k delete`, then
+  `uv run --env-file .env pytest -m provider`
+- Expected: every test passes. The nested-folder test sends `DELETE /files?path=` for a
+  folder holding `a.txt` and `sub/b.txt`: 204, both files then 404 from Metadata, and a
+  file beside the folder still 200.
+- Observed on 44b6b69: `5 passed, 239 deselected` and `19 passed, 225 deselected`.
+- Observed on c6902a0: `5 passed, 246 deselected` and `20 passed, 231 deselected`. The
+  extra provider test is the List cursor check from #74.
+- Cleanup: the tests delete everything under their unique `api-tests/` and
+  `contract-tests/` prefixes, even when they fail.
+
 ### Provider observations
 
 * Repeating a delete on OCI gives 404 from our existence check, so the provider's
   silent delete of a missing key is never reached through the API. The contract test
   `test_delete_of_a_missing_key_is_silent[s3]` confirms that OCI itself returns success
   for it.
+* OCI rejects boto3's default `DeleteObjects` checksum, CRC32, with 400 `InvalidRequest`
+  and `Missing required header for this request: Content-MD5 or x-amz-checksum-sha256 or
+  x-amz-checksum-crc32c`, and deletes nothing. The FIX-1 `when_required` setting does not
+  help, because this call always requires a checksum. Asking for SHA-256 deleted the
+  keys, and so did a `Content-MD5` header sent by hand.
 
 ### Gaps
 
-* The run above used the old `DELETE /files/{key}` route. No run of
-  `DELETE /files?path=` against a real provider is recorded yet.
-* Only one real-provider run is recorded. Level 2 needs runs by two people; Faizal
-  does the second.
+* Prateek's run above used the old `DELETE /files/{key}` route, so only one run of
+  `DELETE /files?path=` is recorded. Level 2 needs runs by two people.
+* The real-provider tests delete small folders. Splitting a folder of more than 1000
+  files into batches is tested only on `FakeStorage`.
+* Folder Delete has run only against OCI, not AWS S3 or Google Cloud Storage. The
+  results in [docs/PROVIDERS.md](docs/PROVIDERS.md) for those two predate it.
+* A `DeleteObjects` that reports failed keys is tested only with Stubber and
+  `FakeStorage`. No real provider has been made to return one.
 * The missing-bucket behavior is tested in
   [test_bucket_errors.py](tests/test_bucket_errors.py) (FIX-2), not here, including
   that Delete returns 502 before deleting anything.

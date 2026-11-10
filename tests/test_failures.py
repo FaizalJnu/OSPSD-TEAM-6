@@ -128,6 +128,34 @@ def test_a_write_that_failed_in_the_write_call_is_logged_as_unknown(fake, fake_c
     assert fake_client.get("/metadata/notes.txt").status_code == 200  # it was stored
 
 
+def test_a_folder_delete_that_failed_while_listing_is_logged_as_not_attempted(
+    fake, fake_client, caplog
+):
+    send_file(fake_client, "POST", "docs/a.txt", b"data")
+    fake.fail("list_files", ProviderUnavailable("could not reach the storage provider"))
+
+    response = fake_client.delete("/files", params={"path": "docs"})
+
+    assert response.status_code == 503
+    event = failure_log(caplog, response)
+    assert event["storage_call"] == "list_files"
+    assert event["write_outcome"] == "not_attempted"
+
+
+def test_a_folder_delete_that_stopped_partway_is_logged_as_unknown(fake, fake_client, caplog):
+    send_file(fake_client, "POST", "docs/a.txt", b"data")
+    send_file(fake_client, "POST", "docs/b.txt", b"data")
+    fake.refused_keys.add("docs/b.txt")
+
+    response = fake_client.delete("/files", params={"path": "docs"})
+
+    assert response.status_code == 502
+    event = failure_log(caplog, response)
+    assert event["operation"] == "delete_file"
+    assert event["storage_call"] == "delete_many"
+    assert event["write_outcome"] == "unknown"
+
+
 def test_a_create_refused_by_our_own_rules_is_logged_as_not_attempted(fake_client, caplog):
     assert send_file(fake_client, "POST", "notes.txt", b"data").status_code == 201
     too_big = send_file(fake_client, "POST", "big.bin", b"x" * 2048)

@@ -21,7 +21,7 @@ def download_path(client: TestClient, path: str):
 def test_download_returns_the_bytes_and_every_promised_header(client):
     data = b"%PDF-1.7 not really a pdf \x00\xff"
     send_file(client, "POST", "docs/résumé.pdf", data)
-    etag = client.get("/metadata/docs/résumé.pdf").json()["etag"]
+    etag = client.get("/files/metadata?path=docs/résumé.pdf").json()["etag"]
 
     response = download_path(client, "/docs/résumé.pdf")
 
@@ -64,8 +64,8 @@ def test_download_of_an_invalid_path_is_400_and_never_calls_storage(fake, fake_c
 
     assert response.status_code == 400
     body = response.json()
-    assert set(body) == {"error", "detail"}
-    assert body["error"] == "InvalidInput"
+    assert set(body) == {"error"}
+    assert body["error"]["code"] == "invalid_request"
     assert fake.calls == []
 
 
@@ -73,15 +73,17 @@ def test_download_without_a_path_is_400_and_never_calls_storage(fake, fake_clien
     response = fake_client.get("/files/download")
 
     assert response.status_code == 400
-    assert response.json() == {"error": "InvalidInput", "detail": "path: Field required"}
+    assert response.json() == {
+        "error": {"code": "invalid_request", "message": "path: Field required"}
+    }
     assert fake.calls == []
 
 
 def test_download_of_a_missing_file_is_404(client):
     response = download_path(client, "missing.txt")
     assert response.status_code == 404
-    assert set(response.json()) == {"error", "detail"}
-    assert response.json()["error"] == "FileNotFound"
+    assert set(response.json()) == {"error"}
+    assert response.json()["error"]["code"] == "not_found"
 
 
 def test_the_old_keyed_download_route_is_gone(client):
@@ -92,8 +94,7 @@ def test_the_old_keyed_download_route_is_gone(client):
     # /files/{key} still exists for Create and Replace, so GET there is a 405, not a 404.
     assert response.status_code == 405
     assert response.json() == {
-        "error": "MethodNotAllowed",
-        "detail": "this path does not accept GET",
+        "error": {"code": "method_not_allowed", "message": "this path does not accept GET"},
     }
     assert response.headers["allow"] == "POST, PUT"
 
@@ -105,8 +106,7 @@ def test_download_returns_503_when_the_provider_is_unavailable(fake, fake_client
 
     assert response.status_code == 503
     assert response.json() == {
-        "error": "ProviderUnavailable",
-        "detail": "could not reach the storage provider",
+        "error": {"code": "provider_unavailable", "message": "could not reach the storage provider"}
     }
     assert fake.calls == [("get", "notes.txt")]
 
@@ -269,7 +269,7 @@ def test_download_of_a_multi_megabyte_file_from_the_real_provider(provider_clien
     key = provider_prefix + "big.bin"
     data = os.urandom(5 * 1024 * 1024)  # chunking itself: test_s3_get_streams_in_chunks
     assert send_file(provider_client, "POST", key, data).status_code == 201
-    etag = provider_client.get(f"/metadata/{key}").json()["etag"]
+    etag = provider_client.get("/files/metadata", params={"path": key}).json()["etag"]
 
     response = download_path(provider_client, key)
 

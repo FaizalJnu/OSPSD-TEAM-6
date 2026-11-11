@@ -7,12 +7,12 @@ This is the only place that decides which storage backend gets used. Run with:
 
 from importlib.metadata import version
 
+from cloud_storage_api.errors import StorageError as SharedStorageError
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException
 
 from storage_service.config import Settings, load_settings
-from storage_service.errors import StorageError
 from storage_service.routers import delete, download, listing, metadata, upload
 from storage_service.routers.error_handlers import (
     http_error_handler,
@@ -39,10 +39,10 @@ def create_app(service: FileService | None = None) -> FastAPI:
     app.state.file_service = service
     app.include_router(listing.router)
     app.include_router(upload.router)
+    app.include_router(metadata.router)
     app.include_router(download.router)
     app.include_router(delete.router)
-    app.include_router(metadata.router)
-    app.add_exception_handler(StorageError, storage_error_handler)
+    app.add_exception_handler(SharedStorageError, storage_error_handler)
     app.add_exception_handler(RequestValidationError, validation_error_handler)
     # Starlette's own errors (no route, wrong method, unreadable body), and bugs.
     app.add_exception_handler(HTTPException, http_error_handler)

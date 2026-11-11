@@ -21,11 +21,11 @@ router = APIRouter()
         200: {"description": "The file's bytes", "content": {"application/octet-stream": {}}},
         **error_responses(
             {
-                400: "InvalidInput: the path is missing or violates a path rule.",
-                403: "AccessDenied: the provider denied the service access.",
-                404: "FileNotFound: no file exists at the path.",
-                502: "ProviderError: the storage provider rejected the request.",
-                503: "ProviderUnavailable: the storage provider could not be reached.",
+                400: "invalid_request: the path is missing or violates a path rule.",
+                403: "permission_denied: the provider denied the service access.",
+                404: "not_found: no file exists at the path.",
+                502: "provider_error: the storage provider rejected the request.",
+                503: "provider_unavailable: the storage provider could not be reached.",
             }
         ),
     },

@@ -116,7 +116,7 @@ def test_object_permission_denial_does_not_probe_the_bucket(stubbed_s3):
 @pytest.mark.parametrize(
     ("method", "path"),
     [
-        ("GET", "/metadata/missing.txt"),
+        ("GET", "/files/metadata?path=missing.txt"),
         ("DELETE", "/files?path=missing.txt"),
         ("PUT", "/files/missing.txt"),
         ("POST", "/files/missing.txt"),
@@ -137,8 +137,10 @@ def test_missing_bucket_returns_502_before_any_write(stubbed_s3, method, path):
         response = client.request(method, path, files=files)
     assert response.status_code == 502
     assert response.json() == {
-        "error": "ProviderError",
-        "detail": "the configured bucket does not exist or is not accessible",
+        "error": {
+            "code": "provider_error",
+            "message": "the configured bucket does not exist or is not accessible",
+        }
     }
 
 
@@ -151,7 +153,7 @@ def test_nonexistent_real_bucket_is_a_provider_error():
     bad_settings = replace(settings, s3=replace(settings.s3, bucket=missing_bucket))
     with TestClient(create_app(build_service(bad_settings))) as client:
         for method, path in (
-            ("GET", "/metadata/missing.txt"),
+            ("GET", "/files/metadata?path=missing.txt"),
             ("DELETE", "/files?path=missing.txt"),
             ("PUT", "/files/missing.txt"),
         ):
@@ -159,17 +161,16 @@ def test_nonexistent_real_bucket_is_a_provider_error():
             response = client.request(method, path, files=files)
             assert response.status_code == 502
             assert response.json() == {
-                "error": "ProviderError",
-                "detail": "the configured bucket does not exist or is not accessible",
+                "error": {
+                    "code": "provider_error",
+                    "message": "the configured bucket does not exist or is not accessible",
+                }
             }
 
 
 @pytest.mark.provider
 def test_missing_file_in_real_bucket_remains_404(provider_client, provider_prefix):
     key = provider_prefix + "missing.txt"
-    response = provider_client.get(f"/metadata/{key}")
+    response = provider_client.get("/files/metadata", params={"path": key})
     assert response.status_code == 404
-    assert response.json() == {
-        "error": "FileNotFound",
-        "detail": f"no file named {key!r}",
-    }
+    assert response.json() == {"error": {"code": "not_found", "message": f"no file named {key!r}"}}

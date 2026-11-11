@@ -22,7 +22,7 @@ B=http://127.0.0.1:8000
 | [Create](#create-and-replace) | `POST /files/{key}` | Debasmith Mandal |
 | [Replace](#create-and-replace) | `PUT /files/{key}` | Debasmith Mandal |
 | [Download](#download) | `GET /files/download?path=` | Vikram Markali |
-| [Metadata](#metadata) | `GET /metadata/{key}` | Darsh Shani |
+| [Metadata](#metadata) | `GET /files/metadata?path=` | Darsh Shani |
 | [Delete](#delete) | `DELETE /files?path=` | Faizal Rahman |
 | [List](#list) | `GET /files` | Prateek Saxena |
 
@@ -40,19 +40,19 @@ A key must:
 * not start or end with `/`, and not contain `//`
 * not have a segment (the text between slashes) that is exactly `.` or `..`
 
-An operation given a key that breaks a rule returns 400 `InvalidInput` without
+An operation given a key that breaks a rule returns 400 `invalid_request` without
 contacting the provider.
 
-In a URL, the key is everything after `/files/` or `/metadata/`, slashes included.
+In a Create or Replace URL, the key is everything after `/files/`, slashes included.
 Percent-encode characters that cannot appear in a URL path. For example,
 `with spaces.txt` is sent as `/files/with%20spaces.txt`. The rules apply to the
 decoded key.
 
 ## Paths
 
-Download names its file, and Delete its file or folder, with a **path** in the `path` query parameter. The
-other operations still take a [key](#keys) in the URL until they move to the shared
-routes.
+Download and Metadata name their file, and Delete its file or folder, with a **path**
+in the `path` query parameter. The other operations still take a [key](#keys) in the
+URL until they move to the shared routes.
 
 A path can be sent with or without its leading `/`: `docs/report.pdf` and
 `/docs/report.pdf` name the same file. Its canonical form always starts with `/`, and
@@ -69,14 +69,14 @@ A path must:
 * not have a segment (the text between slashes) that is exactly `.` or `..`
 
 An operation given a path that breaks a rule, or no `path` at all, returns 400
-`InvalidInput` without contacting the provider.
+`invalid_request` without contacting the provider.
 
 Percent-encode the path in a query string. A `+` there means a space, so a literal `+`
 must be sent as `%2B`. `curl -G --data-urlencode "path=$P"` does the encoding for you.
 
 ## File info
 
-Create, Replace, and Metadata return one file info object. List returns file info
+Create and Replace still return the legacy file info object. Metadata returns the shared model described in [Metadata](#metadata). List returns file info
 objects in its `files` array.
 
 | Field | JSON type | Meaning |
@@ -108,32 +108,31 @@ the path does not accept, a request body that cannot be read, and a bug in the
 service:
 
 ```json
-{"error": "FileNotFound", "detail": "no file named 'photos/2026/cat.jpg'"}
+{"error": {"code": "not_found", "message": "no file named 'photos/2026/cat.jpg'"}}
 ```
 
-`error` is one of the types in the table below, and is what programs should check.
-`detail` is a short explanation for people.
+`error.code` is the stable identifier in the table below. `error.message` is a safe explanation for people.
 
 ### Error types
 
 | `error` | Status | When it happens | Does retrying help? |
 |---|---|---|---|
-| `InvalidInput` | 400 | A key breaks a [key rule](#keys), the List `prefix` is longer than 1024 bytes, the List `limit` is not a whole number from 1 to 1000, or Create or Replace is missing the `file` form field or sends a `multipart/form-data` body that cannot be read (for example, no boundary). | No. Change the input. |
-| `AccessDenied` | 403 | The provider refused the service's credentials or permissions, for example a wrong secret key or a bucket policy that does not allow the operation. This is the service's configuration, not the caller's. | No, not until whoever runs the service fixes the credentials or permissions. |
-| `FileNotFound` | 404 | No file exists under the key (Download, Metadata, Replace), or no file or folder exists at the path (Delete). | Not until a file is created there. |
-| `FileAlreadyExists` | 409 | Create was called for a key that already has a file. | No. Use Replace, or Delete the file first. |
-| `FileTooLarge` | 413 | The upload to Create or Replace is larger than `MAX_UPLOAD_BYTES` (default 1 GiB). | No, not with the same file. |
-| `ProviderError` | 502 | The provider refused the request for another reason: a missing bucket, an unsupported request, and so on. Usually a configuration problem, but it can also be a provider-side failure, such as throttling or an internal error, that lasted through the client's own retries. | Usually not: fix the configuration first. If the configuration is correct, retrying later sometimes succeeds. |
-| `ProviderUnavailable` | 503 | The provider could not be reached: network failure, timeout, and so on. | Retrying later may help. |
-| `RouteNotFound` | 404 | The path matches no route, for example `GET /nothing`. Unlike `FileNotFound`, it means the URL is wrong. | No. Fix the URL. |
-| `MethodNotAllowed` | 405 | The path exists, but not for this method, for example `POST /files`. The `Allow` header lists every method the path accepts, such as `POST, PUT` for `/files/{key}`. | No. Use an allowed method. |
-| `InternalError` | 500 | A bug in the service. `detail` is always `the service failed unexpectedly`, whatever went wrong. | Not until it is fixed. After a failed Create, Replace, or Delete, check with Metadata first: the write may have happened. |
+| `invalid_request` | 400 | A key breaks a [key rule](#keys), the List `prefix` is longer than 1024 bytes, the List `limit` is not a whole number from 1 to 1000, or Create or Replace is missing the `file` form field or sends a `multipart/form-data` body that cannot be read (for example, no boundary). | No. Change the input. |
+| `permission_denied` | 403 | The provider refused the service's credentials or permissions, for example a wrong secret key or a bucket policy that does not allow the operation. This is the service's configuration, not the caller's. | No, not until whoever runs the service fixes the credentials or permissions. |
+| `not_found` | 404 | No file exists under the key (Download, Metadata, Replace), or no file or folder exists at the path (Delete). | Not until a file is created there. |
+| `conflict` | 409 | Create was called for a key that already has a file. | No. Use Replace, or Delete the file first. |
+| `file_too_large` | 413 | The upload to Create or Replace is larger than `MAX_UPLOAD_BYTES` (default 1 GiB). | No, not with the same file. |
+| `provider_error` | 502 | The provider refused the request for another reason: a missing bucket, an unsupported request, and so on. Usually a configuration problem, but it can also be a provider-side failure, such as throttling or an internal error, that lasted through the client's own retries. | Usually not: fix the configuration first. If the configuration is correct, retrying later sometimes succeeds. |
+| `provider_unavailable` | 503 | The provider could not be reached: network failure, timeout, and so on. | Retrying later may help. |
+| `route_not_found` | 404 | The path matches no route, for example `GET /nothing`. Unlike `not_found`, it means the URL is wrong. | No. Fix the URL. |
+| `method_not_allowed` | 405 | The path exists, but not for this method, for example `POST /files`. The `Allow` header lists every method the path accepts, such as `POST, PUT` for `/files/{key}`. | No. Use an allowed method. |
+| `internal_error` | 500 | A bug in the service. `error.message` is always `the service failed unexpectedly`, whatever went wrong. | Not until it is fixed. After a failed Create, Replace, or Delete, check with Metadata first: the write may have happened. |
 
-`RouteNotFound` and `MethodNotAllowed` happen before any operation runs, and
-`InternalError` can happen in any operation, so the operation sections below do not
+`route_not_found` and `method_not_allowed` happen before any operation runs, and
+`internal_error` can happen in any operation, so the operation sections below do not
 repeat them.
 
-When FastAPI or Starlette rejects the input before our code runs, `detail` starts with
+When FastAPI or Starlette rejects the input before our code runs, `error.message` starts with
 the field's name: `limit: ...` for `limit=abc`, `file: Field required` for a missing
 `file` field, and `file: Missing boundary in multipart.` for a multipart body without a
 boundary.
@@ -151,12 +150,12 @@ Retry under [Delete](#delete).
 
 ### What stays internal
 
-`error` and `detail` describe this service, not the provider. The provider's own error
+`error.code` and `error.message` describe this service, not the provider. The provider's own error
 code (such as `NoSuchBucket` or `SignatureDoesNotMatch`), its message (which on OCI
 names the namespace and bucket), and stack traces never appear in a response. A
-caller can tell the failure classes apart from `error` alone: `InvalidInput`
-(the input), `FileNotFound` (no such file), `AccessDenied` (the service's
-permissions), and `ProviderError` or `ProviderUnavailable` (the provider failed).
+caller can tell the failure classes apart from `error.code` alone: `invalid_request`
+(the input), `not_found` (no such file), `permission_denied` (the service's
+permissions), and `provider_error` or `provider_unavailable` (the provider failed).
 The provider's code goes to the [failure log](#failure-logs) for whoever runs the
 service.
 
@@ -165,22 +164,22 @@ service.
 Every failed request writes one JSON line to the server's log (stderr), for example:
 
 ```json
-{"level": "ERROR", "event": "request_failed", "operation": "create_file", "status": 503, "error": "ProviderUnavailable", "detail": "could not reach the storage provider", "provider_involved": true, "storage_call": "put", "provider_code": "EndpointConnectionError", "write_outcome": "unknown"}
+{"level": "ERROR", "event": "request_failed", "operation": "create_file", "status": 503, "error": "provider_unavailable", "detail": "could not reach the storage provider", "provider_involved": true, "storage_call": "put", "provider_code": "EndpointConnectionError", "write_outcome": "unknown"}
 ```
 
 | Field | Meaning |
 |---|---|
-| `level` | `WARNING` when the caller can fix it (400, 404, 405, 409, 413). `ERROR` when whoever runs the service has to act (403 `AccessDenied`, 500, 502, 503, and an interrupted download). |
-| `operation` | `create_file`, `replace_file`, `download_file`, `get_metadata`, `delete_file`, or `list_files`. `null` when the request matched no operation (404 `RouteNotFound`, 405 `MethodNotAllowed`). |
-| `status`, `error`, `detail` | Exactly what the caller received. For an interrupted download, `status` is the 200 the caller received, and `error` and `detail` name the failure it could not be told about. |
-| `provider_involved` | `true` when a storage call raised the error or decided it (a 404 or 409 from the existence check). `false` when the request was rejected before storage was called. `null` after a 500 `InternalError`: a bug can strike anywhere, so we cannot tell. |
+| `level` | `WARNING` when the caller can fix it (400, 404, 405, 409, 413). `ERROR` when whoever runs the service has to act (403 `permission_denied`, 500, 502, 503, and an interrupted download). |
+| `operation` | `create_file`, `replace_file`, `download_file`, `get_metadata`, `delete_file`, or `list_files`. `null` when the request matched no operation (404 `route_not_found`, 405 `method_not_allowed`). |
+| `status`, `error`, `detail` | The status, common code and message the caller received (the log keeps flat fields). For an interrupted download, `status` is the 200 the caller received, and `error` and `detail` name the failure it could not be told about. |
+| `provider_involved` | `true` when a storage call raised the error or decided it (a 404 or 409 from the existence check). `false` when the request was rejected before storage was called. `null` after a 500 `internal_error`: a bug can strike anywhere, so we cannot tell. |
 | `storage_call` | The storage call involved: `stat`, `put`, `get`, `list_files`, `delete`, or `delete_many`, or `null`. |
 | `provider_code` | Only when the provider or its SDK named the failure, for example `NoSuchBucket`, `403`, or `EndpointConnectionError`. Never sent to the caller. |
-| `write_outcome` | Create, Replace, and Delete only. `not_attempted` when the request failed before the write call, so nothing changed. `unknown` when the write call itself failed, or after a 500 `InternalError`: the provider may have completed it (see [After a failed write](#after-a-failed-write)). |
+| `write_outcome` | Create, Replace, and Delete only. `not_attempted` when the request failed before the write call, so nothing changed. `unknown` when the write call itself failed, or after a 500 `internal_error`: the provider may have completed it (see [After a failed write](#after-a-failed-write)). |
 | `interrupted`, `bytes_sent`, `size` | Download only, when reading the file failed after the 200 status and headers were sent: `interrupted` is `true`, `bytes_sent` is how many bytes the caller was sent, and `size` is the file's size, the `Content-Length` it was promised. |
 
 Expected failures are logged without a traceback. Only a bug includes one, after its
-JSON line: a 500 `InternalError`, or a download interrupted by one. After a 500,
+JSON line: a 500 `internal_error`, or a download interrupted by one. After a 500,
 Starlette hands the exception to the server, so uvicorn prints the same traceback a
 second time, starting with `Exception in ASGI application`.
 
@@ -192,13 +191,13 @@ Python prints these lines (`WARNING` and above) to stderr, as uvicorn does.
 
 After an ambiguous S3 HEAD 404/NotFound, Metadata and the existence checks for
 Create, Replace, and Delete probe the bucket before reporting a missing file.
-An accessible bucket preserves 404 `FileNotFound`. A bucket the provider denies
-access to returns 403 `AccessDenied` with detail "the storage provider denied access
+An accessible bucket preserves 404 `not_found`. A bucket the provider denies
+access to returns 403 `permission_denied` with detail "the storage provider denied access
 to the configured bucket". Any other failed probe, such as a missing bucket, returns
-502 `ProviderError` with detail "the configured bucket does not exist or is not
+502 `provider_error` with detail "the configured bucket does not exist or is not
 accessible". The detail contains neither the bucket name nor the raw provider error
 code. A connection failure during the probe returns
-503 `ProviderUnavailable`. Create, Replace, and Delete stop before writing if
+503 `provider_unavailable`. Create, Replace, and Delete stop before writing if
 this check fails.
 
 The probe adds one SDK call per ambiguous miss and requires bucket-read
@@ -262,7 +261,7 @@ contents of a file that already exists. Both change stored files.
 * Create: a file now exists under the key.
 * Replace: the old contents are gone. `size`, `etag`, and `last_modified` describe the
   new contents.
-* A request that fails with a 4xx status changes nothing. After a 400 or 413, the key is
+* Local validation failures change nothing. A provider failure can leave an uncertain write even when access is denied. After a 400 or 413, the key is
   as it was before. After a 409, the existing file is unchanged. After a failed Replace,
   the old contents are still there.
 
@@ -270,13 +269,13 @@ contents of a file that already exists. Both change stored files.
 
 | Status | `error` | When |
 |---|---|---|
-| 400 | `InvalidInput` | The key breaks a [key rule](#keys), the `file` form field is missing, or the `multipart/form-data` body cannot be read: no boundary, more than 1000 files, or a text field over 1 MB. |
-| 403 | `AccessDenied` | The provider denied the service's credentials or permissions. |
-| 404 | `FileNotFound` | Replace only: no file exists under the key. |
-| 409 | `FileAlreadyExists` | Create only: a file already exists under the key. |
-| 413 | `FileTooLarge` | The upload is larger than `MAX_UPLOAD_BYTES`. |
-| 502 | `ProviderError` | The provider refused the write, usually because of configuration. |
-| 503 | `ProviderUnavailable` | The provider could not be reached. |
+| 400 | `invalid_request` | The key breaks a [key rule](#keys), the `file` form field is missing, or the `multipart/form-data` body cannot be read: no boundary, more than 1000 files, or a text field over 1 MB. |
+| 403 | `permission_denied` | The provider denied the service's credentials or permissions. |
+| 404 | `not_found` | Replace only: no file exists under the key. |
+| 409 | `conflict` | Create only: a file already exists under the key. |
+| 413 | `file_too_large` | The upload is larger than `MAX_UPLOAD_BYTES`. |
+| 502 | `provider_error` | The provider refused the write, usually because of configuration. |
+| 503 | `provider_unavailable` | The provider could not be reached. |
 
 ### Retry
 
@@ -315,7 +314,7 @@ Use a key under a prefix of your own, such as `demo/<your-name>/`, so cleanup is
 B=http://127.0.0.1:8000
 printf 'hello' > hello.txt
 curl -s -F "file=@hello.txt" $B/files/demo/me/hello.txt           # 201
-curl -s -F "file=@hello.txt" $B/files/demo/me/hello.txt           # 409 FileAlreadyExists
+curl -s -F "file=@hello.txt" $B/files/demo/me/hello.txt           # 409 conflict
 printf 'hello again' > hello2.txt
 curl -s -X PUT -F "file=@hello2.txt" $B/files/demo/me/hello.txt   # 200, size 11, new etag
 curl -s -X DELETE "$B/files?path=demo/me/hello.txt"               # clean up: 204
@@ -333,7 +332,7 @@ The Create response looks like this (`etag` and `last_modified` will differ):
 
 **Changed:** `GET /files/{key}` no longer exists. It was replaced by
 `GET /files/download?path=`, the route the shared contract uses, so send the key as
-`?path=` instead. A `GET` on the old URL now returns 405 `MethodNotAllowed`, because
+`?path=` instead. A `GET` on the old URL now returns 405 `method_not_allowed`, because
 `/files/{key}` still accepts Create and Replace. Stored files keep their names, so no
 data moves.
 
@@ -372,11 +371,11 @@ The body uses the [error format](#error-format).
 
 | Status | `error` | When |
 |---|---|---|
-| 400 | `InvalidInput` | `path` is missing or breaks a [path rule](#paths). The provider is not contacted. |
-| 403 | `AccessDenied` | The provider denied the service's credentials or permissions. |
-| 404 | `FileNotFound` | No file exists at the path. |
-| 502 | `ProviderError` | The provider refused the request, for example because of a missing bucket. |
-| 503 | `ProviderUnavailable` | The provider could not be reached or timed out. |
+| 400 | `invalid_request` | `path` is missing or breaks a [path rule](#paths). The provider is not contacted. |
+| 403 | `permission_denied` | The provider denied the service's credentials or permissions. |
+| 404 | `not_found` | No file exists at the path. |
+| 502 | `provider_error` | The provider refused the request, for example because of a missing bucket. |
+| 503 | `provider_unavailable` | The provider could not be reached or timed out. |
 
 These statuses are only possible before the body starts. If reading the file fails
 after the 200 status and headers are sent, the service stops sending and the server
@@ -408,7 +407,7 @@ be retried from the start.
 * The file name in `Content-Disposition` is only a suggestion to the client. The
   download is the same file whatever name it is saved under.
 * A path that names a folder (other files are stored under `path/`) returns 404
-  `FileNotFound`, because S3 has no object at that path. What Download should return
+  `not_found`, because S3 has no object at that path. What Download should return
   for a folder is still open in the shared contract (Dayana20/ospsd26-cloud-storage
   issue #8).
 
@@ -444,90 +443,35 @@ content-type: text/plain; charset=utf-8
 
 `fc /b` then prints `FC: no differences encountered`, and the delete returns
 `HTTP/1.1 204 No Content`. To check the cleanup,
-`curl.exe -i "%B%/files/download?path=examples/hello.txt"` now returns `404` with `{"error":"FileNotFound",...}`. On macOS or Linux, use
+`curl.exe -i "%B%/files/download?path=examples/hello.txt"` now returns `404` with `{"error":{"code":"not_found","message":"..."}}`. On macOS or Linux, use
 `B=http://127.0.0.1:8000`, `$B` instead of `%B%`, `curl` instead of `curl.exe`,
 `cmp hello.txt back.txt` instead of `fc /b`, and `rm` instead of `del`.
 
 ## Metadata
 
-`GET /metadata/{key}`. Owner: **Darsh Shani**.
+`GET /files/metadata?path=`. Owner: **Darsh Shani**.
 
-### Meaning
+The required `path` query parameter accepts an optional leading slash and follows
+[Paths](#paths). The legacy `/metadata/{key}` route is removed. Metadata is
+registered before the legacy catch-all Download route so it cannot be interpreted
+as a request to download an object named `metadata`.
 
-Read metadata for one file without downloading its contents.
+Success returns 200 and shared file info: `id` (null on S3), `name`, canonical
+`path`, byte `size`, UTC `modified_at` ending in `Z`, opaque unquoted `etag`, and
+`type` (null outside listings). Team 6 retains `content_type` as an extension.
+Create, Replace, and List keep their old models until their owners migrate them.
 
-### Request
-
-The required path `key` is the full, decoded file name, including folder-like
-prefixes: `/metadata/docs/report.pdf` refers to `docs/report.pdf`. It follows
-the shared [key rules](#keys), including the 1024 UTF-8 byte limit. There is no
-request body or operation-specific query parameter. Invalid keys are rejected
-before storage is called.
-
-### Success
-
-**200**, with all five [file info fields](#file-info): `key` (the exact full
-key), `size` (integer bytes), `content_type` (stored MIME type or `null`),
-`etag` (opaque and unquoted), and `last_modified` (UTC ISO 8601 timestamp).
-The key can be reused for download, replace, or delete.
-
-### Side effects
-
-None. Reading metadata changes neither the contents nor the stored metadata.
-
-### Errors
-
-Responses use the shared [error format](#error-format):
-
-| Status | Error | When |
-|---|---|---|
-| 400 | `InvalidInput` | The decoded key breaks a key rule. |
-| 403 | `AccessDenied` | The provider denied the service's credentials or permissions. |
-| 404 | `FileNotFound` | No file exists under the key. |
-| 502 | `ProviderError` | The provider rejects the request, for example because of a missing bucket. |
-| 503 | `ProviderUnavailable` | The provider cannot be reached. |
-
-An ambiguous HEAD 404 is checked against the bucket before reporting a missing
-file. A missing bucket returns 502 `ProviderError`, a denied one 403
-`AccessDenied`, and a connection failure during that check 503. See
-[Bucket checks](#bucket-checks).
-
-### Retry
-
-Repeating this read is safe. Correct invalid input or provider configuration
-before retrying; a missing file must be created first. Retrying later may help
-after a 503, and sometimes after a 502 (see [Error types](#error-types)). Another
-caller's write can change the result between reads.
-
-### Assumptions
-
-For an unchanged file, Metadata and List agree on `key`, `size`, and `etag`.
-List always returns `content_type: null`; this does not mean the stored MIME
-type is missing. Files uploaded externally retain the provider's content type.
-Treat ETags as opaque, rather than assuming MD5. HEAD and LIST timestamps may
-differ in precision. Separate reads do not establish a snapshot during
-concurrent writes.
-
-### Example
-
-With the memory backend or a configured test bucket, choose a unique key:
+Reading metadata performs `stat` only and neither downloads contents nor writes.
+A successful S3 HEAD gives metadata; an ambiguous miss adds a bucket probe.
+400 means malformed/missing input, 403 provider denial, 404 missing entry in
+accessible storage, 502 another provider failure/missing bucket, 503 an
+unreachable provider, and 500 an unexpected failure. Every JSON error uses the
+nested [error format](#error-format). A read does not lock against concurrent
+writes.
 
 ```bash
-B=http://127.0.0.1:8000
-K="metadata-demo-$(date +%s)-$$/report.txt"
-printf 'hello' > metadata-sample.txt
-curl -i -F 'file=@metadata-sample.txt' "$B/files/$K"   # 201
-curl -i "$B/metadata/$K"                             # 200
-curl -i -X DELETE "$B/files?path=$K"                 # 204
-curl -i "$B/metadata/$K"                             # 404 FileNotFound
-rm metadata-sample.txt
+curl -G --data-urlencode 'path=/docs/report.pdf' "$B/files/metadata"
 ```
-
-The 200 body contains `key` equal to `$K`, `size: 5`,
-`content_type: "text/plain"`, an unquoted `etag`, and a UTC `last_modified`.
-ETag and timestamp values come from the provider. DELETE cleans up the sample;
-the final read returns `{"error":"FileNotFound","detail":"no file named '<key>'"}`.
-See [Metadata in TESTING.md](../TESTING.md#metadata) for recorded responses.
 
 ## Delete
 
@@ -576,15 +520,15 @@ Responses use the shared [error format](#error-format):
 
 | Status | Error | When |
 |---|---|---|
-| 400 | `InvalidInput` | The path is missing or breaks a path rule. The provider is not contacted. |
-| 403 | `AccessDenied` | The provider denied the service's credentials or permissions. |
-| 404 | `FileNotFound` | No file exists at the path and no file is under it. Nothing is deleted. `detail` is `no file or folder at '/<path>'`. |
-| 502 | `ProviderError` | The provider rejects the check, the listing, or the delete, for example because of a missing bucket. Or a folder delete did not finish (see below). |
-| 503 | `ProviderUnavailable` | The provider cannot be reached. |
+| 400 | `invalid_request` | The path is missing or breaks a path rule. The provider is not contacted. |
+| 403 | `permission_denied` | The provider denied the service's credentials or permissions. |
+| 404 | `not_found` | No file exists at the path and no file is under it. Nothing is deleted. `error.message` is `no file or folder at '/<path>'`. |
+| 502 | `provider_error` | The provider rejects the check, the listing, or the delete, for example because of a missing bucket. Or a folder delete did not finish (see below). |
+| 503 | `provider_unavailable` | The provider cannot be reached. |
 
 An ambiguous HEAD 404 is checked against the bucket before reporting a missing
 file, and nothing is deleted if that check fails. A missing bucket returns 502
-`ProviderError`, a denied one 403 `AccessDenied`, and a connection failure during that
+`provider_error`, a denied one 403 `permission_denied`, and a connection failure during that
 check 503. See [Bucket checks](#bucket-checks).
 
 A folder delete is not all-or-nothing. It stops at the first batch of up to 1000 keys
@@ -594,10 +538,10 @@ that does not finish:
 |---|---|---|
 | The check or the listing failed | That failure's own status | Nothing. |
 | The first batch failed as a whole | That failure's own status: 403, 502, or 503 | That batch may be partly or fully deleted. |
-| A later batch failed, whatever the cause | 502 `ProviderError` | Every earlier batch is deleted. That batch may be too. |
-| The provider reported keys it could not delete, in any batch | 502 `ProviderError` | The other keys of that batch and every earlier batch are deleted. |
+| A later batch failed, whatever the cause | 502 `provider_error` | Every earlier batch is deleted. That batch may be too. |
+| The provider reported keys it could not delete, in any batch | 502 `provider_error` | The other keys of that batch and every earlier batch are deleted. |
 
-The last two return the `detail`
+The last two return the `error.message`
 `the delete of folder '/docs' did not finish; some files may remain`, with the
 canonical path of the folder. They are always 502, even for a timeout, because the
 caller most needs to know that the folder may be partly deleted.
@@ -638,19 +582,19 @@ K="delete-demo-$(date +%s)-$$/old.txt"
 printf 'bye' > delete-sample.txt
 curl -i -F 'file=@delete-sample.txt' "$B/files/$K"   # 201
 curl -i -X DELETE "$B/files?path=$K"                 # 204, empty body
-curl -i -X DELETE "$B/files?path=$K"                 # 404 FileNotFound
-curl -i "$B/metadata/$K"                             # 404 FileNotFound
+curl -i -X DELETE "$B/files?path=$K"                 # 404 not_found
+curl -i "$B/files/metadata?path=$K"                             # 404 not_found
 
 F="delete-demo-$(date +%s)-$$-folder"
 curl -s -o /dev/null -F 'file=@delete-sample.txt' "$B/files/$F/a.txt"
 curl -s -o /dev/null -F 'file=@delete-sample.txt' "$B/files/$F/sub/b.txt"
 curl -i -X DELETE "$B/files?path=$F"                 # 204: both files are gone
-curl -i -X DELETE "$B/files?path=$F"                 # 404 FileNotFound
+curl -i -X DELETE "$B/files?path=$F"                 # 404 not_found
 rm delete-sample.txt
 ```
 
 The second delete of each returns
-`{"error":"FileNotFound","detail":"no file or folder at '/<path>'"}`. The first delete
+`{"error":{"code":"not_found","message":"no file or folder at '/<path>'"}}`. The first delete
 already removed the samples from the bucket, so only the local file needs cleaning up.
 See [Delete in TESTING.md](../TESTING.md#delete) for the recorded tests.
 
@@ -712,11 +656,11 @@ The body uses the [error format](#error-format).
 
 | Status | `error` | When |
 |---|---|---|
-| 400 | `InvalidInput` | `limit` is not a whole number from 1 to 1000 (for example `0`, `1001`, or `abc`), or `prefix` is longer than 1024 bytes. The provider is not contacted. |
-| 400 | `InvalidInput` | `cursor` is not a `next_cursor` this API returned for this `prefix`, for example `garbage`, a key name, or a cursor from another `prefix`. The provider is not contacted. |
-| 403 | `AccessDenied` | The provider denied the service's credentials or permissions. |
-| 502 | `ProviderError` | The provider refused the request, for example because of a missing bucket. |
-| 503 | `ProviderUnavailable` | The provider could not be reached or timed out. |
+| 400 | `invalid_request` | `limit` is not a whole number from 1 to 1000 (for example `0`, `1001`, or `abc`), or `prefix` is longer than 1024 bytes. The provider is not contacted. |
+| 400 | `invalid_request` | `cursor` is not a `next_cursor` this API returned for this `prefix`, for example `garbage`, a key name, or a cursor from another `prefix`. The provider is not contacted. |
+| 403 | `permission_denied` | The provider denied the service's credentials or permissions. |
+| 502 | `provider_error` | The provider refused the request, for example because of a missing bucket. |
+| 503 | `provider_unavailable` | The provider could not be reached or timed out. |
 
 ### Retry
 
@@ -732,7 +676,7 @@ retrying later sometimes succeeds (see [Error types](#error-types)).
 * **No snapshot.** Each page is read from the bucket as it is at that moment. A file
   created or deleted while a caller is paging may or may not appear.
 * **Cursors belong to one prefix.** Send a cursor back only with the `prefix` it came
-  with. Every backend answers a cursor from another prefix with 400 `InvalidInput`.
+  with. Every backend answers a cursor from another prefix with 400 `invalid_request`.
   On S3 the cursor carries its prefix, because providers do not all check: OCI
   continued from the cursor's position and returned 200 with a wrong (empty) page.
   How long a cursor stays usable depends on the provider and has not been tested.

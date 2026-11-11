@@ -3,6 +3,15 @@
 import io
 
 import pytest
+from cloud_storage_api.errors import (
+    PermissionDeniedError as SharedPermissionDeniedError,
+)
+from cloud_storage_api.errors import (
+    ProviderError as SharedProviderError,
+)
+from cloud_storage_api.errors import (
+    ProviderUnavailableError as SharedProviderUnavailableError,
+)
 from fastapi.testclient import TestClient
 
 from storage_service.errors import AccessDenied, ProviderError, ProviderUnavailable, StorageError
@@ -62,7 +71,7 @@ def test_delete_of_a_missing_file_is_404_and_never_calls_delete(fake, fake_clien
     response = delete_path(fake_client, "old.txt")
 
     assert response.status_code == 404
-    assert response.json()["error"] == "FileNotFound"
+    assert response.json()["error"]["code"] == "not_found"
     # A miss is followed by a look for a folder of that name.
     assert fake.calls == [("stat", "old.txt"), ("list_files", "old.txt/")]
 
@@ -71,8 +80,7 @@ def test_delete_of_a_missing_file_reports_the_canonical_path(client):
     response = delete_path(client, "docs/old.txt")
 
     assert response.json() == {
-        "error": "FileNotFound",
-        "detail": "no file or folder at '/docs/old.txt'",
+        "error": {"code": "not_found", "message": "no file or folder at '/docs/old.txt'"},
     }
 
 
@@ -81,7 +89,7 @@ def test_delete_of_an_invalid_path_is_400_and_never_calls_storage(fake, fake_cli
     response = delete_path(fake_client, path)
 
     assert response.status_code == 400
-    assert response.json()["error"] == "InvalidInput"
+    assert response.json()["error"]["code"] == "invalid_request"
     assert fake.calls == []
 
 
@@ -89,7 +97,9 @@ def test_delete_without_a_path_is_400_and_never_calls_storage(fake, fake_client)
     response = fake_client.delete("/files")
 
     assert response.status_code == 400
-    assert response.json() == {"error": "InvalidInput", "detail": "path: Field required"}
+    assert response.json() == {
+        "error": {"code": "invalid_request", "message": "path: Field required"}
+    }
     assert fake.calls == []
 
 
@@ -98,14 +108,14 @@ def test_delete_decodes_the_path_from_the_query_string(client):
     send_file(client, "POST", "a+b c.txt", b"bye")
 
     assert client.delete("/files?path=a%2Bb%20c.txt").status_code == 204
-    assert client.get("/metadata/a+b c.txt").status_code == 404
+    assert client.get("/files/metadata?path=a+b c.txt").status_code == 404
 
 
 def test_the_old_keyed_delete_route_no_longer_deletes(client):
     send_file(client, "POST", "old.txt", b"bye")
 
     assert client.delete("/files/old.txt").status_code != 204
-    assert client.get("/metadata/old.txt").status_code == 200
+    assert client.get("/files/metadata?path=old.txt").status_code == 200
 
 
 def test_delete_returns_503_and_never_deletes_when_the_check_cannot_reach_the_provider(
@@ -117,8 +127,7 @@ def test_delete_returns_503_and_never_deletes_when_the_check_cannot_reach_the_pr
 
     assert response.status_code == 503
     assert response.json() == {
-        "error": "ProviderUnavailable",
-        "detail": "could not reach the storage provider",
+        "error": {"code": "provider_unavailable", "message": "could not reach the storage provider"}
     }
     assert fake.calls == [("stat", "old.txt")]
 
@@ -132,8 +141,7 @@ def test_delete_returns_502_when_the_provider_rejects_the_delete(fake, fake_clie
 
     assert response.status_code == 502
     assert response.json() == {
-        "error": "ProviderError",
-        "detail": "the storage provider rejected the request",
+        "error": {"code": "provider_error", "message": "the storage provider rejected the request"}
     }
     assert fake.calls == [("stat", "old.txt"), ("delete", "old.txt")]
 
@@ -146,9 +154,11 @@ def test_delete_that_removes_the_file_then_fails_returns_503_and_a_retry_is_404(
     response = delete_path(fake_client, "old.txt")
 
     assert response.status_code == 503
-    assert response.json() == {"error": "ProviderUnavailable", "detail": str(unavailable)}
+    assert response.json() == {
+        "error": {"code": "provider_unavailable", "message": str(unavailable)}
+    }
     # The 503 did not mean nothing changed: the file is gone.
-    assert fake_client.get("/metadata/old.txt").status_code == 404
+    assert fake_client.get("/files/metadata?path=old.txt").status_code == 404
     assert delete_path(fake_client, "old.txt").status_code == 404
 
 
@@ -160,10 +170,10 @@ def test_delete_of_a_folder_removes_everything_under_it_and_nothing_else(client)
 
     assert response.status_code == 204
     assert response.content == b""
-    assert client.get("/metadata/docs/a.txt").status_code == 404
-    assert client.get("/metadata/docs/sub/b.txt").status_code == 404
+    assert client.get("/files/metadata?path=docs/a.txt").status_code == 404
+    assert client.get("/files/metadata?path=docs/sub/b.txt").status_code == 404
     for survivor in ("docs2/c.txt", "docs-backup/d.txt", "other.txt"):
-        assert client.get(f"/metadata/{survivor}").status_code == 200
+        assert client.get(f"/files/metadata?path={survivor}").status_code == 200
 
 
 def test_deleting_a_folder_again_is_404(client):
@@ -227,14 +237,14 @@ def test_delete_removes_only_the_file_when_a_file_and_a_folder_share_a_path(fake
     assert delete_path(fake_client, "docs").status_code == 204
 
     assert fake.calls == [("stat", "docs"), ("delete", "docs")]
-    assert fake_client.get("/metadata/docs/a.txt").status_code == 200
+    assert fake_client.get("/files/metadata?path=docs/a.txt").status_code == 200
 
 
 def test_delete_does_not_treat_the_start_of_a_name_as_a_folder(client):
     send_file(client, "POST", "docs/a.txt", b"data")
 
     assert delete_path(client, "do").status_code == 404
-    assert client.get("/metadata/docs/a.txt").status_code == 200
+    assert client.get("/files/metadata?path=docs/a.txt").status_code == 200
 
 
 def test_a_folder_listing_that_fails_partway_deletes_nothing(fake, fake_client):
@@ -264,7 +274,7 @@ def test_a_folder_delete_whose_first_batch_fails_reports_that_failure_unchanged(
     response = delete_path(fake_client, "docs")
 
     assert response.status_code == status
-    assert response.json() == {"error": type(error).__name__, "detail": str(error)}
+    assert response.json() == {"error": {"code": error.code, "message": str(error)}}
     assert methods_called(fake).count("delete_many") == 1
 
 
@@ -276,7 +286,7 @@ def test_a_folder_delete_that_fails_after_a_finished_batch_is_502_and_stops(fake
 
     # A timeout alone would be 503, but here the caller must learn the delete is partial.
     assert response.status_code == 502
-    assert response.json() == {"error": "ProviderError", "detail": UNFINISHED}
+    assert response.json() == {"error": {"code": "provider_error", "message": UNFINISHED}}
     assert methods_called(fake).count("delete_many") == 2
 
 
@@ -287,8 +297,28 @@ def test_a_folder_delete_whose_batch_reports_failed_keys_is_502_and_stops(fake, 
     response = delete_path(fake_client, "docs")
 
     assert response.status_code == 502
-    assert response.json() == {"error": "ProviderError", "detail": UNFINISHED}
+    assert response.json() == {"error": {"code": "provider_error", "message": UNFINISHED}}
     assert methods_called(fake).count("delete_many") == 1
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        SharedPermissionDeniedError("provider denied access"),
+        SharedProviderUnavailableError("provider timed out"),
+        SharedProviderError("provider rejected the delete"),
+    ],
+)
+def test_shared_failure_after_a_finished_delete_batch_is_provider_error(fake, fake_client, error):
+    add_files(fake, "docs", 2001)
+    fake.fail("delete_many", error, after_calls=1)
+
+    response = delete_path(fake_client, "docs")
+
+    assert response.status_code == 502
+    assert response.json() == {"error": {"code": "provider_error", "message": UNFINISHED}}
+    assert methods_called(fake).count("delete_many") == 2
+    assert fake.stat("docs/1000.txt").key == "docs/1000.txt"
 
 
 def test_retrying_a_partly_deleted_folder_deletes_what_is_left(fake, fake_client):
@@ -364,7 +394,7 @@ def test_delete_removes_the_file_from_the_real_provider(provider_client, provide
     key = provider_prefix + "old.txt"
     assert send_file(provider_client, "POST", key, b"bye").status_code == 201
     assert delete_path(provider_client, key).status_code == 204
-    assert provider_client.get(f"/metadata/{key}").status_code == 404
+    assert provider_client.get(f"/files/metadata?path={key}").status_code == 404
 
 
 @pytest.mark.provider
@@ -375,6 +405,12 @@ def test_delete_removes_a_nested_folder_from_the_real_provider(provider_client, 
 
     assert delete_path(provider_client, provider_prefix + "folder").status_code == 204
 
-    assert provider_client.get(f"/metadata/{provider_prefix}folder/a.txt").status_code == 404
-    assert provider_client.get(f"/metadata/{provider_prefix}folder/sub/b.txt").status_code == 404
-    assert provider_client.get(f"/metadata/{provider_prefix}keep.txt").status_code == 200
+    assert (
+        provider_client.get(f"/files/metadata?path={provider_prefix}folder/a.txt").status_code
+        == 404
+    )
+    assert (
+        provider_client.get(f"/files/metadata?path={provider_prefix}folder/sub/b.txt").status_code
+        == 404
+    )
+    assert provider_client.get(f"/files/metadata?path={provider_prefix}keep.txt").status_code == 200

@@ -22,20 +22,19 @@ def test_invalid_key_is_rejected_before_storage_is_called(fake, fake_client):
 
     assert response.status_code == 400
     body = response.json()
-    assert set(body) == {"error", "detail"}
-    assert body["error"] == "InvalidInput"
+    assert set(body) == {"error"}
+    assert body["error"]["code"] == "invalid_request"
     assert fake.calls == []
 
 
 def test_metadata_returns_503_when_the_provider_is_unavailable(fake, fake_client):
     fake.fail("stat", ProviderUnavailable("could not reach the storage provider"))
 
-    response = fake_client.get("/metadata/notes.txt")
+    response = fake_client.get("/files/metadata?path=notes.txt")
 
     assert response.status_code == 503
     assert response.json() == {
-        "error": "ProviderUnavailable",
-        "detail": "could not reach the storage provider",
+        "error": {"code": "provider_unavailable", "message": "could not reach the storage provider"}
     }
     assert fake.calls == [("stat", "notes.txt")]
 
@@ -47,8 +46,7 @@ def test_create_returns_502_when_the_provider_rejects_the_write(fake, fake_clien
 
     assert response.status_code == 502
     assert response.json() == {
-        "error": "ProviderError",
-        "detail": "the storage provider rejected the request",
+        "error": {"code": "provider_error", "message": "the storage provider rejected the request"}
     }
     assert fake.calls == [("stat", "notes.txt"), ("put", "notes.txt")]
 
@@ -91,8 +89,8 @@ def test_create_app_without_a_service_builds_storage_from_the_environment(monkey
     assert send_file(client, "POST", "at-limit.bin", b"x" * 8).status_code == 201
     too_big = send_file(client, "POST", "too-big.bin", b"x" * 9)
     assert too_big.status_code == 413
-    assert too_big.json()["error"] == "FileTooLarge"
-    assert client.get("/metadata/too-big.bin").status_code == 404
+    assert too_big.json()["error"]["code"] == "file_too_large"
+    assert client.get("/files/metadata?path=too-big.bin").status_code == 404
 
 
 def test_the_app_serves_the_six_operations_and_nothing_else(client):
@@ -104,7 +102,7 @@ def test_the_app_serves_the_six_operations_and_nothing_else(client):
         ("PUT", "/files/{key}"),
         ("GET", "/files/download"),
         ("DELETE", "/files"),
-        ("GET", "/metadata/{key}"),
+        ("GET", "/files/metadata"),
     }
 
     # The schema shows {key} whether or not it may contain "/", so check that a key with
@@ -113,5 +111,5 @@ def test_the_app_serves_the_six_operations_and_nothing_else(client):
     assert send_file(client, "POST", key, b"data").status_code == 201
     assert send_file(client, "PUT", key, b"more").status_code == 200
     assert client.get("/files/download", params={"path": key}).content == b"more"
-    assert client.get(f"/metadata/{key}").json()["key"] == key
+    assert client.get("/files/metadata", params={"path": key}).json()["path"] == "/" + key
     assert client.delete("/files", params={"path": key}).status_code == 204

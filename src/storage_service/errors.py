@@ -5,8 +5,10 @@ for any caller: the HTTP API, a command-line tool, or an agent. ``routers/error_
 the only place that turns them into HTTP status codes.
 """
 
+from cloud_storage_api import errors as shared
 
-class StorageError(Exception):
+
+class StorageError(shared.StorageError):
     """Base class for every error the service raises on purpose.
 
     Two optional notes travel with an error for the failure log, never to the caller
@@ -28,23 +30,23 @@ class StorageError(Exception):
         self.provider_code = provider_code
 
 
-class InvalidInput(StorageError):
+class InvalidInput(StorageError, shared.InvalidRequestError):
     """The caller sent a key, size, or parameter that we do not accept."""
 
 
-class FileNotFound(StorageError):
+class FileNotFound(StorageError, shared.NotFoundError):
     """No file exists under the requested key."""
 
 
-class FileAlreadyExists(StorageError):
+class FileAlreadyExists(StorageError, shared.ConflictError):
     """A file already exists under the key the caller tried to create."""
 
 
-class FileTooLarge(StorageError):
+class FileTooLarge(StorageError, shared.FileTooLargeError):
     """The upload is bigger than the configured limit."""
 
 
-class AccessDenied(StorageError):
+class AccessDenied(StorageError, shared.PermissionDeniedError):
     """The provider refused this service's credentials or permissions for the request.
 
     A configuration problem on the service's side, not the caller's. Retrying will
@@ -52,7 +54,7 @@ class AccessDenied(StorageError):
     """
 
 
-class ProviderError(StorageError):
+class ProviderError(StorageError, shared.ProviderError):
     """The provider refused the request: a missing bucket, an unsupported request, and so on.
 
     Access problems are ``AccessDenied`` instead. Usually a configuration problem,
@@ -61,8 +63,12 @@ class ProviderError(StorageError):
     """
 
 
-class ProviderUnavailable(StorageError):
+class ProviderUnavailable(StorageError, shared.ProviderUnavailableError):
     """The provider could not be reached: network failure, timeout, and so on.
 
     Retrying later may help.
     """
+
+
+class InvalidOperation(StorageError, shared.InvalidOperationError):
+    """The contract forbids an otherwise well-formed operation."""

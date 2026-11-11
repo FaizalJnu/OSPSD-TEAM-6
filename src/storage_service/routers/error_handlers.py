@@ -18,6 +18,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from cloud_storage_api import errors as shared
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -25,42 +26,43 @@ from starlette.exceptions import HTTPException
 from starlette.routing import Match
 
 from storage_service.errors import (
-    AccessDenied,
-    FileAlreadyExists,
-    FileNotFound,
-    FileTooLarge,
     InvalidInput,
-    ProviderError,
-    ProviderUnavailable,
-    StorageError,
 )
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class ErrorBody:
+class ErrorDetail:
     """The JSON body of every error response.
 
-    Programs check ``error``, the error type. ``detail`` is a short explanation for people.
+    The stable code identifies the failure; message is a safe explanation for people.
     """
 
-    error: str
-    detail: str
+    code: str
+    message: str
+
+
+@dataclass(frozen=True)
+class ErrorBody:
+    """Common JSON envelope; programs branch on error.code."""
+
+    error: ErrorDetail
 
 
 # What the caller sees when the service has a bug, whatever went wrong.
-_INTERNAL_ERROR = ErrorBody("InternalError", "the service failed unexpectedly")
+_INTERNAL_ERROR = ErrorDetail("internal_error", "the service failed unexpectedly")
 
 # How each of our errors appears over HTTP. Anything not listed is a bug: a 500.
-_STATUS_FOR_ERROR: dict[type[StorageError], int] = {
-    InvalidInput: 400,
-    AccessDenied: 403,
-    FileNotFound: 404,
-    FileAlreadyExists: 409,
-    FileTooLarge: 413,
-    ProviderError: 502,
-    ProviderUnavailable: 503,
+_STATUS_FOR_ERROR: dict[type[shared.StorageError], int] = {
+    shared.InvalidRequestError: 400,
+    shared.PermissionDeniedError: 403,
+    shared.NotFoundError: 404,
+    shared.ConflictError: 409,
+    shared.FileTooLargeError: 413,
+    shared.ProviderError: 502,
+    shared.ProviderUnavailableError: 503,
+    shared.InvalidOperationError: 422,
 }
 
 # Route names (the endpoint functions) of the operations that change stored files,
@@ -74,7 +76,7 @@ _HTTP_METHODS = ("DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT")
 
 def storage_error_handler(request: Request, exc: Exception) -> JSONResponse:
     """Turn a StorageError raised anywhere below the routes into a JSON error response."""
-    assert isinstance(exc, StorageError)
+    assert isinstance(exc, shared.StorageError)
     status = next(
         (code for error_type, code in _STATUS_FOR_ERROR.items() if isinstance(exc, error_type)),
         None,
@@ -108,9 +110,9 @@ def http_error_handler(request: Request, exc: Exception) -> JSONResponse:
     if exc.status_code == 400:
         return _storage_error_response(request, InvalidInput(f"file: {exc.detail}"), 400)
     if exc.status_code == 404:
-        body = ErrorBody("RouteNotFound", "no route matches this path")
+        body = ErrorDetail("route_not_found", "no route matches this path")
     elif exc.status_code == 405:
-        body = ErrorBody("MethodNotAllowed", f"this path does not accept {request.method}")
+        body = ErrorDetail("method_not_allowed", f"this path does not accept {request.method}")
     else:
         return internal_error_handler(request, exc)
     # No operation ran. For a 405, Starlette matched the path to a route of another
@@ -148,14 +150,14 @@ def log_interrupted_download(
     storage call ``get``. Anything else is a bug, logged with its traceback.
     """
     extra = {"interrupted": True, "bytes_sent": bytes_sent, "size": size}
-    if isinstance(exc, StorageError):
+    if isinstance(exc, shared.StorageError):
         _log_failure(
             200,
-            ErrorBody(type(exc).__name__, str(exc)),
+            ErrorDetail(exc.code, str(exc)),
             operation=_operation(request),
             provider_involved=True,
             storage_call="get",
-            provider_code=exc.provider_code,
+            provider_code=getattr(exc, "provider_code", None),
             extra=extra,
         )
     else:
@@ -172,17 +174,17 @@ def log_interrupted_download(
 def error_responses(descriptions: Mapping[int, str]) -> dict[int | str, dict[str, Any]]:
     """A route's error responses for the OpenAPI schema, each with our error body.
 
-    Pass ``{status: "<error type>: <when>"}``. 500 ``InternalError`` is added, since
+    Pass ``{status: "<error code>: <when>"}``. 500 ``internal_error`` is added, since
     a bug can make any route fail.
     """
-    every = {**descriptions, 500: "InternalError: the service failed unexpectedly."}
+    every = {**descriptions, 500: "internal_error: the service failed unexpectedly."}
     return {status: {"model": ErrorBody, "description": text} for status, text in every.items()}
 
 
 def remove_validation_responses(app: FastAPI) -> None:
     """Remove the 422 that FastAPI adds to every route with parameters from the schema.
 
-    ``validation_error_handler`` turns those failures into 400 ``InvalidInput``, which
+    ``validation_error_handler`` turns those failures into 400 ``invalid_request``, which
     each route lists through ``error_responses``. Replacing ``app.openapi`` is how
     FastAPI's docs say to change the generated schema.
     """
@@ -192,7 +194,13 @@ def remove_validation_responses(app: FastAPI) -> None:
         schema = build_schema()  # built once, then cached by FastAPI
         for operations in schema["paths"].values():
             for operation in operations.values():
-                operation["responses"].pop("422", None)
+                if "422" in operation["responses"]:
+                    response = operation["responses"]["422"]
+                    model = (
+                        response.get("content", {}).get("application/json", {}).get("schema", {})
+                    )
+                    if model.get("$ref", "").endswith("/HTTPValidationError"):
+                        operation["responses"].pop("422")
         schemas = schema.get("components", {}).get("schemas", {})
         for name in ("HTTPValidationError", "ValidationError"):
             schemas.pop(name, None)
@@ -201,23 +209,25 @@ def remove_validation_responses(app: FastAPI) -> None:
     app.openapi = openapi  # type: ignore[method-assign]
 
 
-def _storage_error_response(request: Request, error: StorageError, status: int) -> JSONResponse:
-    body = ErrorBody(type(error).__name__, str(error))
+def _storage_error_response(
+    request: Request, error: shared.StorageError, status: int
+) -> JSONResponse:
+    body = ErrorDetail(error.code, str(error))
     _log_failure(
         status,
         body,
         operation=_operation(request),
-        provider_involved=error.storage_call is not None,
-        storage_call=error.storage_call,
-        provider_code=error.provider_code,
+        provider_involved=getattr(error, "storage_call", None) is not None,
+        storage_call=getattr(error, "storage_call", None),
+        provider_code=getattr(error, "provider_code", None),
     )
     return _error_response(status, body)
 
 
 def _error_response(
-    status: int, body: ErrorBody, headers: Mapping[str, str] | None = None
+    status: int, body: ErrorDetail, headers: Mapping[str, str] | None = None
 ) -> JSONResponse:
-    return JSONResponse(status_code=status, content=asdict(body), headers=headers)
+    return JSONResponse(status_code=status, content=asdict(ErrorBody(body)), headers=headers)
 
 
 def _operation(request: Request) -> str | None:
@@ -249,7 +259,7 @@ def _allowed_methods(request: Request) -> str:
 
 def _log_failure(
     status: int,
-    body: ErrorBody,
+    body: ErrorDetail,
     *,
     operation: str | None,
     provider_involved: bool | None,
@@ -273,15 +283,15 @@ def _log_failure(
     # The caller can fix a 4xx, except a denial of the service's own credentials.
     # Anything else (a 5xx, or a 200 whose body was cut off) needs whoever runs the
     # service.
-    caller_can_fix = 400 <= status < 500 and body.error != AccessDenied.__name__
+    caller_can_fix = 400 <= status < 500 and body.code != "permission_denied"
     level = logging.WARNING if caller_can_fix else logging.ERROR
     event: dict[str, object] = {
         "level": logging.getLevelName(level),
         "event": "request_failed",
         "operation": operation,
         "status": status,
-        "error": body.error,
-        "detail": body.detail,
+        "error": body.code,
+        "detail": body.message,
         "provider_involved": provider_involved,
         "storage_call": storage_call,
     }

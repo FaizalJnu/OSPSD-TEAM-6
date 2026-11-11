@@ -13,15 +13,15 @@ router = APIRouter()
     status_code=204,
     responses=error_responses(
         {
-            400: "InvalidInput: the path is missing or violates a path rule.",
-            403: "AccessDenied: the provider denied the service access.",
-            404: "FileNotFound: no file or folder exists at the path.",
+            400: "invalid_request: the path is missing or violates a path rule.",
+            403: "permission_denied: the provider denied the service access.",
+            404: "not_found: no file or folder exists at the path.",
             502: (
-                "ProviderError: the storage provider rejected the request, or a folder "
+                "provider_error: the storage provider rejected the request, or a folder "
                 "was only partly deleted. The delete may still have happened."
             ),
             503: (
-                "ProviderUnavailable: the storage provider could not be reached. "
+                "provider_unavailable: the storage provider could not be reached. "
                 "The delete may still have happened."
             ),
         }

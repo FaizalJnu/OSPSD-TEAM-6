@@ -7,7 +7,9 @@ them into JSON when a route returns one.
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
+
+from cloud_storage_api import FileInfo as SharedFileInfo
 
 
 @dataclass(frozen=True)
@@ -54,3 +56,24 @@ class FileDownload:
 
     info: FileInfo
     chunks: Iterator[bytes]
+
+
+@dataclass
+class CommonFileInfo(SharedFileInfo):
+    """Tagged shared file info with Team 6's retained content-type extension."""
+
+    content_type: str | None = None
+
+
+def common_file_info(info: FileInfo) -> CommonFileInfo:
+    """Convert provider metadata to the common model without inventing an S3 id."""
+    return CommonFileInfo(
+        id=None,
+        name=info.key.rsplit("/", 1)[-1],
+        path="/" + info.key,
+        size=info.size,
+        modified_at=info.last_modified.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+        etag=info.etag,
+        type=None,
+        content_type=info.content_type,
+    )

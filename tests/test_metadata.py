@@ -1,4 +1,4 @@
-"""Metadata: GET /metadata/{key}. Owner: Darsh Shani."""
+"""Metadata: GET /files/metadata?path={key}. Owner: Darsh Shani."""
 
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
@@ -22,53 +22,66 @@ def test_metadata_reports_size_and_a_type_picked_by_the_server(client):
     created = send_file(client, "POST", key, data)
     assert created.status_code == 201
 
-    response = client.get(f"/metadata/{key}")
+    response = client.get("/files/metadata", params={"path": key})
     assert response.status_code == 200
     meta = response.json()
-    assert set(meta) == {"key", "size", "content_type", "etag", "last_modified"}
-    assert meta["key"] == key
+    assert set(meta) == {
+        "id",
+        "name",
+        "path",
+        "size",
+        "content_type",
+        "etag",
+        "modified_at",
+        "type",
+    }
+    assert meta["path"] == "/" + key
+    assert meta["id"] is None
+    assert meta["name"] == key.rsplit("/", 1)[-1]
     assert type(meta["size"]) is int
     assert meta["size"] == len(data)
     assert meta["content_type"] == "application/pdf"
     assert isinstance(meta["etag"], str) and meta["etag"]
     assert '"' not in meta["etag"]
-    assert datetime.fromisoformat(meta["last_modified"]).utcoffset() == timedelta(0)
-    assert meta == created.json()
+    assert datetime.fromisoformat(meta["modified_at"]).utcoffset() == timedelta(0)
+    assert meta["etag"] == created.json()["etag"]
+    assert meta["size"] == created.json()["size"]
 
     # Reading metadata changes neither the content nor the metadata.
     assert client.get("/files/download", params={"path": key}).content == data
-    assert client.get(f"/metadata/{key}").json() == meta
+    assert client.get("/files/metadata", params={"path": key}).json() == meta
 
 
 def test_metadata_and_listing_report_the_same_file(client):
     key = "docs/report.pdf"
     assert send_file(client, "POST", key, b"report").status_code == 201
-    metadata = client.get(f"/metadata/{key}")
+    metadata = client.get("/files/metadata", params={"path": key})
     listing = client.get("/files", params={"prefix": "docs/"})
     assert metadata.status_code == listing.status_code == 200
     listed = listing.json()["files"]
     assert len(listed) == 1
-    for field in ("key", "size", "etag", "last_modified"):
+    assert metadata.json()["path"] == "/" + listed[0]["key"]
+    assert metadata.json()["modified_at"] == listed[0]["last_modified"]
+    for field in ("size", "etag"):
         assert listed[0][field] == metadata.json()[field]
     assert listed[0]["content_type"] is None
 
 
 def test_metadata_missing_file_returns_the_public_error(client):
-    response = client.get("/metadata/missing.txt")
+    response = client.get("/files/metadata?path=missing.txt")
     assert response.status_code == 404
     assert response.json() == {
-        "error": "FileNotFound",
-        "detail": "no file named 'missing.txt'",
+        "error": {"code": "not_found", "message": "no file named 'missing.txt'"}
     }
 
 
 def test_metadata_accepts_a_unicode_key_at_the_utf8_byte_limit(client):
-    key = "é" * 510 + ".txt"  # 1024 UTF-8 bytes, not 1024 characters.
+    key = "é" * 510 + ".tx"  # 1024 bytes including the canonical leading slash.
     path = quote(key, safe="/")
     assert send_file(client, "POST", path, b"hello").status_code == 201
-    response = client.get(f"/metadata/{path}")
+    response = client.get(f"/files/metadata?path={path}")
     assert response.status_code == 200
-    assert response.json()["key"] == key
+    assert response.json()["path"] == "/" + key
 
 
 @pytest.mark.parametrize(
@@ -77,11 +90,11 @@ def test_metadata_accepts_a_unicode_key_at_the_utf8_byte_limit(client):
 def test_metadata_rejects_invalid_keys_before_calling_storage(key):
     storage = FakeStorage()
     with TestClient(create_app(FileService(storage, max_upload_bytes=1024))) as client:
-        response = client.get(f"/metadata/{quote(key, safe='/')}")
+        response = client.get(f"/files/metadata?path={quote(key, safe='/')}")
     assert response.status_code == 400
-    assert set(response.json()) == {"error", "detail"}
-    assert response.json()["error"] == "InvalidInput"
-    assert response.json()["detail"]
+    assert set(response.json()) == {"error"}
+    assert response.json()["error"]["code"] == "invalid_request"
+    assert response.json()["error"]["message"]
     assert storage.calls == []
 
 
@@ -90,14 +103,17 @@ def test_metadata_uses_the_injected_storage_contract():
     info = storage.put("docs/report.pdf", BytesIO(b"%PDF-1.7 pdf"), "application/pdf")
     storage.calls.clear()  # Only the HTTP request's calls are checked below.
     with TestClient(create_app(FileService(storage, max_upload_bytes=1024))) as client:
-        response = client.get("/metadata/docs/report.pdf")
+        response = client.get("/files/metadata?path=docs/report.pdf")
     assert response.status_code == 200
     assert response.json() == {
-        "key": "docs/report.pdf",
+        "id": None,
+        "name": "report.pdf",
+        "path": "/docs/report.pdf",
+        "type": None,
         "size": 12,
         "content_type": "application/pdf",
         "etag": info.etag,
-        "last_modified": info.last_modified.isoformat().replace("+00:00", "Z"),
+        "modified_at": info.last_modified.isoformat().replace("+00:00", "Z"),
     }
     assert storage.calls == [("stat", "docs/report.pdf")]
 
@@ -107,9 +123,9 @@ def test_metadata_translates_injected_provider_rejection_to_public_error():
     error = ProviderError("storage provider rejected the request")
     storage.fail("stat", error)
     with TestClient(create_app(FileService(storage, max_upload_bytes=1024))) as client:
-        response = client.get("/metadata/report.pdf")
+        response = client.get("/files/metadata?path=report.pdf")
     assert response.status_code == 502
-    assert response.json() == {"error": type(error).__name__, "detail": str(error)}
+    assert response.json() == {"error": {"code": error.code, "message": str(error)}}
     assert storage.calls == [("stat", "report.pdf")]
 
 
@@ -176,10 +192,10 @@ def test_s3_metadata_translates_connection_failure(stubbed_s3, monkeypatch):
 
 def test_metadata_openapi_documents_the_response_and_expected_errors(client):
     schema = client.get("/openapi.json").json()
-    responses = schema["paths"]["/metadata/{key}"]["get"]["responses"]
+    responses = schema["paths"]["/files/metadata"]["get"]["responses"]
     assert {"200", "400", "404", "502", "503"} <= responses.keys()
-    model = schema["components"]["schemas"]["FileInfo"]
-    assert set(model["required"]) == {"key", "size", "content_type", "etag", "last_modified"}
+    model = schema["components"]["schemas"]["CommonFileInfo"]
+    assert set(model["required"]) == {"id", "name", "path", "size", "etag", "modified_at", "type"}
 
 
 @pytest.mark.provider
@@ -190,24 +206,37 @@ def test_metadata_reports_real_provider_values_and_matches_listing(
     data = b"%PDF-1.7 metadata provider verification"
     created = send_file(provider_client, "POST", key, data)
     assert created.status_code == 201
-    response = provider_client.get(f"/metadata/{key}")
+    response = provider_client.get("/files/metadata", params={"path": key})
     assert response.status_code == 200
     meta = response.json()
-    assert set(meta) == {"key", "size", "content_type", "etag", "last_modified"}
-    assert meta["key"] == key
+    assert set(meta) == {
+        "id",
+        "name",
+        "path",
+        "size",
+        "content_type",
+        "etag",
+        "modified_at",
+        "type",
+    }
+    assert meta["path"] == "/" + key
+    assert meta["id"] is None
+    assert meta["name"] == key.rsplit("/", 1)[-1]
     assert type(meta["size"]) is int and meta["size"] == len(data)
     assert meta["content_type"] == "application/pdf"
     assert isinstance(meta["etag"], str) and meta["etag"] and '"' not in meta["etag"]
-    modified = datetime.fromisoformat(meta["last_modified"])
+    modified = datetime.fromisoformat(meta["modified_at"])
     assert modified.utcoffset() == timedelta(0)
-    assert meta == created.json()
+    assert meta["etag"] == created.json()["etag"]
+    assert meta["size"] == created.json()["size"]
     assert provider_client.get("/files/download", params={"path": key}).content == data
 
     listing = provider_client.get("/files", params={"prefix": provider_prefix})
     assert listing.status_code == 200
     files = listing.json()["files"]
     assert len(files) == 1
-    for field in ("key", "size", "etag"):
+    assert meta["path"] == "/" + files[0]["key"]
+    for field in ("size", "etag"):
         assert files[0][field] == meta[field]
     listed_modified = datetime.fromisoformat(files[0]["last_modified"])
     assert listed_modified.utcoffset() == timedelta(0)

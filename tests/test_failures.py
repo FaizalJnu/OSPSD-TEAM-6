@@ -38,20 +38,20 @@ def failure_log(caplog, response) -> dict[str, object]:
     assert event["level"] == records[0].levelname
     assert event["event"] == "request_failed"
     assert event["status"] == response.status_code
-    assert event["error"] == response.json()["error"]
-    assert event["detail"] == response.json()["detail"]
+    assert event["error"] == response.json()["error"]["code"]
+    assert event["detail"] == response.json()["error"]["message"]
     return event
 
 
 def test_a_successful_request_logs_nothing(fake_client, caplog):
     assert send_file(fake_client, "POST", "notes.txt", b"data").status_code == 201
-    assert fake_client.get("/metadata/notes.txt").status_code == 200
+    assert fake_client.get("/files/metadata?path=notes.txt").status_code == 200
 
     assert [record for record in caplog.records if record.name == LOGGER] == []
 
 
 def test_invalid_input_is_logged_as_rejected_before_the_provider(fake, fake_client, caplog):
-    response = fake_client.get("/metadata/a//b.txt")
+    response = fake_client.get("/files/metadata?path=a//b.txt")
 
     assert response.status_code == 400
     event = failure_log(caplog, response)
@@ -69,12 +69,12 @@ def test_input_fastapi_rejects_is_logged_like_our_own(fake_client, caplog):
     assert response.status_code == 400
     event = failure_log(caplog, response)
     assert event["operation"] == "list_files"
-    assert event["error"] == "InvalidInput"
+    assert event["error"] == "invalid_request"
     assert event["provider_involved"] is False
 
 
 def test_a_missing_file_is_logged_as_reported_by_the_provider(fake_client, caplog):
-    response = fake_client.get("/metadata/missing.txt")
+    response = fake_client.get("/files/metadata?path=missing.txt")
 
     assert response.status_code == 404
     event = failure_log(caplog, response)
@@ -86,12 +86,11 @@ def test_a_missing_file_is_logged_as_reported_by_the_provider(fake_client, caplo
 def test_access_denied_is_403_and_logged_for_whoever_runs_the_service(fake, fake_client, caplog):
     fake.fail("stat", AccessDenied("the storage provider denied access", provider_code="403"))
 
-    response = fake_client.get("/metadata/notes.txt")
+    response = fake_client.get("/files/metadata?path=notes.txt")
 
     assert response.status_code == 403
     assert response.json() == {
-        "error": "AccessDenied",
-        "detail": "the storage provider denied access",
+        "error": {"code": "permission_denied", "message": "the storage provider denied access"}
     }
     event = failure_log(caplog, response)
     assert event["provider_code"] == "403"
@@ -125,7 +124,7 @@ def test_a_write_that_failed_in_the_write_call_is_logged_as_unknown(fake, fake_c
     assert event["operation"] == "create_file"
     assert event["storage_call"] == "put"
     assert event["write_outcome"] == "unknown"
-    assert fake_client.get("/metadata/notes.txt").status_code == 200  # it was stored
+    assert fake_client.get("/files/metadata?path=notes.txt").status_code == 200  # it was stored
 
 
 def test_a_folder_delete_that_failed_while_listing_is_logged_as_not_attempted(
@@ -186,8 +185,7 @@ def test_provider_messages_stay_out_of_responses_and_logs(stubbed_s3, caplog):
 
     assert response.status_code == 502
     assert response.json() == {
-        "error": "ProviderError",
-        "detail": "the storage provider rejected the request",
+        "error": {"code": "provider_error", "message": "the storage provider rejected the request"}
     }
     event = failure_log(caplog, response)
     assert event["provider_code"] == "NoSuchBucket"
@@ -199,7 +197,9 @@ def test_a_path_with_no_route_is_route_not_found_not_a_missing_file(fake, fake_c
     response = fake_client.get("/nothing")
 
     assert response.status_code == 404
-    assert response.json() == {"error": "RouteNotFound", "detail": "no route matches this path"}
+    assert response.json() == {
+        "error": {"code": "route_not_found", "message": "no route matches this path"}
+    }
     event = failure_log(caplog, response)
     assert event["operation"] is None  # no operation ran
     assert event["provider_involved"] is False
@@ -223,8 +223,7 @@ def test_a_method_the_path_does_not_accept_is_405_with_every_allowed_method(
 
     assert response.status_code == 405
     assert response.json() == {
-        "error": "MethodNotAllowed",
-        "detail": f"this path does not accept {method}",
+        "error": {"code": "method_not_allowed", "message": f"this path does not accept {method}"}
     }
     assert response.headers["allow"] == allowed
     event = failure_log(caplog, response)
@@ -265,7 +264,7 @@ def test_a_multipart_body_that_cannot_be_read_is_invalid_input(
     response = fake_client.request(method, "/files/notes.txt", **request)
 
     assert response.status_code == 400
-    assert response.json() == {"error": "InvalidInput", "detail": f"file: {message}"}
+    assert response.json() == {"error": {"code": "invalid_request", "message": f"file: {message}"}}
     event = failure_log(caplog, response)
     assert event["operation"] == operation
     assert event["provider_involved"] is False
@@ -286,8 +285,7 @@ def test_a_bug_is_a_500_internal_error_that_claims_nothing_about_the_write(fake,
 
     assert response.status_code == 500
     assert response.json() == {
-        "error": "InternalError",
-        "detail": "the service failed unexpectedly",
+        "error": {"code": "internal_error", "message": "the service failed unexpectedly"}
     }
     assert "secret internals" not in response.text
     event = failure_log(caplog, response)  # also checks that the traceback is logged
@@ -302,12 +300,11 @@ def test_a_storage_error_with_no_status_of_its_own_is_an_internal_error(fake, fa
     # Only StorageError's subclasses have a status. Raising the base class is a bug.
     fake.fail("stat", StorageError("raised without a subclass"))
 
-    response = fake_client.get("/metadata/notes.txt")
+    response = fake_client.get("/files/metadata?path=notes.txt")
 
     assert response.status_code == 500
     assert response.json() == {
-        "error": "InternalError",
-        "detail": "the service failed unexpectedly",
+        "error": {"code": "internal_error", "message": "the service failed unexpectedly"}
     }
     event = failure_log(caplog, response)
     assert event["operation"] == "get_metadata"
@@ -361,7 +358,7 @@ def serve_get(app, path: str, query: bytes = b"") -> list[dict[str, Any]]:
             ),
             {
                 "level": "ERROR",
-                "error": "ProviderUnavailable",
+                "error": "provider_unavailable",
                 "detail": "could not reach the storage provider",
                 "provider_involved": True,
                 "storage_call": "get",
@@ -372,7 +369,7 @@ def serve_get(app, path: str, query: bytes = b"") -> list[dict[str, Any]]:
             RuntimeError("bug: the backend's secret internals"),
             {
                 "level": "ERROR",
-                "error": "InternalError",
+                "error": "internal_error",
                 "detail": "the service failed unexpectedly",
                 "provider_involved": None,
                 "storage_call": None,
@@ -423,7 +420,7 @@ def test_openapi_lists_each_routes_errors_with_our_body_and_no_422(client):
         ("PUT", "/files/{key}"): every_route | {"404", "413"},
         ("GET", "/files/download"): every_route | {"404"},
         ("DELETE", "/files"): every_route | {"404"},
-        ("GET", "/metadata/{key}"): every_route | {"404"},
+        ("GET", "/files/metadata"): every_route | {"404"},
     }
     error_body = {"$ref": "#/components/schemas/ErrorBody"}
     for (method, path), statuses in expected.items():
@@ -432,7 +429,8 @@ def test_openapi_lists_each_routes_errors_with_our_body_and_no_422(client):
         assert errors == statuses, (method, path)
         for status in errors:
             assert responses[status]["content"]["application/json"]["schema"] == error_body
-    assert set(schema["components"]["schemas"]["ErrorBody"]["properties"]) == {"error", "detail"}
+    assert set(schema["components"]["schemas"]["ErrorBody"]["properties"]) == {"error"}
+    assert set(schema["components"]["schemas"]["ErrorDetail"]["properties"]) == {"code", "message"}
     assert "HTTPValidationError" not in schema["components"]["schemas"]
 
 
@@ -445,7 +443,7 @@ def test_wrong_credentials_are_access_denied_on_the_real_provider(provider_clien
 
     with TestClient(create_app(build_service(wrong))) as denied:
         responses = [
-            denied.get(f"/metadata/{key}"),
+            denied.get("/files/metadata"),
             denied.get("/files", params={"prefix": provider_prefix}),
             send_file(denied, "POST", key, b"never stored"),
         ]
@@ -453,8 +451,7 @@ def test_wrong_credentials_are_access_denied_on_the_real_provider(provider_clien
     for response in responses:
         assert response.status_code == 403
         assert response.json() == {
-            "error": "AccessDenied",
-            "detail": "the storage provider denied access",
+            "error": {"code": "permission_denied", "message": "the storage provider denied access"}
         }
     # Create stopped at its existence check, so nothing was written.
     listing = provider_client.get("/files", params={"prefix": provider_prefix})

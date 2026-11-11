@@ -14,9 +14,9 @@ def test_bad_list_limit_returns_400(client: TestClient, limit: str) -> None:
 
     assert response.status_code == 400
     body = response.json()
-    assert set(body) == {"error", "detail"}
-    assert body["error"] == "InvalidInput"
-    assert body["detail"].startswith("limit: ")
+    assert set(body) == {"error"}
+    assert body["error"]["code"] == "invalid_request"
+    assert body["error"]["message"].startswith("limit: ")
 
 
 def test_upload_without_file_field_returns_400_and_stores_nothing(client: TestClient) -> None:
@@ -24,7 +24,7 @@ def test_upload_without_file_field_returns_400_and_stores_nothing(client: TestCl
 
     assert response.status_code == 400
     body = response.json()
-    assert set(body) == {"error", "detail"}
-    assert body["error"] == "InvalidInput"
-    assert body["detail"].startswith("file: ")
-    assert client.get("/metadata/notes.txt").status_code == 404
+    assert set(body) == {"error"}
+    assert body["error"]["code"] == "invalid_request"
+    assert body["error"]["message"].startswith("file: ")
+    assert client.get("/files/metadata?path=notes.txt").status_code == 404

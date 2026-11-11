@@ -1578,7 +1578,33 @@ because they show how OCI pages and treats cursors, which `list_folder` still re
   `uv run --env-file .env pytest -m provider tests/test_list.py tests/test_metadata.py`
 - Observed: `2 passed, 63 deselected` (`test_list_folder_on_the_real_provider` and
   the Metadata provider test).
-- Not yet run: a folder of more than 1000 entries on OCI.
+
+#### More than 1000 entries in one folder
+
+- Provider: OCI Object Storage, us-ashburn-1, my own private test bucket
+- Date: 2026-11-11
+- Commit: a08969e (`89-list-route`)
+- Setup: under a fresh folder `P=api-tests/list-1000-<uuid>`, 1005 one-byte files
+  `0000.txt` to `1004.txt`, plus `sub/x.txt` and `sub/deep/y.txt`. Also a neighbor
+  `<P>x/n.txt`, a sibling whose name starts with the folder's name. The objects were
+  uploaded through `S3Storage.put` (16 threads, about 8 s for 1008 objects). Then,
+  through `create_app` over the same `S3Storage`, with a botocore
+  `provide-client-params` hook counting `ListObjectsV2` calls:
+  ```text
+  GET /files?path=/<P>
+  DELETE /files?path=/<P>     DELETE /files?path=/<P>x
+  GET /files?path=/<P>        GET /files?path=/<P>x
+  ```
+- Expected: 200 with 1006 entries: the 1005 files in order, then `sub` once as a
+  folder. The neighbor and `sub/deep` do not appear. At least two provider pages. Both
+  deletes 204, then both listings 404.
+- Observed, three runs, the same each time: 200 with exactly the expected 1006
+  paths, each once, in order (1005 `file`, 1 `folder`). The neighbor was absent. Every
+  file entry had `id` `null`, `size` 1, `content_type` `null`, and a `modified_at`
+  ending in `Z`. The request took 0.27–0.34 s. The run with the hook made two calls,
+  `ListObjectsV2(MaxKeys=1000)` and then one with a `ContinuationToken`, so the
+  service merged two provider pages. Cleanup: 204 and 204, then 404 `not_found` for
+  both paths.
 
 
 #### Run by Faizal Rahman, with Claude Code (covering for Prateek)
@@ -1694,8 +1720,9 @@ same bucket. Its output is the one shown there, and its prefix was empty afterwa
 * **Changes between pages** are tested only on the in-memory backend.
 * **Short or empty pages that still have a cursor** never happened on OCI, so the
   "continue until `null`" rule was exercised only with full pages.
-* **Cursor lifetime** and **more than 1000 entries in one folder on OCI** are not
-  tested. Over 1000 is tested only on the in-memory backend.
+* **Cursor lifetime** is not tested. More than 1000 entries in one folder was run on
+  OCI by hand (above), not by a provider test, because uploading 1000 objects is too
+  slow for every `-m provider` run.
 * **Empty folders.** On S3 a folder exists only while a file is under it, so an empty
   folder is 404. Dropbox keeps empty folders and lists them as `[]`. The shared
   contract has not settled this (shared #3).

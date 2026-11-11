@@ -122,8 +122,12 @@ class S3Storage:
                 raise
         return _info_from_response(key, response)
 
-    def list_files(self, prefix: str, limit: int, cursor: str | None) -> FilePage:
+    def list_files(
+        self, prefix: str, limit: int, cursor: str | None, delimiter: str | None = None
+    ) -> FilePage:
         request: dict[str, Any] = {"Bucket": self._bucket, "Prefix": prefix, "MaxKeys": limit}
+        if delimiter is not None:
+            request["Delimiter"] = delimiter
         if cursor is not None:
             request["ContinuationToken"] = _decode_cursor(cursor, prefix)
         with _translate_errors():
@@ -148,7 +152,8 @@ class S3Storage:
         ]
         token = response.get("NextContinuationToken")
         next_cursor = None if token is None else _encode_cursor(prefix, token)
-        return FilePage(files=files, next_cursor=next_cursor)
+        folders = [item["Prefix"] for item in response.get("CommonPrefixes", [])]
+        return FilePage(files=files, next_cursor=next_cursor, folders=folders)
 
     def copy(self, source_key: str, dest_key: str) -> FileInfo:
         # CopyObject copies inside the provider, so the contents never pass through this

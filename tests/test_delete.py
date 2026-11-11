@@ -214,10 +214,12 @@ def test_delete_of_a_large_folder_reads_every_page_then_deletes_1000_keys_per_ca
 class _EmptyFirstPage(FakeStorage):
     """Returns an empty first page with a cursor, which the List contract allows."""
 
-    def list_files(self, prefix: str, limit: int, cursor: str | None) -> FilePage:
+    def list_files(
+        self, prefix: str, limit: int, cursor: str | None, delimiter: str | None = None
+    ) -> FilePage:
         if cursor is None:
             return FilePage(files=[], next_cursor="page-2")
-        return super().list_files(prefix, limit, None)
+        return super().list_files(prefix, limit, None, delimiter)
 
 
 def test_delete_of_a_folder_follows_the_cursor_past_an_empty_page():

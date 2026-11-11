@@ -73,9 +73,13 @@ class FakeStorage:
     def stat(self, key: str) -> FileInfo:
         return self._run("stat", key, lambda: self._store.stat(key))
 
-    def list_files(self, prefix: str, limit: int, cursor: str | None) -> FilePage:
+    def list_files(
+        self, prefix: str, limit: int, cursor: str | None, delimiter: str | None = None
+    ) -> FilePage:
         return self._run(
-            "list_files", prefix, lambda: self._store.list_files(prefix, limit, cursor)
+            "list_files",
+            prefix,
+            lambda: self._store.list_files(prefix, limit, cursor, delimiter),
         )
 
     def copy(self, source_key: str, dest_key: str) -> FileInfo:

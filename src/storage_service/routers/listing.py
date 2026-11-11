@@ -1,15 +1,24 @@
 """List: ``GET /files``."""
 
+from dataclasses import dataclass
 from typing import Annotated
 
 from fastapi import APIRouter, Query
 
-from storage_service.models import FilePage
+from storage_service.models import FileInfo
 from storage_service.routers.deps import Service
 from storage_service.routers.error_handlers import error_responses
 from storage_service.service import MAX_KEY_BYTES, MAX_PAGE_SIZE
 
 router = APIRouter()
+
+
+@dataclass(frozen=True)
+class ListResponse:
+    """One page of files, as this route has always returned it (no folders)."""
+
+    files: list[FileInfo]
+    next_cursor: str | None
 
 
 @router.get(
@@ -43,7 +52,7 @@ def list_files(
         str | None,
         Query(description="The next_cursor from the previous page, sent back unchanged."),
     ] = None,
-) -> FilePage:
+) -> ListResponse:
     """Return one page of files, sorted by key, without changing anything.
 
     Keys at every depth under the prefix are included. To read every file, keep
@@ -52,4 +61,5 @@ def list_files(
 
     Expected failures use {"error": "<type>", "detail": "<message>"}.
     """
-    return service.list_files(prefix=prefix, limit=limit, cursor=cursor)
+    page = service.list_files(prefix=prefix, limit=limit, cursor=cursor)
+    return ListResponse(files=page.files, next_cursor=page.next_cursor)

@@ -87,7 +87,9 @@ class StorageClient(Protocol):
         """
         ...
 
-    def list_files(self, prefix: str, limit: int, cursor: str | None) -> FilePage:
+    def list_files(
+        self, prefix: str, limit: int, cursor: str | None, delimiter: str | None = None
+    ) -> FilePage:
         """Return one page of the files whose keys start with ``prefix``. Only reads.
 
         ``prefix`` is plain text compared with the start of each key, not a folder: keys
@@ -111,6 +113,12 @@ class StorageClient(Protocol):
         an empty page, not an error. A cursor from another ``prefix`` counts as one this
         backend did not produce. S3 wraps the provider's token with its prefix to check
         this, and also raises ``InvalidInput`` when the provider rejects the token.
+
+        With a ``delimiter`` (the service uses "/"), keys that contain it after the
+        prefix are not returned. Each distinct prefix up to and including the first
+        delimiter is returned once in ``folders`` instead, as S3's ``CommonPrefixes``.
+        Files and folders together count toward ``limit``, and the cursor continues
+        after the last of either. Use the same delimiter for every page.
         """
         ...
 

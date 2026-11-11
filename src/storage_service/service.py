@@ -49,6 +49,7 @@ from storage_service.models import (
     FileDownload,
     FileInfo,
     FilePage,
+    FolderEntry,
     common_file_info,
 )
 from storage_service.storage.base import StorageClient
@@ -105,6 +106,34 @@ class FileService:
             raise InvalidInput(f"prefix is longer than {MAX_KEY_BYTES} bytes")
         with _storage_call("list_files"):
             return self._storage.list_files(prefix, limit, cursor)
+
+    def list_folder(self, path: str) -> list[FolderEntry]:
+        """The files and folders directly inside the folder at ``path``, sorted by key.
+
+        Every page is fetched, so the caller gets the whole folder in one result. "/"
+        (or "") is the root. A folder exists only while a file is under it, as on S3,
+        so a path with nothing under it is ``FileNotFound``, except the root, which is
+        just empty.
+        """
+        canonical = normalize_folder(path)
+        key = path_to_key(canonical)
+        prefix = f"{key}/" if key else ""
+        listing: list[FolderEntry] = []
+        cursor: str | None = None
+        while True:
+            with _storage_call("list_files"):
+                page = self._storage.list_files(prefix, MAX_PAGE_SIZE, cursor, delimiter="/")
+            listing += [FolderEntry(key=info.key, info=info) for info in page.files]
+            listing += [
+                FolderEntry(key=folder.removesuffix("/"), info=None) for folder in page.folders
+            ]
+            cursor = page.next_cursor
+            if cursor is None:
+                break
+        if not listing and key:
+            raise FileNotFound(f"no folder at {canonical!r}", storage_call="list_files")
+        # S3 sorts files and folders separately within a page, so sort them together.
+        return sorted(listing, key=lambda entry: entry.key)
 
     def delete(self, path: str) -> None:
         """Delete the file at ``path``, or else the folder there and everything under it.
@@ -280,6 +309,13 @@ def normalize_path(path: str) -> str:
     if _has_bad_segment(path_to_key(canonical)):
         raise InvalidInput("path must not end with '/', or contain '//', '.' or '..' segments")
     return canonical
+
+
+def normalize_folder(path: str) -> str:
+    """Like ``normalize_path``, but "" and "/" name the root folder instead of failing."""
+    if path in ("", "/"):
+        return "/"
+    return normalize_path(path)
 
 
 def path_to_key(canonical_path: str) -> str:

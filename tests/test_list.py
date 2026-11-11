@@ -4,6 +4,7 @@ The traversal tests follow the collection example in docs/testing.txt. Expected 
 are written out by hand, never computed with the code under test.
 """
 
+import io
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -13,12 +14,20 @@ import pytest
 from botocore.exceptions import EndpointConnectionError
 from fastapi.testclient import TestClient
 
-from storage_service.errors import AccessDenied, InvalidInput, ProviderError, ProviderUnavailable
+from storage_service.errors import (
+    AccessDenied,
+    FileNotFound,
+    InvalidInput,
+    ProviderError,
+    ProviderUnavailable,
+)
 from storage_service.main import create_app
-from storage_service.models import FileInfo, FilePage
+from storage_service.models import FileInfo, FilePage, FolderEntry
 from storage_service.service import FileService
 from storage_service.storage.base import StorageClient
+from storage_service.storage.memory import InMemoryStorage
 from tests.conftest import MAX_UPLOAD_BYTES, send_file
+from tests.fakes import FakeStorage
 
 # Stops a traversal whose cursor never runs out, instead of looping forever.
 MAX_PAGES = 50
@@ -560,4 +569,112 @@ def test_list_pages_through_the_real_provider(provider_client, provider_prefix):
     # n = limit: the whole prefix fits in one page.
     assert listed_keys(list_pages(provider_client, prefix=provider_prefix, limit=7)) == [
         provider_prefix + name for name in expected
+    ]
+
+
+# Folder listing (shared contract, #86): FileService.list_folder over each backend.
+
+
+def folder_service(storage: StorageClient | None = None) -> FileService:
+    return FileService(storage or InMemoryStorage(), max_upload_bytes=MAX_UPLOAD_BYTES)
+
+
+def put(service: FileService, key: str) -> None:
+    service.create(key, io.BytesIO(b"x"), 1)
+
+
+def entries(listing: list[FolderEntry]) -> list[tuple[str, str]]:
+    return [(entry.key, "file" if entry.info else "folder") for entry in listing]
+
+
+def test_list_folder_returns_direct_files_and_folders_sorted_by_key():
+    service = folder_service()
+    for key in ("docs/b.txt", "docs/sub/x.txt", "docs/sub/deep/y.txt", "docs/a.txt"):
+        put(service, key)
+    put(service, "docs2/c.txt")
+
+    assert entries(service.list_folder("/docs")) == [
+        ("docs/a.txt", "file"),
+        ("docs/b.txt", "file"),
+        ("docs/sub", "folder"),
+    ]
+
+
+def test_list_folder_accepts_a_path_without_the_leading_slash():
+    service = folder_service()
+    put(service, "docs/a.txt")
+
+    assert entries(service.list_folder("docs")) == [("docs/a.txt", "file")]
+
+
+@pytest.mark.parametrize("root", ["/", ""])
+def test_list_folder_of_the_root_lists_the_top_level(root):
+    service = folder_service()
+    for key in ("top.txt", "docs/a.txt"):
+        put(service, key)
+
+    assert entries(service.list_folder(root)) == [("docs", "folder"), ("top.txt", "file")]
+
+
+def test_list_folder_of_a_missing_folder_is_file_not_found():
+    service = folder_service()
+    put(service, "docs/a.txt")
+
+    with pytest.raises(FileNotFound):
+        service.list_folder("/other")
+
+
+def test_list_folder_of_the_empty_root_is_an_empty_list():
+    assert folder_service().list_folder("/") == []
+
+
+@pytest.mark.parametrize("path", ["/docs/", "/docs//a", "/docs/../a", "/a/./b"])
+def test_list_folder_rejects_a_bad_path_without_calling_storage(path):
+    fake = FakeStorage()
+
+    with pytest.raises(InvalidInput):
+        folder_service(fake).list_folder(path)
+    assert fake.calls == []
+
+
+def test_s3_list_folder_follows_every_page_and_merges_files_and_folders(stubbed_s3):
+    storage, stubber = stubbed_s3
+    params = {"Bucket": "test-bucket", "Prefix": "docs/", "MaxKeys": 1000, "Delimiter": "/"}
+
+    def item(key: str) -> dict[str, Any]:
+        return {"Key": key, "Size": 1, "ETag": '"etag"', "LastModified": MODIFIED}
+
+    # Within a page S3 lists files and folders separately, so the service merges them.
+    stubber.add_response(
+        "list_objects_v2",
+        {
+            "IsTruncated": True,
+            "NextContinuationToken": "token-2",
+            "Contents": [item("docs/a.txt"), item("docs/n.txt")],
+            "CommonPrefixes": [{"Prefix": "docs/m/"}],
+        },
+        params,
+    )
+    # A page can be empty and still have a next token.
+    stubber.add_response(
+        "list_objects_v2",
+        {"IsTruncated": True, "NextContinuationToken": "token-3"},
+        {**params, "ContinuationToken": "token-2"},
+    )
+    stubber.add_response(
+        "list_objects_v2",
+        {
+            "IsTruncated": False,
+            "Contents": [item("docs/q.txt")],
+            "CommonPrefixes": [{"Prefix": "docs/z/"}],
+        },
+        {**params, "ContinuationToken": "token-3"},
+    )
+
+    assert entries(folder_service(storage).list_folder("/docs")) == [
+        ("docs/a.txt", "file"),
+        ("docs/m", "folder"),
+        ("docs/n.txt", "file"),
+        ("docs/q.txt", "file"),
+        ("docs/z", "folder"),
     ]

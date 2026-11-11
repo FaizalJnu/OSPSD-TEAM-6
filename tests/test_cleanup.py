@@ -21,10 +21,12 @@ def test_cleanup_deletes_more_than_one_page_of_files():
 class _ShortFirstPage(FakeStorage):
     """Returns an empty first page with a cursor, which the List contract allows."""
 
-    def list_files(self, prefix: str, limit: int, cursor: str | None) -> FilePage:
+    def list_files(
+        self, prefix: str, limit: int, cursor: str | None, delimiter: str | None = None
+    ) -> FilePage:
         if cursor is None:
             return FilePage(files=[], next_cursor="page-2")
-        return super().list_files(prefix, limit, None)
+        return super().list_files(prefix, limit, None, delimiter)
 
 
 def test_cleanup_follows_the_cursor_past_an_empty_page():

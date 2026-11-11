@@ -10,7 +10,8 @@ wired in.
 Rules every backend must follow:
 
 * Keys are used exactly as given. Validating them is the service's job.
-* ``stat`` and ``get`` raise ``FileNotFound`` when the key does not exist.
+* ``stat`` and ``get`` raise ``FileNotFound`` when the key does not exist, and so does
+  ``copy`` when its source does not exist.
 * ``delete`` on a missing key succeeds silently, because that is how S3 behaves.
 * ``delete_many`` treats a missing key the same way, and returns the keys it could
   not remove instead of raising for them.
@@ -110,6 +111,20 @@ class StorageClient(Protocol):
         an empty page, not an error. A cursor from another ``prefix`` counts as one this
         backend did not produce. S3 wraps the provider's token with its prefix to check
         this, and also raises ``InvalidInput`` when the provider rejects the token.
+        """
+        ...
+
+    def copy(self, source_key: str, dest_key: str) -> FileInfo:
+        """Copy the file stored under ``source_key`` to ``dest_key`` and return the copy's info.
+
+        Changes provider state: creates the file at ``dest_key``, or replaces it if one
+        exists. Deciding whether that is allowed is the service's job. The source is left
+        unchanged. The copy has the source's contents and content type. Its
+        ``last_modified`` is the time of the copy.
+
+        Raises ``FileNotFound`` if no file exists under ``source_key``, and
+        ``AccessDenied``, ``ProviderError``, or ``ProviderUnavailable`` if the provider
+        fails. If it raises, the copy may or may not have been made.
         """
         ...
 

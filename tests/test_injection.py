@@ -93,7 +93,7 @@ def test_create_app_without_a_service_builds_storage_from_the_environment(monkey
     assert client.get("/files/metadata?path=too-big.bin").status_code == 404
 
 
-def test_the_app_serves_the_six_operations_and_nothing_else(client):
+def test_the_app_serves_the_seven_operations_and_nothing_else(client):
     paths = client.get("/openapi.json").json()["paths"]
     routes = {(method.upper(), path) for path, methods in paths.items() for method in methods}
     assert routes == {
@@ -103,6 +103,7 @@ def test_the_app_serves_the_six_operations_and_nothing_else(client):
         ("GET", "/files/download"),
         ("DELETE", "/files"),
         ("GET", "/files/metadata"),
+        ("PATCH", "/files"),
     }
 
     # The schema shows {key} whether or not it may contain "/", so check that a key with

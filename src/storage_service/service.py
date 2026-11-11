@@ -10,6 +10,9 @@ Rules:
 * Replace only works on a file that exists: otherwise FileNotFound.
 * Delete of a path with no file or folder fails with FileNotFound, so typos are
   visible. Delete of a folder removes everything under it, and is not all-or-nothing.
+* Move never overwrites: a file or folder at the new path fails with
+  FileAlreadyExists. It copies, then deletes the original, so a failed delete
+  after a successful copy is a ProviderError: the file may now be at both paths.
 * The server picks the content type from the key's extension. Whatever type
   the client claims is ignored.
 * A client names a file by its path, with or without a leading "/". The storage
@@ -38,6 +41,7 @@ from storage_service.errors import (
     FileNotFound,
     FileTooLarge,
     InvalidInput,
+    InvalidOperation,
     ProviderError,
 )
 from storage_service.models import (
@@ -159,6 +163,55 @@ class FileService:
             if failed:
                 raise ProviderError(unfinished, storage_call="delete_many")
 
+    def move(self, path: str, new_path: str) -> CommonFileInfo:
+        """Move a file from ``path`` to ``new_path`` and return its info at the new path.
+
+        Checked in this order, so nothing is copied unless every check passes:
+
+        1. Both paths follow the path rules: otherwise InvalidInput.
+        2. The paths differ, and not only in letter case: otherwise InvalidOperation,
+           without calling storage. Some providers treat "A.pdf" and "a.pdf" as one
+           file and S3 treats them as two, so a case-only rename is refused.
+        3. A file exists at ``path``: otherwise InvalidOperation if ``path`` is a
+           folder (files are stored under it), else FileNotFound.
+        4. Nothing exists at ``new_path``, neither a file nor a folder: otherwise
+           FileAlreadyExists.
+        5. Copy, then delete the original. If the delete fails for any reason, the copy
+           exists and the original may or may not, so the error is ProviderError.
+        """
+        source = normalize_path(path)
+        dest = normalize_path(new_path)
+        if dest == source:
+            raise InvalidOperation(f"{dest!r} is already the file's path")
+        if dest.casefold() == source.casefold():
+            raise InvalidOperation("a move cannot change only the letter case of a path")
+        source_key, dest_key = path_to_key(source), path_to_key(dest)
+        if not self._exists(source_key):
+            if self._is_folder(source_key):
+                raise InvalidOperation(
+                    f"{source!r} is a folder; only files can be moved", storage_call="list_files"
+                )
+            raise FileNotFound(f"no file at {source!r}", storage_call="stat")
+        if self._exists(dest_key):
+            raise FileAlreadyExists(f"a file already exists at {dest!r}", storage_call="stat")
+        if self._is_folder(dest_key):
+            raise FileAlreadyExists(
+                f"a folder already exists at {dest!r}", storage_call="list_files"
+            )
+        with _storage_call("copy"):
+            info = self._storage.copy(source_key, dest_key)
+        try:
+            with _storage_call("delete"):
+                self._storage.delete(source_key)
+        except SharedStorageError as err:
+            raise ProviderError(
+                f"the file was copied to {dest!r}, but deleting the original at {source!r} "
+                "could not be confirmed",
+                storage_call="delete",
+                provider_code=getattr(err, "provider_code", None),
+            ) from err
+        return common_file_info(info)
+
     def _exists(self, key: str) -> bool:
         try:
             with _storage_call("stat"):
@@ -166,6 +219,11 @@ class FileService:
         except SharedNotFoundError:
             return False
         return True
+
+    def _is_folder(self, key: str) -> bool:
+        """Whether any file is stored under ``key + "/"``, which makes ``key`` a folder."""
+        with _storage_call("list_files"):
+            return bool(self._storage.list_files(key + "/", 1, None).files)
 
     def _check_size(self, size: int) -> None:
         if size > self._max_upload_bytes:

@@ -66,6 +66,21 @@ def test_missing_key_raises_file_not_found(storage, prefix):
         storage.stat(prefix + "missing.txt")
     with pytest.raises(FileNotFound):
         storage.get(prefix + "missing.txt")
+    with pytest.raises(FileNotFound):
+        storage.copy(prefix + "missing.txt", prefix + "copy.txt")
+
+
+def test_copy_makes_a_second_file_and_keeps_the_original(storage, prefix):
+    source, dest = prefix + "a.txt", prefix + "b.txt"
+    put_bytes(storage, source, b"copied bytes")
+
+    info = storage.copy(source, dest)
+
+    assert info.key == dest
+    assert info.size == len(b"copied bytes")
+    assert b"".join(storage.get(dest).chunks) == b"copied bytes"
+    assert storage.stat(dest).content_type == "text/plain"
+    assert b"".join(storage.get(source).chunks) == b"copied bytes"
 
 
 def test_delete_of_a_missing_key_is_silent(storage, prefix):

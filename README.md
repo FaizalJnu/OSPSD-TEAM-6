@@ -133,6 +133,7 @@ Add `-i` to any command to show the status code and response headers.
 | `PUT` | `/files/{key}` | Replace an existing file |
 | `GET` | `/files/download?path=` | Download a file (streamed) |
 | `DELETE` | `/files?path=` | Delete a file, or a folder and everything under it |
+| `PATCH` | `/files?path=` | Move a file (JSON body `{"new_path": ...}`) |
 | `GET` | `/files/metadata?path=` | Get file info as JSON |
 | `GET` | `/files` | List files: `prefix`, `limit` (1 to 1000), `cursor` |
 

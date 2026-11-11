@@ -50,6 +50,7 @@ delete their files afterwards.
 | [tests/test_metadata.py](tests/test_metadata.py) | Metadata: `GET /metadata/{key}` |
 | [tests/test_bucket_errors.py](tests/test_bucket_errors.py) | FIX-2: missing/denied buckets, probe failures, and HTTP checks before writes |
 | [tests/test_delete.py](tests/test_delete.py) | Delete: `DELETE /files?path=` |
+| [tests/test_move.py](tests/test_move.py) | Move: `PATCH /files?path=` |
 | [tests/test_list.py](tests/test_list.py) | List: `GET /files` |
 | [tests/test_service.py](tests/test_service.py) | The key and path rules and the content-type choice, without HTTP |
 | [tests/test_storage_contract.py](tests/test_storage_contract.py) | The same tests for every storage backend |
@@ -77,7 +78,8 @@ in that file, not in `conftest.py`.
 `create_app(FileService(fake, max_upload_bytes=...))`. It:
 
 * records each call in `fake.calls` as `(method, key)`, in order. `list_files` records
-  its prefix instead of a key, and `delete_many` its keys joined with commas.
+  its prefix instead of a key, `delete_many` its keys joined with commas, and `copy`
+  its source key.
 * raises a given error from a given method after `fake.fail(method, error)`, on every
   later call. The method name is typed, so mypy rejects a misspelled one. The error is
   usually one of ours, but can be any exception, to stand in for a bug in a backend.
@@ -1259,6 +1261,139 @@ test cases in this file fail.
   [test_bucket_errors.py](tests/test_bucket_errors.py) (FIX-2), not here, including
   that Delete returns 502 before deleting anything.
 * The race between the check and the delete is documented, not tested.
+
+## Move
+
+Owner: **Vikram Markali**. Contract: [docs/API.md](docs/API.md#move).
+Tests: [tests/test_move.py](tests/test_move.py), plus the `copy` contract tests in
+[tests/test_storage_contract.py](tests/test_storage_contract.py).
+
+### Contract checked
+
+* A move returns 200 with the shared file info at the new path, with the original's
+  size, etag, and content type. Afterwards Metadata finds the file at `new_path` and
+  returns 404 at `path`.
+* The service checks the source, then the destination (file and folder), then
+  copies, then deletes, and copies nothing if any check fails.
+* 400 `invalid_request` for a missing or invalid `path` or `new_path` and for a body
+  that is not JSON, 404 `not_found` for a missing source, 409 `conflict` for a file or
+  folder at the destination, 422 `invalid_operation` for the same path, a case-only
+  rename, or a folder source, and 503 when the provider is unreachable, all in the
+  shared error format.
+* A delete that fails after a successful copy is a 502 `provider_error` whatever the
+  delete's own error was (502, 403, or 503), and the file is then at both paths.
+* `copy` follows its contract in `storage/base.py` on both backends, and
+  `S3Storage.copy` sends `CopyObject` with the right source and destination.
+
+### Cases and boundaries
+
+* **Request shape:** no body, a body that is not JSON, no `new_path`, an invalid
+  `new_path`, no `path`, and an invalid `path`. None of them may reach storage.
+* **Paths that change nothing real:** the same path written with and without its
+  leading `/`, and a path that differs only in letter case. Both are refused before
+  storage is called.
+* **What exists:** a missing source, a folder as source, a file at the destination,
+  and a folder at the destination.
+* **Failures at each provider step:** the source check (503), the copy (502), and the
+  delete after the copy, with each of the three provider errors the delete can raise.
+* **Over a stubbed S3:** the full provider call sequence, including the bucket probe
+  that a HEAD 404 triggers (FIX-2), with `DeleteObject` refused after `CopyObject`
+  succeeded.
+
+### Tests
+
+Run them with `uv run pytest tests/test_move.py`.
+
+HTTP behavior over [`FakeStorage`](#controlled-storage):
+
+* `test_move_copies_then_deletes_and_returns_the_file_at_its_new_path`: 200 with
+  `id` null, the new `name` and `path`, the original's size, etag, and content type;
+  Metadata 404 at the old path and 200 at the new one; calls `stat` source, `stat`
+  destination, `list_files` destination folder, `copy`, `delete`.
+* `test_move_of_a_missing_file_is_404_and_copies_nothing`: 404 `not_found` with
+  `no file at '/docs/a.txt'`, and no `copy` call.
+* `test_move_onto_something_that_exists_is_409_and_changes_nothing`, for a file and
+  for a folder at the destination: 409 `conflict`, no `copy` or `delete` call, and
+  both files still there.
+* `test_move_that_changes_nothing_real_is_422_and_never_calls_storage`, for the same
+  path and a case-only rename: 422 `invalid_operation`, and `fake.calls == []`.
+* `test_move_of_a_folder_is_422_and_copies_nothing`: 422 `invalid_operation`, and
+  only the source `stat` and its folder listing were called.
+* `test_move_with_a_bad_request_is_400_and_never_calls_storage`, for the six request
+  shapes above: 400 `invalid_request`, and `fake.calls == []`.
+* `test_move_whose_delete_fails_after_the_copy_is_502_whatever_the_cause`, with the
+  delete raising `ProviderError`, `AccessDenied`, or `ProviderUnavailable`: 502
+  `provider_error` with the "could not be confirmed" message, and the file at both
+  paths.
+* `test_move_whose_copy_fails_leaves_the_original_alone`: 502, no `delete` call, and
+  the original still there.
+* `test_move_returns_503_when_the_source_check_cannot_reach_the_provider`: 503
+  `provider_unavailable` with the full body, and only the source `stat` was called.
+
+Translation, with `stubbed_s3` (no network):
+
+* `test_s3_copy_sends_copy_object_and_returns_the_copys_info`: `CopyObject` gets the
+  destination key and `CopySource` with the bucket and source key, and the copy's
+  info comes from a follow-up `HeadObject`.
+* `test_s3_copy_of_a_missing_source_raises_file_not_found`: `NoSuchKey` becomes
+  `FileNotFound`.
+* `test_move_over_s3_is_502_when_delete_object_fails_after_copy_object`: the app over
+  a stubbed `S3Storage` sends `HeadObject`, `HeadObject` (404) with its `HeadBucket`
+  probe, `ListObjectsV2` on the destination folder, `CopyObject`, `HeadObject`, then
+  `DeleteObject`, which is refused with `AccessDenied`. The response is 502
+  `provider_error`, not 403.
+
+Contract, on every backend (S3 with `-m provider`):
+
+* `test_copy_makes_a_second_file_and_keeps_the_original`: the copy has the same bytes
+  and content type, and the original is unchanged.
+* `test_missing_key_raises_file_not_found` now also checks that `copy` from a missing
+  key raises `FileNotFound`.
+
+Real provider (marked `provider`):
+
+* `test_move_against_the_real_provider`: a move under the test prefix returns 200 with
+  the new path, `id` null, and the original's size, etag, and content type; Metadata
+  then returns 404 at the old path and 200 at the new one.
+
+Two temporary defects showed that these tests check the rules: turning only a
+`ProviderError` from the delete into the partial-move 502 failed the 403 and 503 cases
+and the stubbed S3 test, and removing the destination folder check failed the folder
+409 test.
+
+### Real-provider verification
+
+#### Run by Vikram Markali
+
+- Provider: OCI Object Storage, us-ashburn-1, my own private test bucket
+- Date: 2026-11-11
+- Commit: d5067e4 (dev after #81 was merged; it includes #83 and #84) plus this
+  branch's Move commit, the one that adds this record
+- Command: `uv run --env-file .env pytest -m provider tests/test_move.py`
+- Expected: the move returns 200 with the new path, Metadata returns 404 at the old
+  path and 200 at the new one, and the size, etag, and content type are unchanged.
+- Observed: `1 passed, 21 deselected`
+- Also ran: `uv run --env-file .env pytest -m provider tests/test_storage_contract.py
+  -k "copy or missing_key"`, which gave `3 passed, 19 deselected`, including `copy`
+  on S3.
+- Cleanup: both runs write under a unique `api-tests/` or `contract-tests/` prefix,
+  and their fixtures delete everything under it afterwards.
+
+### Provider observations
+
+* On OCI, `CopyObject` kept the source's ETag for a small (single-part) file and its
+  content type, so the moved file reports the same `etag` and `content_type` as the
+  original.
+
+### Gaps
+
+* Only one real-provider run is recorded. Level 2 needs runs by two people.
+* The 5 GB per-call `CopyObject` limit is from the AWS documentation and is not
+  verified on OCI. No test copies a file that large.
+* A partial move against a real provider is not tested: a provider cannot be made to
+  refuse the delete on cue. The fake and the stubbed S3 test cover it.
+* The race between the checks and the copy (another client creating a file at
+  `new_path` in between) is documented, not tested.
 
 ## List
 

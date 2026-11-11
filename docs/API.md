@@ -24,6 +24,7 @@ B=http://127.0.0.1:8000
 | [Download](#download) | `GET /files/download?path=` | Vikram Markali |
 | [Metadata](#metadata) | `GET /files/metadata?path=` | Darsh Shani |
 | [Delete](#delete) | `DELETE /files?path=` | Faizal Rahman |
+| [Move](#move) | `PATCH /files?path=` | Vikram Markali |
 | [List](#list) | `GET /files` | Prateek Saxena |
 
 ## Keys
@@ -50,9 +51,10 @@ decoded key.
 
 ## Paths
 
-Download and Metadata name their file, and Delete its file or folder, with a **path**
-in the `path` query parameter. The other operations still take a [key](#keys) in the
-URL until they move to the shared routes.
+Download and Metadata name their file, Delete its file or folder, and Move its file,
+with a **path** in the `path` query parameter. Move's destination is a path too, in its
+JSON body. The other operations still take a [key](#keys) in the URL until they move to
+the shared routes.
 
 A path can be sent with or without its leading `/`: `docs/report.pdf` and
 `/docs/report.pdf` name the same file. Its canonical form always starts with `/`, and
@@ -76,7 +78,7 @@ must be sent as `%2B`. `curl -G --data-urlencode "path=$P"` does the encoding fo
 
 ## File info
 
-Create and Replace still return the legacy file info object. Metadata returns the shared model described in [Metadata](#metadata). List returns file info
+Create and Replace still return the legacy file info object. Metadata and Move return the shared model described in [Metadata](#metadata). List returns file info
 objects in its `files` array.
 
 | Field | JSON type | Meaning |
@@ -597,6 +599,109 @@ The second delete of each returns
 `{"error":{"code":"not_found","message":"no file or folder at '/<path>'"}}`. The first delete
 already removed the samples from the bucket, so only the local file needs cleaning up.
 See [Delete in TESTING.md](../TESTING.md#delete) for the recorded tests.
+
+## Move
+
+`PATCH /files?path=` with the JSON body `{"new_path": "..."}`. Owner: **Vikram Markali**.
+This is the shared contract's `move(from_path, to_path)`; the HTTP shape is
+Dayana20/ospsd26-cloud-storage issue #5.
+
+### Meaning
+
+Move one file to a new path. This changes stored files: afterwards the file is at
+`new_path` and nothing is left at `path`. Only files can be moved, not folders.
+
+### Request
+
+* Query parameter `path` (required): the file to move. It follows the shared
+  [path rules](#paths).
+* JSON body (required, `Content-Type: application/json`): `{"new_path": "<path>"}`,
+  where the file should be afterwards. It follows the same path rules.
+
+A missing or invalid `path` or `new_path`, or a body that is not valid JSON, is
+rejected before storage is called.
+
+### Success
+
+**200** with the shared file info of the file at its new path, as
+[Metadata](#metadata) returns it: `id` (null on S3), `name`, canonical `path`, `size`,
+`modified_at`, `etag`, `type` (null), and Team 6's `content_type` extension. The
+contents, `size`, `etag`, and `content_type` are the original's. `modified_at` is the
+time of the move.
+
+### Side effects
+
+The file is at `new_path` and `path` is empty. Nothing else changes, and nothing is
+ever overwritten.
+
+S3 has no move call, so the service makes these provider calls, in order:
+
+1. `stat` on `path` (S3 `HeadObject`). If it finds nothing, a listing of `path/`
+   tells a folder from a missing file.
+2. `stat` on `new_path`, then a listing of `new_path/`, to make sure neither a file
+   nor a folder is there.
+3. `copy` (S3 `CopyObject`): the provider copies the file to `new_path` itself, so
+   the contents never pass through this service.
+4. `delete` on `path` (S3 `DeleteObject`).
+
+If any check in steps 1 and 2 fails, nothing is copied and nothing changes.
+
+### Errors
+
+Responses use the shared [error format](#error-format):
+
+| Status | Error | When |
+|---|---|---|
+| 400 | `invalid_request` | `path` or `new_path` is missing or breaks a path rule, or the body is not valid JSON. The provider is not contacted. |
+| 403 | `permission_denied` | The provider denied the service's credentials or permissions, before anything was copied. |
+| 404 | `not_found` | No file exists at `path`. Nothing is copied. |
+| 409 | `conflict` | A file, or a folder (files stored under `new_path/`), already exists at `new_path`. Nothing is copied or overwritten. |
+| 422 | `invalid_operation` | `new_path` is the same path as `path`, differs from it only in letter case, or `path` is a folder. The provider is not contacted, except to tell a folder apart. |
+| 502 | `provider_error` | The provider failed. This includes a **partial move**: the copy succeeded, but deleting the original failed, for any reason (even a 403 or 503 from the provider). The file is then at `new_path`, and may still be at `path`. |
+| 503 | `provider_unavailable` | The provider could not be reached during the checks or the copy. |
+
+### Retry
+
+* After a success, repeating the request returns 404, because nothing is at `path`
+  any more.
+* After a 400, 404, 409, or 422, repeating it unchanged gives the same result.
+* After a 502 or 503, the outcome is uncertain: the file may be at `path`, at
+  `new_path`, or at both. Check both with Metadata before retrying. If it is at both,
+  delete the one at `path`. If it is only at `path`, retry the move.
+
+### Assumptions
+
+* A case-only rename (`/A.pdf` to `/a.pdf`) is refused: some providers treat those
+  as one file and S3 treats them as two, so the shared contract forbids it.
+* Moving a folder is not supported. On S3 it would mean copying and deleting every
+  file under it, which takes many calls and cannot be all-or-nothing.
+* `id` is null on S3, because S3 has no identifier that survives a move. Identify
+  files by path.
+* The checks and the copy are separate calls. If another client creates a file at
+  `new_path` between them, the copy replaces it.
+* AWS documents a limit of 5 GB per `CopyObject` call, so larger files would need a
+  multipart copy, which this service does not do. That limit is from the AWS
+  documentation and is **not verified on OCI**.
+
+### Example
+
+With the memory backend or a configured test bucket, in Windows `cmd.exe`:
+
+```bat
+set B=http://127.0.0.1:8000
+echo hello from the move example> hello.txt
+curl.exe -s -F "file=@hello.txt" %B%/files/examples/hello.txt
+curl.exe -s -X PATCH "%B%/files?path=examples/hello.txt" -H "Content-Type: application/json" -d "{\"new_path\": \"examples/moved.txt\"}"
+curl.exe -s "%B%/files/metadata?path=examples/hello.txt"
+curl.exe -s -X DELETE "%B%/files?path=examples/moved.txt"
+del hello.txt
+```
+
+The move returns 200 with `"path":"/examples/moved.txt"`, the metadata request for
+the old path returns 404 `not_found`, and the last line removes the sample from the
+bucket. In bash, use `B=http://127.0.0.1:8000`, `$B` instead of `%B%`, `curl` instead
+of `curl.exe`, `-d '{"new_path": "examples/moved.txt"}'`, and `rm` instead of `del`.
+See [Move in TESTING.md](../TESTING.md#move) for the recorded tests.
 
 ## List
 

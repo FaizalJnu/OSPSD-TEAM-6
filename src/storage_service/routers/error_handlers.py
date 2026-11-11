@@ -90,7 +90,8 @@ def validation_error_handler(request: Request, exc: Exception) -> JSONResponse:
     """FastAPI rejected the input before our code ran. Report it like any other bad input."""
     assert isinstance(exc, RequestValidationError)
     problem = exc.errors()[0]  # e.g. {"loc": ("query", "limit"), "msg": "Input should be ..."}
-    field = problem["loc"][-1]  # "limit", "file", ...
+    # "limit", "file", ...; for a body that is not JSON, loc ends in a character position.
+    field = "body" if problem["type"] == "json_invalid" else problem["loc"][-1]
     return _storage_error_response(request, InvalidInput(f"{field}: {problem['msg']}"), 400)
 
 

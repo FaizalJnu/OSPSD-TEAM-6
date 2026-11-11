@@ -18,13 +18,13 @@ from storage_service.models import FileDownload, FileInfo, FilePage
 from storage_service.storage.base import StorageClient
 from storage_service.storage.memory import InMemoryStorage
 
-Method = Literal["put", "get", "stat", "list_files", "delete", "delete_many"]
+Method = Literal["put", "get", "stat", "list_files", "copy", "delete", "delete_many"]
 
 
 class FakeStorage:
     def __init__(self) -> None:
         # One (method, key) pair per call, in order. list_files records its prefix, and
-        # delete_many its keys joined with commas.
+        # delete_many its keys joined with commas, and copy its source key.
         self.calls: list[tuple[Method, str]] = []
         # Keys delete_many leaves in place and reports as failed, like S3's DeleteObjects
         # when it answers 200 and lists failures in its body.
@@ -77,6 +77,9 @@ class FakeStorage:
         return self._run(
             "list_files", prefix, lambda: self._store.list_files(prefix, limit, cursor)
         )
+
+    def copy(self, source_key: str, dest_key: str) -> FileInfo:
+        return self._run("copy", source_key, lambda: self._store.copy(source_key, dest_key))
 
     def delete(self, key: str) -> None:
         self._run("delete", key, lambda: self._store.delete(key))

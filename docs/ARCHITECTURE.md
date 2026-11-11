@@ -83,9 +83,10 @@ and nothing else:
 |---|---|---|
 | `put` | Create, Replace | Store contents under a key. Create and Replace differ only in a rule the service checks first. |
 | `get` | Download | Open a file as its info plus a stream of chunks, so large files never sit in memory. |
-| `stat` | Metadata; the existence check before Create, Replace, and Delete | Read a file's info without its contents. "Missing" is `FileNotFound`, so no separate `exists` method is needed. |
-| `list_files` | List | One page of files under a prefix, with an opaque cursor. |
-| `delete` | Delete | Remove a file. Silent for a missing key, like S3; the service turns that into a 404 by checking with `stat` first. |
+| `stat` | Metadata; the existence check before Create, Replace, Delete, and Move | Read a file's info without its contents. "Missing" is `FileNotFound`, so no separate `exists` method is needed. |
+| `list_files` | List; Move's check for a folder | One page of files under a prefix, with an opaque cursor. |
+| `copy` | Move | Copy a file inside the provider (S3 `CopyObject`), so the contents never pass through the service. S3 has no move call, so Move is a service rule: check, `copy`, then `delete`. |
+| `delete` | Delete, Move | Remove a file. Silent for a missing key, like S3; the service turns that into a 404 by checking with `stat` first. |
 | `delete_many` | Delete of a folder | Remove up to 1000 keys in one provider call, and return the keys it could not remove, because S3 reports those in a successful response. The service lists the keys and splits them into batches. |
 
 Everything provider-specific stays behind it: the endpoint, bucket, and credentials;

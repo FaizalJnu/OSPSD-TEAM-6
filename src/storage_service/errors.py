@@ -14,8 +14,9 @@ class StorageError(shared.StorageError):
     Two optional notes travel with an error for the failure log, never to the caller
     (see ``routers/error_handlers.py``):
 
-    * ``storage_call``: the storage call ("stat", "put", "get", "list_files",
-      "delete", "delete_many") that raised the error, or whose answer made the service raise it.
+    * ``storage_call``: the storage call ("stat", "put", "get", "list_files", "copy",
+      "delete", "delete_many") that raised the error, or whose answer made the service
+      raise it.
       ``None`` means the request was rejected before storage was called.
     * ``provider_code``: the provider's or SDK's own name for the failure, such as
       ``NoSuchBucket`` or ``EndpointConnectionError``. It describes the provider,

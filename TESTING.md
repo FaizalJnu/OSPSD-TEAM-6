@@ -46,7 +46,7 @@ delete their files afterwards.
 |---|---|
 | [tests/conftest.py](tests/conftest.py) | Shared fixtures (below) |
 | [tests/test_upload.py](tests/test_upload.py) | Create and Replace: `POST` and `PUT /files/{key}` |
-| [tests/test_download.py](tests/test_download.py) | Download: `GET /files/{key}` |
+| [tests/test_download.py](tests/test_download.py) | Download: `GET /files/download?path=` |
 | [tests/test_metadata.py](tests/test_metadata.py) | Metadata: `GET /metadata/{key}` |
 | [tests/test_bucket_errors.py](tests/test_bucket_errors.py) | FIX-2: missing/denied buckets, probe failures, and HTTP checks before writes |
 | [tests/test_delete.py](tests/test_delete.py) | Delete: `DELETE /files?path=` |
@@ -669,9 +669,12 @@ Tests: [tests/test_download.py](tests/test_download.py).
   `X-Content-Type-Options`.
 * The header values agree with the file's info: the `ETag` is the Metadata `etag` in
   quotes, and `Content-Length` is the size.
-* An invalid key returns 400 `InvalidInput`, a missing file returns 404
-  `FileNotFound`, and a provider outage in `get` returns 503 `ProviderUnavailable`,
-  all in the error format.
+* A missing or invalid `path` returns 400 `InvalidInput` without calling storage, a
+  missing file returns 404 `FileNotFound`, and a provider outage in `get` returns 503
+  `ProviderUnavailable`, all in the error format.
+* A path finds its file with or without the leading `/`, and storage only sees the key.
+* The old `GET /files/{key}` route is gone: a `GET` there returns 405
+  `MethodNotAllowed` with `Allow: POST, PUT`.
 * The `get` contract in `storage/base.py` holds for `S3Storage`: a `get_object` answer
   becomes `FileInfo` plus chunks, provider errors become our errors (also while the
   chunks are read), and the provider stream is closed after reading.
@@ -681,9 +684,10 @@ Tests: [tests/test_download.py](tests/test_download.py).
 
 ### Cases and boundaries
 
-* **Key shape:** a key with a folder and non-ASCII characters (`docs/résumé.pdf`),
-  because `Content-Disposition` drops the folder and percent-encodes the name. An
-  invalid key (`a//b.txt`) and a missing key cover the two rejections.
+* **Path shape:** a path with a folder and non-ASCII characters (`/docs/résumé.pdf`),
+  because `Content-Disposition` drops the folder and percent-encodes the name; the same
+  path with and without its leading `/`; invalid paths (empty, `/`, a trailing `/`,
+  `//`, `..`, a control character) and no `path` at all; and a missing file.
 * **Content type:** a known binary type (`.pdf`), a text type (`.txt`, which gains
   `; charset=utf-8`), and an unknown extension (falls back to
   `application/octet-stream`).
@@ -711,10 +715,10 @@ HTTP behavior, on the in-memory backend through `create_app(service)`:
 * [`test_download_content_type_comes_from_the_extension`](tests/test_download.py):
   `notes.txt` gives `text/plain; charset=utf-8`, and `blob.unknownext` gives
   `application/octet-stream`.
-* [`test_download_with_an_invalid_key_is_400`](tests/test_download.py): 400, a body
-  with exactly `error` and `detail`, and `InvalidInput`.
 * [`test_download_of_a_missing_file_is_404`](tests/test_download.py): 404, a body with
   exactly `error` and `detail`, and `FileNotFound`.
+* [`test_the_old_keyed_download_route_is_gone`](tests/test_download.py): `GET
+  /files/notes.txt` returns 405 `MethodNotAllowed` with `Allow: POST, PUT`.
 
 HTTP behavior over [`FakeStorage`](#controlled-storage), with the `fake` and
 `fake_client` fixtures:
@@ -723,6 +727,14 @@ HTTP behavior over [`FakeStorage`](#controlled-storage), with the `fake` and
   with `get` set to raise `ProviderUnavailable`, 503 with exactly
   `{"error": "ProviderUnavailable", "detail": "could not reach the storage provider"}`,
   and `fake.calls == [("get", "notes.txt")]`.
+* [`test_download_finds_the_file_with_or_without_the_leading_slash`](tests/test_download.py):
+  `docs/notes.txt` and `/docs/notes.txt` both return the file, and storage is called
+  once with the key `docs/notes.txt`.
+* [`test_download_of_an_invalid_path_is_400_and_never_calls_storage`](tests/test_download.py):
+  each invalid path returns 400 `InvalidInput`, and `fake.calls == []`.
+* [`test_download_without_a_path_is_400_and_never_calls_storage`](tests/test_download.py):
+  `GET /files/download` with no `path` returns 400 with exactly
+  `{"error": "InvalidInput", "detail": "path: Field required"}`, and `fake.calls == []`.
 
 Translation, with `stubbed_s3` (no network):
 
@@ -871,6 +883,11 @@ Real provider (marked `provider`):
   HTTP mapping with a fake that raises it.
 * **Client disconnects are not tested.** When Starlette stops reading the chunks after
   a client disconnects, and whether it closes them, is not established here.
+* **The real-provider runs above used the old `GET /files/{key}` route.** No run of
+  `GET /files/download?path=` against a real provider is recorded yet.
+* **A folder path is not tested.** It returns 404 `FileNotFound` today, and the shared
+  contract has not decided what it should return (Dayana20/ospsd26-cloud-storage
+  issue #8).
 
 ## Metadata
 

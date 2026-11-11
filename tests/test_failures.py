@@ -213,7 +213,7 @@ def test_a_path_with_no_route_is_route_not_found_not_a_missing_file(fake, fake_c
     [
         ("POST", "/files", "DELETE, GET"),
         # Starlette's own Allow names only the first route that matches the path: POST.
-        ("PATCH", "/files/notes.txt", "GET, POST, PUT"),
+        ("PATCH", "/files/notes.txt", "POST, PUT"),
     ],
 )
 def test_a_method_the_path_does_not_accept_is_405_with_every_allowed_method(
@@ -314,7 +314,7 @@ def test_a_storage_error_with_no_status_of_its_own_is_an_internal_error(fake, fa
     assert event["provider_involved"] is None
 
 
-def serve_get(app, path: str) -> list[dict[str, Any]]:
+def serve_get(app, path: str, query: bytes = b"") -> list[dict[str, Any]]:
     """Send one GET to ``app`` the way uvicorn does, and return every message it sends.
 
     For a response the app leaves unfinished, TestClient returns an empty body instead
@@ -343,7 +343,7 @@ def serve_get(app, path: str) -> list[dict[str, Any]]:
         "path": path,
         "raw_path": path.encode(),
         "root_path": "",
-        "query_string": b"",
+        "query_string": query,
         "headers": [],
         "client": ("testclient", 50000),
         "server": ("testserver", 80),
@@ -387,7 +387,7 @@ def test_a_download_cut_off_after_its_headers_is_left_unfinished_and_logs_the_20
     assert send_file(fake_client, "POST", "big.bin", b"x" * 100).status_code == 201
     fake.cut_downloads(error, after_bytes=11)
 
-    start, *body = serve_get(fake_client.app, "/files/big.bin")
+    start, *body = serve_get(fake_client.app, "/files/download", b"path=big.bin")
 
     # The status and Content-Length went out before the failure.
     assert start["type"] == "http.response.start"
@@ -421,7 +421,7 @@ def test_openapi_lists_each_routes_errors_with_our_body_and_no_422(client):
         ("GET", "/files"): every_route,
         ("POST", "/files/{key}"): every_route | {"409", "413"},
         ("PUT", "/files/{key}"): every_route | {"404", "413"},
-        ("GET", "/files/{key}"): every_route | {"404"},
+        ("GET", "/files/download"): every_route | {"404"},
         ("DELETE", "/files"): every_route | {"404"},
         ("GET", "/metadata/{key}"): every_route | {"404"},
     }

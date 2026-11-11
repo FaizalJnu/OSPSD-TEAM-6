@@ -1,4 +1,4 @@
-"""Download: GET /files/{key}. Owner: Vikram Markali."""
+"""Download: GET /files/download?path=. Owner: Vikram Markali."""
 
 import io
 import os
@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 import pytest
 from botocore.response import StreamingBody
+from fastapi.testclient import TestClient
 from urllib3.exceptions import ProtocolError
 
 from storage_service.errors import AccessDenied, FileNotFound, ProviderUnavailable
@@ -13,12 +14,16 @@ from storage_service.models import FileInfo
 from tests.conftest import send_file
 
 
+def download_path(client: TestClient, path: str):
+    return client.get("/files/download", params={"path": path})
+
+
 def test_download_returns_the_bytes_and_every_promised_header(client):
     data = b"%PDF-1.7 not really a pdf \x00\xff"
     send_file(client, "POST", "docs/résumé.pdf", data)
     etag = client.get("/metadata/docs/résumé.pdf").json()["etag"]
 
-    response = client.get("/files/docs/résumé.pdf")
+    response = download_path(client, "/docs/résumé.pdf")
 
     assert response.status_code == 200
     assert response.content == data
@@ -32,34 +37,71 @@ def test_download_returns_the_bytes_and_every_promised_header(client):
     assert response.headers["x-content-type-options"] == "nosniff"
 
 
+@pytest.mark.parametrize("path", ["docs/notes.txt", "/docs/notes.txt"])
+def test_download_finds_the_file_with_or_without_the_leading_slash(fake, fake_client, path):
+    send_file(fake_client, "POST", "docs/notes.txt", b"data")
+    fake.calls.clear()
+
+    response = download_path(fake_client, path)
+
+    assert response.content == b"data"
+    # Storage only ever sees the key, so a file stored before paths existed is still found.
+    assert fake.calls == [("get", "docs/notes.txt")]
+
+
 @pytest.mark.parametrize(
     ("key", "content_type"),
     [("notes.txt", "text/plain; charset=utf-8"), ("blob.unknownext", "application/octet-stream")],
 )
 def test_download_content_type_comes_from_the_extension(client, key, content_type):
     send_file(client, "POST", key, b"data")
-    assert client.get(f"/files/{key}").headers["content-type"] == content_type
+    assert download_path(client, key).headers["content-type"] == content_type
 
 
-def test_download_with_an_invalid_key_is_400(client):
-    response = client.get("/files/a//b.txt")
+@pytest.mark.parametrize("path", ["", "/", "docs/", "a//b.txt", "a/../b", "bad\nname"])
+def test_download_of_an_invalid_path_is_400_and_never_calls_storage(fake, fake_client, path):
+    response = download_path(fake_client, path)
+
     assert response.status_code == 400
     body = response.json()
     assert set(body) == {"error", "detail"}
     assert body["error"] == "InvalidInput"
+    assert fake.calls == []
+
+
+def test_download_without_a_path_is_400_and_never_calls_storage(fake, fake_client):
+    response = fake_client.get("/files/download")
+
+    assert response.status_code == 400
+    assert response.json() == {"error": "InvalidInput", "detail": "path: Field required"}
+    assert fake.calls == []
 
 
 def test_download_of_a_missing_file_is_404(client):
-    response = client.get("/files/missing.txt")
+    response = download_path(client, "missing.txt")
     assert response.status_code == 404
     assert set(response.json()) == {"error", "detail"}
     assert response.json()["error"] == "FileNotFound"
 
 
+def test_the_old_keyed_download_route_is_gone(client):
+    send_file(client, "POST", "notes.txt", b"data")
+
+    response = client.get("/files/notes.txt")
+
+    # /files/{key} still exists for Create and Replace, so GET there is a 405, not a 404.
+    assert response.status_code == 405
+    assert response.json() == {
+        "error": "MethodNotAllowed",
+        "detail": "this path does not accept GET",
+    }
+    assert response.headers["allow"] == "POST, PUT"
+
+
 def test_download_returns_503_when_the_provider_is_unavailable(fake, fake_client):
     fake.fail("get", ProviderUnavailable("could not reach the storage provider"))
 
-    response = fake_client.get("/files/notes.txt")
+    response = download_path(fake_client, "notes.txt")
 
     assert response.status_code == 503
     assert response.json() == {
@@ -229,7 +271,7 @@ def test_download_of_a_multi_megabyte_file_from_the_real_provider(provider_clien
     assert send_file(provider_client, "POST", key, data).status_code == 201
     etag = provider_client.get(f"/metadata/{key}").json()["etag"]
 
-    response = provider_client.get(f"/files/{key}")
+    response = download_path(provider_client, key)
 
     assert response.status_code == 200
     assert response.content == data

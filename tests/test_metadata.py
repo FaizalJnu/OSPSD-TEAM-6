@@ -36,7 +36,7 @@ def test_metadata_reports_size_and_a_type_picked_by_the_server(client):
     assert meta == created.json()
 
     # Reading metadata changes neither the content nor the metadata.
-    assert client.get(f"/files/{key}").content == data
+    assert client.get("/files/download", params={"path": key}).content == data
     assert client.get(f"/metadata/{key}").json() == meta
 
 
@@ -201,7 +201,7 @@ def test_metadata_reports_real_provider_values_and_matches_listing(
     modified = datetime.fromisoformat(meta["last_modified"])
     assert modified.utcoffset() == timedelta(0)
     assert meta == created.json()
-    assert provider_client.get(f"/files/{key}").content == data
+    assert provider_client.get("/files/download", params={"path": key}).content == data
 
     listing = provider_client.get("/files", params={"prefix": provider_prefix})
     assert listing.status_code == 200

@@ -71,8 +71,8 @@ class FileService:
         with _storage_call("put"):
             return self._storage.put(key, stream, guess_content_type(key))
 
-    def download(self, key: str) -> FileDownload:
-        validate_key(key)
+    def download(self, path: str) -> FileDownload:
+        key = path_to_key(normalize_path(path))
         with _storage_call("get"):
             return self._storage.get(key)
 

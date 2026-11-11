@@ -97,7 +97,7 @@ printf 'another cat' > other.jpg
 curl -F "file=@cat.jpg" $B/files/photos/cat.jpg             # create  -> 201
 curl -F "file=@cat.jpg" $B/files/photos/cat.jpg             # again   -> 409
 curl $B/metadata/photos/cat.jpg                             # info    -> 200
-curl -o back.jpg $B/files/photos/cat.jpg                    # download
+curl -o back.jpg "$B/files/download?path=photos/cat.jpg"   # download
 cmp cat.jpg back.jpg && echo "identical"
 curl "$B/files?prefix=photos/&limit=10"                     # list    -> 200
 curl -X PUT -F "file=@other.jpg" $B/files/photos/cat.jpg    # replace -> 200
@@ -115,7 +115,7 @@ echo another cat> other.jpg
 curl.exe -F "file=@cat.jpg" %B%/files/photos/cat.jpg            & rem create: 201
 curl.exe -F "file=@cat.jpg" %B%/files/photos/cat.jpg            & rem again: 409
 curl.exe %B%/metadata/photos/cat.jpg                            & rem info: 200
-curl.exe -o back.jpg %B%/files/photos/cat.jpg                   & rem download
+curl.exe -o back.jpg "%B%/files/download?path=photos/cat.jpg"  & rem download
 fc /b cat.jpg back.jpg                                          & rem "no differences"
 curl.exe "%B%/files?prefix=photos/&limit=10"                    & rem list
 curl.exe -X PUT -F "file=@other.jpg" %B%/files/photos/cat.jpg   & rem replace: 200
@@ -131,7 +131,7 @@ Add `-i` to any command to show the status code and response headers.
 |---|---|---|
 | `POST` | `/files/{key}` | Create a file (form field `file`) |
 | `PUT` | `/files/{key}` | Replace an existing file |
-| `GET` | `/files/{key}` | Download a file (streamed) |
+| `GET` | `/files/download?path=` | Download a file (streamed) |
 | `DELETE` | `/files?path=` | Delete a file, or a folder and everything under it |
 | `GET` | `/metadata/{key}` | Get file info as JSON |
 | `GET` | `/files` | List files: `prefix`, `limit` (1 to 1000), `cursor` |

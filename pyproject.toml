@@ -57,4 +57,4 @@ disallow_incomplete_defs = false
 check_untyped_defs = true
 
 [tool.uv.sources]
-cloud-storage-api = { git = "https://github.com/Dayana20/ospsd26-cloud-storage", subdirectory = "src/cloud_storage_api", rev = "0.2.0" }
+cloud-storage-api = { git = "https://github.com/Dayana20/ospsd26-cloud-storage", subdirectory = "src/cloud_storage_api", rev = "0.3.1" }

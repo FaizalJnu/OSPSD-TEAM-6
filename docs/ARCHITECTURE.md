@@ -138,11 +138,37 @@ Replacing S3 with another provider means one new module in `storage/` that imple
 |---|---|---|
 | boto3 client | `S3Storage` | Created once by `build_storage`, lives as long as the app. |
 | Upload contents | FastAPI | Starlette spools each upload to a `SpooledTemporaryFile` (in memory up to 1 MiB, then on disk). FastAPI closes it when the request finishes. |
-| Download stream | `S3Storage.get` | Opened by `get_object`. `_ChunkReader` closes it when the chunks are exhausted, when reading fails, or when its `close()` is called, even before the first chunk. The download route never calls `close()` (Starlette does not either), so a response that stops early, for example after a client disconnects, leaves it open until garbage collection. |
+| Download stream | `SharedDocumentStorage.open_download` / download response | `get_object` opens eagerly. The shared wrapper closes the provider iterator on exhaustion or failure. The response also closes it in `finally`, including send failure or cancellation before the first chunk. Closing is idempotent. |
 | `FileService` | The app | Lives as long as the app. Holds only the backend and the size limit; it stores no file data. |
 | Files and their info | The provider | The bucket is the only copy. There is no database. |
 | `InMemoryStorage` dict | The backend | Lives as long as the app, so everything is lost on restart. Each test gets a fresh one. |
 | Provider-test files | `provider_client` and the contract tests | Written under a unique `api-tests/` or `contract-tests/` prefix and deleted afterwards, even when the test fails. |
+
+## Shared interface (tag 0.3.1)
+
+`SharedDocumentStorage` implements every `DocumentStorage` operation over
+`FileService`; it does not import a provider SDK. Application wiring exposes the
+adapter as `app.state.document_storage`. Metadata and Download routes depend on
+the tagged interface. Other HTTP route migrations remain with their operation owners.
+
+`create_stream` and `replace_stream` read from the input's current position. A
+seekable input is measured before writing and borrowed through a wrapper that
+prevents the provider from closing the caller's stream. Unknown-length input is
+copied to a disk temporary file in bounded reads and checked against the configured
+upload limit before any provider writes. The caller's input is never closed.
+
+`open_download` opens the provider before returning a shared `DownloadStream` with
+metadata, lazy bounded chunks, and idempotent cleanup. Late provider failures retain
+the interrupted-download behavior; response cleanup also covers disconnects.
+
+The explicitly requested legacy `download(path) -> bytes` compatibility method
+assembles at most 150 MiB. It checks both metadata and bytes read, so incorrect or
+changing metadata cannot bypass the limit. HTTP downloads never call it; the
+existing streaming upload limit remains unchanged.
+
+The dependency and lockfile pin tag `0.3.1`, resolved to `664afc92`. Upstream still
+declares package metadata version `0.2.0`; the Git source revision identifies the
+actual API. This service does not modify upstream tags or metadata.
 
 ## Known limits
 

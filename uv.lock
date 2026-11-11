@@ -141,7 +141,7 @@ wheels = [
 [[package]]
 name = "cloud-storage-api"
 version = "0.2.0"
-source = { git = "https://github.com/Dayana20/ospsd26-cloud-storage?subdirectory=src%2Fcloud_storage_api&rev=0.2.0#8309ac4e8e10b57269a303dcb3dbd7fac2e896ea" }
+source = { git = "https://github.com/Dayana20/ospsd26-cloud-storage?subdirectory=src%2Fcloud_storage_api&rev=0.3.1#664afc92f7cc0b2ee51cde6ddfa088cc3b37206c" }
 
 [[package]]
 name = "colorama"
@@ -623,7 +623,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "boto3", specifier = ">=1.43.108" },
-    { name = "cloud-storage-api", git = "https://github.com/Dayana20/ospsd26-cloud-storage?subdirectory=src%2Fcloud_storage_api&rev=0.2.0" },
+    { name = "cloud-storage-api", git = "https://github.com/Dayana20/ospsd26-cloud-storage?subdirectory=src%2Fcloud_storage_api&rev=0.3.1" },
     { name = "fastapi", specifier = ">=0.142.2" },
     { name = "python-multipart", specifier = ">=0.0.32" },
     { name = "uvicorn", specifier = ">=0.54.0" },

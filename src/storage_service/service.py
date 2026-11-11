@@ -66,6 +66,16 @@ class FileService:
         self._storage = storage
         self._max_upload_bytes = max_upload_bytes
 
+    @property
+    def upload_limit(self) -> int:
+        """The configured limit, also used to validate unknown-length streams."""
+        return self._max_upload_bytes
+
+    def check_health(self) -> None:
+        """Make one lightweight read against the configured storage."""
+        with _storage_call("list_files"):
+            self._storage.list_files("", 1, None)
+
     def create(self, key: str, stream: BinaryIO, size: int) -> FileInfo:
         """Store a new file. Fails if the key is already taken."""
         validate_key(key)

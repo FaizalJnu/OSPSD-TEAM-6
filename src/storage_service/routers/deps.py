@@ -7,6 +7,7 @@
 
 from typing import Annotated
 
+from cloud_storage_api import DocumentStorage
 from fastapi import Depends, Query, Request
 
 from storage_service.service import MAX_PATH_BYTES, FileService
@@ -20,6 +21,15 @@ def get_service(request: Request) -> FileService:
 
 # Shorthand for route signatures: "this parameter is the FileService".
 Service = Annotated[FileService, Depends(get_service)]
+
+
+def get_document_storage(request: Request) -> DocumentStorage:
+    """The tagged interface, injected at the application wiring boundary."""
+    storage: DocumentStorage = request.app.state.document_storage
+    return storage
+
+
+SharedStorage = Annotated[DocumentStorage, Depends(get_document_storage)]
 
 # Shorthand for route signatures: a parameter named ``path`` of this type is read from
 # ``?path=``. The route passes it on as it arrived, and the service checks it.

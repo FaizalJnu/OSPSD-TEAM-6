@@ -883,10 +883,12 @@ Real provider (marked `provider`):
   `S3Storage`.** The Stubber can only queue answers and client errors, not connection
   failures, so `test_download_returns_503_when_the_provider_is_unavailable` checks the
   HTTP mapping with a fake that raises it.
-* **Client disconnects are not tested.** When Starlette stops reading the chunks after
-  a client disconnects, and whether it closes them, is not established here.
-* **The real-provider runs above used the old `GET /files/{key}` route.** No run of
-  `GET /files/download?path=` against a real provider is recorded yet.
+* **Client disconnects:** the shared-streaming tests below cover ASGI send failure
+  and cancellation before the body and after its first chunk. Real socket-level
+  disconnect timing remains untested.
+* **The older provider runs above used `GET /files/{key}`.** The shared-streaming
+  verification below also exercises the current Download route through the live
+  metadata provider test.
 * **A folder path is not tested.** It returns 404 `FileNotFound` today, and the shared
   contract has not decided what it should return (Dayana20/ospsd26-cloud-storage
   issue #8).
@@ -1735,3 +1737,28 @@ same bucket. Its output is the one shown there, and its prefix was empty afterwa
 * **Short or empty pages that still have a cursor** never happened on OCI, so the
   "continue until `null`" rule was exercised only with full pages.
 * **Cursor lifetime** and **more than 1000 matching files** are not tested.
+
+
+## Shared streaming adoption (0.3.1)
+
+Verified on the `shared-streaming-031` working tree, November 11, 2026:
+
+* `uv run --locked pytest`: 314 passed, 25 provider tests deselected.
+* Ruff lint/format and mypy pass.
+* `tests/test_shared_storage.py` checks all tagged operations, eager opening with
+  lazy bounded reads, repeated close, input ownership, non-seekable size rejection
+  before provider writes, and both declared and actual legacy bytes-download limits.
+* The HTTP tests forbid calling the legacy bytes method and verify cleanup on
+  successful completion, ASGI send failure, and task cancellation, including before
+  the first body chunk.
+* Live OCI selection: `pytest -m provider tests/test_metadata.py
+  tests/test_shared_storage.py -v`: 2 passed, 34 deselected. The tagged-interface
+  round trip uses a 9 MiB multipart upload and incremental download hash, then
+  Replace, Metadata, direct-child List, Move, Health and Delete. Caller-owned
+  upload streams remain open.
+* Both fixtures completed cleanup. Independent listings confirmed both unique
+  scratch prefixes empty. No full conformance-suite run is claimed.
+
+Provider variables were inherited from secure environment settings; no `.env` file
+was used. The cloud runner used a credential-free SDK config for its existing AWS
+profile guard. No credentials, bucket names, or signed requests are recorded here.

@@ -29,196 +29,121 @@ from storage_service.storage.memory import InMemoryStorage
 from tests.conftest import MAX_UPLOAD_BYTES, send_file
 from tests.fakes import FakeStorage
 
-# Stops a traversal whose cursor never runs out, instead of looping forever.
-MAX_PAGES = 50
+
+def list_folder(client: TestClient, path: str | None = None) -> Any:
+    """GET /files, with ``?path=`` only when a path is given."""
+    params = {} if path is None else {"path": path}
+    return client.get("/files", params=params)
 
 
-def list_pages(
-    client: TestClient, prefix: str = "", limit: int = 100, cursor: str | None = None
-) -> list[dict[str, Any]]:
-    """Follow next_cursor until it is null, as docs/API.md tells callers to.
-
-    Returns every page's body. Fails if a response is not 200 or has more than
-    ``limit`` files.
-    """
-    pages = []
-    for _ in range(MAX_PAGES):
-        params: dict[str, str | int] = {"prefix": prefix, "limit": limit}
-        if cursor is not None:
-            params["cursor"] = cursor
-        response = client.get("/files", params=params)
-        assert response.status_code == 200
-        page = response.json()
-        assert len(page["files"]) <= limit
-        pages.append(page)
-        cursor = page["next_cursor"]
-        if cursor is None:
-            return pages
-    pytest.fail(f"next_cursor was still set after {MAX_PAGES} pages")
+def paths(response: Any) -> list[str]:
+    assert response.status_code == 200
+    return [entry["path"] for entry in response.json()]
 
 
-def listed_keys(pages: list[dict[str, Any]]) -> list[str]:
-    return [item["key"] for page in pages for item in page["files"]]
+def test_list_returns_direct_files_and_folders_sorted_by_path(client):
+    for key in ("docs/b.txt", "docs/sub/x.txt", "docs/sub/deep/y.txt", "docs/a.txt", "top.txt"):
+        send_file(client, "POST", key, b"x")
+    send_file(client, "POST", "docs2/c.txt", b"x")
+
+    assert paths(list_folder(client, "/docs")) == [
+        "/docs/a.txt",
+        "/docs/b.txt",
+        "/docs/sub",
+    ]
 
 
-def test_list_pages_through_files_with_a_cursor(client):
-    for name in ("a.txt", "b.txt", "c.txt"):
-        send_file(client, "POST", f"docs/{name}", b"x")
-    send_file(client, "POST", "other/d.txt", b"x")
+def test_list_file_entry_is_the_shared_file_info_metadata_returns(client):
+    send_file(client, "POST", "docs/report.pdf", b"report")
+    metadata = client.get("/files/metadata", params={"path": "/docs/report.pdf"}).json()
 
-    first = client.get("/files", params={"prefix": "docs/", "limit": 2}).json()
-    assert [f["key"] for f in first["files"]] == ["docs/a.txt", "docs/b.txt"]
-    assert first["next_cursor"] is not None
+    [entry] = list_folder(client, "/docs").json()
 
-    params = {"prefix": "docs/", "limit": 2, "cursor": first["next_cursor"]}
-    second = client.get("/files", params=params).json()
-    assert [f["key"] for f in second["files"]] == ["docs/c.txt"]
-    assert second["next_cursor"] is None
+    # Listings cannot know the content type: the S3 list call does not return it.
+    assert entry == {**metadata, "type": "file", "content_type": None}
 
 
-def test_list_rejects_an_out_of_range_limit(client):
-    assert client.get("/files", params={"limit": 0}).status_code == 400
-    assert client.get("/files", params={"limit": 1001}).status_code == 400
+def test_list_folder_entry_has_only_a_name_path_and_type(client):
+    send_file(client, "POST", "docs/sub/x.txt", b"x")
+
+    assert list_folder(client, "/docs").json() == [
+        {
+            "id": None,
+            "name": "sub",
+            "path": "/docs/sub",
+            "size": None,
+            "modified_at": None,
+            "etag": None,
+            "type": "folder",
+            "content_type": None,
+        }
+    ]
 
 
-def test_list_returns_every_promised_field(client):
-    created = send_file(client, "POST", "photos/cat.jpg", b"meow").json()
+@pytest.mark.parametrize("path", [None, "/", ""])
+def test_list_without_a_folder_lists_the_root(client, path):
+    for key in ("top.txt", "docs/a.txt"):
+        send_file(client, "POST", key, b"x")
 
-    response = client.get("/files", params={"prefix": "photos/"})
+    assert paths(list_folder(client, path)) == ["/docs", "/top.txt"]
+
+
+def test_list_of_the_empty_root_is_an_empty_array(client):
+    response = list_folder(client)
 
     assert response.status_code == 200
-    body = response.json()
-    assert set(body) == {"files", "next_cursor"}
-    assert body["next_cursor"] is None
-    [item] = body["files"]
-    assert set(item) == {"key", "size", "content_type", "etag", "last_modified"}
-    assert item["key"] == "photos/cat.jpg"
-    assert item["size"] == 4
-    assert item["content_type"] is None  # the S3 list call does not return it
-    assert item["etag"] == created["etag"]
-    assert not item["etag"].startswith('"')
-    assert item["last_modified"].endswith("Z")
-    assert datetime.fromisoformat(item["last_modified"]).utcoffset() == timedelta(0)
+    assert response.json() == []
 
 
-def test_list_of_empty_storage_with_default_parameters_is_one_empty_page(client):
-    response = client.get("/files")
+def test_list_accepts_a_folder_path_without_the_leading_slash(client):
+    send_file(client, "POST", "docs/a.txt", b"x")
 
-    assert response.status_code == 200
-    assert response.json() == {"files": [], "next_cursor": None}
+    assert paths(list_folder(client, "docs")) == ["/docs/a.txt"]
+
+
+def test_list_of_a_missing_folder_is_404(client):
+    send_file(client, "POST", "docs/a.txt", b"x")
+
+    response = list_folder(client, "/other")
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "not_found"
+
+
+def test_list_of_a_file_path_is_404(client):
+    # A file is not a folder: nothing is under "docs/a.txt/".
+    send_file(client, "POST", "docs/a.txt", b"x")
+
+    assert list_folder(client, "/docs/a.txt").status_code == 404
 
 
 @pytest.mark.parametrize(
-    ("names", "limit"),
+    "path",
     [
-        pytest.param([], 3, id="n=0"),
-        pytest.param(["a", "b"], 3, id="n<limit"),
-        pytest.param(["a", "b", "c"], 3, id="n=limit"),
-        pytest.param(["a", "b", "c", "d"], 3, id="n=limit+1"),
-        pytest.param(["a", "b", "c"], 1, id="limit=1"),
+        "/docs/",
+        "/docs//a",
+        "/docs/../a",
+        "/a/./b",
+        pytest.param("/" + "a" * 1024, id="1025-bytes"),
     ],
 )
-def test_traversal_returns_every_file_once_in_order(client, names, limit):
-    # Upload in reverse, so the order of the result comes from the listing.
-    for name in reversed(names):
-        send_file(client, "POST", f"p/{name}.txt", b"x")
-    send_file(client, "POST", "q/outside.txt", b"x")
-
-    pages = list_pages(client, prefix="p/", limit=limit)
-
-    assert listed_keys(pages) == [f"p/{name}.txt" for name in names]
-
-
-def test_seven_files_three_per_page_each_appear_once_in_order(client):
-    for name in ("g", "c", "e", "a", "f", "b", "d"):
-        send_file(client, "POST", f"seven/{name}.txt", b"x")
-    # Neighbors just before and after the prefix in sort order.
-    for key in ("seven.txt", "seven2/h.txt"):
-        send_file(client, "POST", key, b"x")
-
-    pages = list_pages(client, prefix="seven/", limit=3)
-
-    assert listed_keys(pages) == [
-        "seven/a.txt",
-        "seven/b.txt",
-        "seven/c.txt",
-        "seven/d.txt",
-        "seven/e.txt",
-        "seven/f.txt",
-        "seven/g.txt",
-    ]
-
-
-def test_list_sorts_keys_by_their_utf8_bytes(client):
-    for key in ("é.txt", "b.txt", "a/x.txt", "B.txt", "a.txt"):
-        send_file(client, "POST", key, b"x")
-
-    # Uppercase before lowercase, "." (0x2E) before "/" (0x2F), non-ASCII last.
-    assert listed_keys(list_pages(client)) == ["B.txt", "a.txt", "a/x.txt", "b.txt", "é.txt"]
-
-
-def test_prefix_is_plain_text_matched_at_the_start_of_the_key(client):
-    for key in ("docs/a.txt", "docs/sub/b.txt", "docs2/c.txt", "docsx.txt", "other/docs/d.txt"):
-        send_file(client, "POST", key, b"x")
-
-    assert listed_keys(list_pages(client, prefix="docs/")) == ["docs/a.txt", "docs/sub/b.txt"]
-    assert listed_keys(list_pages(client, prefix="docs")) == [
-        "docs/a.txt",
-        "docs/sub/b.txt",
-        "docs2/c.txt",
-        "docsx.txt",
-    ]
-
-
-def test_largest_limit_is_accepted(client):
-    send_file(client, "POST", "a.txt", b"x")
-
-    assert listed_keys(list_pages(client, limit=1000)) == ["a.txt"]
-
-
-def test_prefix_of_1024_bytes_is_accepted_and_1025_is_400(client):
-    at_limit = "é" * 512  # 2 bytes each in UTF-8
-    assert client.get("/files", params={"prefix": at_limit}).status_code == 200
-
-    response = client.get("/files", params={"prefix": at_limit + "a"})
-    assert response.status_code == 400
-    assert response.json()["error"]["code"] == "invalid_request"
-
-
-@pytest.mark.parametrize("cursor", ["garbage", "abc123", "docs/a.txt"])
-def test_list_with_a_cursor_this_api_did_not_produce_is_400(client, cursor):
-    send_file(client, "POST", "docs/a.txt", b"x")
-
-    response = client.get("/files", params={"prefix": "docs/", "cursor": cursor})
+def test_list_with_a_bad_path_is_400_without_calling_storage(fake, fake_client, path):
+    response = list_folder(fake_client, path)
 
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "invalid_request"
+    assert fake.calls == []
 
 
-def test_list_with_a_cursor_from_another_prefix_is_400(client):
-    for name in ("docs/a.txt", "docs/b.txt", "img/c.png"):
-        send_file(client, "POST", name, b"x")
-    cursor = client.get("/files", params={"prefix": "docs/", "limit": 1}).json()["next_cursor"]
+def test_list_returns_a_folder_of_more_than_one_storage_page_in_one_array():
+    service = FileService(InMemoryStorage(), max_upload_bytes=MAX_UPLOAD_BYTES)
+    for i in range(1001):
+        service.create(f"many/{i:04}.txt", io.BytesIO(b""), 0)
+    client = TestClient(create_app(service))
 
-    response = client.get("/files", params={"prefix": "img/", "cursor": cursor})
+    listed = paths(list_folder(client, "/many"))
 
-    assert response.status_code == 400
-    assert response.json()["error"]["code"] == "invalid_request"
-
-
-def test_files_present_for_the_whole_traversal_appear_once_despite_changes(client):
-    for name in ("b", "d", "f"):
-        send_file(client, "POST", f"live/{name}.txt", b"x")
-    first = client.get("/files", params={"prefix": "live/", "limit": 2}).json()
-
-    # Changes between pages, on both sides of the position reached so far.
-    send_file(client, "POST", "live/a.txt", b"x")
-    send_file(client, "POST", "live/e.txt", b"x")
-    rest = list_pages(client, prefix="live/", limit=2, cursor=first["next_cursor"])
-
-    keys = listed_keys([first, *rest])
-    for key in ("live/b.txt", "live/d.txt", "live/f.txt"):
-        assert keys.count(key) == 1
+    assert listed == [f"/many/{i:04}.txt" for i in range(1001)]
 
 
 # Controlled storage (Level 4): the app as tests build it, over a StorageClient whose
@@ -239,9 +164,7 @@ def controlled_client(controlled_storage):
     return TestClient(create_app(service))
 
 
-def test_list_returns_the_page_storage_gives_and_passes_the_cursor_through(
-    controlled_storage, controlled_client
-):
+def test_list_turns_the_storage_page_into_shared_entries(controlled_storage, controlled_client):
     controlled_storage.list_files.return_value = FilePage(
         files=[
             FileInfo(
@@ -252,53 +175,37 @@ def test_list_returns_the_page_storage_gives_and_passes_the_cursor_through(
                 last_modified=MODIFIED,
             )
         ],
-        next_cursor="cursor-from-storage",
+        next_cursor=None,
+        folders=["docs/sub/"],
     )
 
-    params = {"prefix": "docs/", "limit": 5, "cursor": "cursor-from-caller"}
-    response = controlled_client.get("/files", params=params)
+    response = list_folder(controlled_client, "/docs")
 
     assert response.status_code == 200
-    assert response.json() == {
-        "files": [
-            {
-                "key": "docs/a.txt",
-                "size": 5,
-                "content_type": None,
-                "etag": "opaque-tag-1",
-                "last_modified": "2026-10-14T12:00:00Z",
-            }
-        ],
-        "next_cursor": "cursor-from-storage",
-    }
-    # One storage call, with the caller's values unchanged.
-    assert controlled_storage.mock_calls == [call.list_files("docs/", 5, "cursor-from-caller")]
-
-
-def test_list_defaults_reach_storage_as_every_file_100_per_page(
-    controlled_storage, controlled_client
-):
-    controlled_storage.list_files.return_value = FilePage(files=[], next_cursor=None)
-
-    assert controlled_client.get("/files").status_code == 200
-    assert controlled_storage.mock_calls == [call.list_files("", 100, None)]
-
-
-@pytest.mark.parametrize(
-    "params",
-    [
-        pytest.param({"limit": 0}, id="limit=0"),
-        pytest.param({"limit": 1001}, id="limit=1001"),
-        pytest.param({"limit": "abc"}, id="limit=abc"),
-        pytest.param({"prefix": "a" * 1025}, id="prefix-1025-bytes"),
-    ],
-)
-def test_invalid_list_input_never_reaches_storage(controlled_storage, controlled_client, params):
-    response = controlled_client.get("/files", params=params)
-
-    assert response.status_code == 400
-    assert response.json()["error"]["code"] == "invalid_request"
-    assert controlled_storage.mock_calls == []
+    assert response.json() == [
+        {
+            "id": None,
+            "name": "a.txt",
+            "path": "/docs/a.txt",
+            "size": 5,
+            "modified_at": "2026-10-14T12:00:00Z",
+            "etag": "opaque-tag-1",
+            "type": "file",
+            "content_type": None,
+        },
+        {
+            "id": None,
+            "name": "sub",
+            "path": "/docs/sub",
+            "size": None,
+            "modified_at": None,
+            "etag": None,
+            "type": "folder",
+            "content_type": None,
+        },
+    ]
+    # One page from storage: the folder's prefix, the largest page, and "/" as delimiter.
+    assert controlled_storage.mock_calls == [call.list_files("docs/", 1000, None, delimiter="/")]
 
 
 @pytest.mark.parametrize(
@@ -314,7 +221,7 @@ def test_list_reports_storage_failures_in_our_error_format(
 ):
     controlled_storage.list_files.side_effect = error
 
-    response = controlled_client.get("/files", params={"prefix": "docs/"})
+    response = list_folder(controlled_client, "/docs")
 
     assert response.status_code == status
     assert response.json() == {"error": {"code": error.code, "message": str(error)}}
@@ -547,29 +454,33 @@ def test_s3_list_that_cannot_reach_the_provider_raises_provider_unavailable(
 
 
 @pytest.mark.provider
-def test_list_pages_through_the_real_provider(provider_client, provider_prefix):
-    names = ("g.txt", "C.txt", "e.txt", "a/x.txt", "é.txt", "b.txt", "a.txt")
+def test_list_folder_on_the_real_provider(provider_client, provider_prefix):
+    names = ("g.txt", "C.txt", "e.txt", "a/x.txt", "a/deep/y.txt", "é.txt", "b.txt", "a.txt")
     created = {}
     for name in names:
         response = send_file(provider_client, "POST", provider_prefix + name, name.encode())
         assert response.status_code == 201
-        created[response.json()["key"]] = response.json()
+        created["/" + response.json()["key"]] = response.json()
+    folder = "/" + provider_prefix.removesuffix("/")
 
-    pages = list_pages(provider_client, prefix=provider_prefix, limit=3)
+    entries = list_folder(provider_client, folder).json()
 
-    assert len(pages) >= 3
-    expected = ("C.txt", "a.txt", "a/x.txt", "b.txt", "e.txt", "g.txt", "é.txt")
-    assert listed_keys(pages) == [provider_prefix + name for name in expected]
-    for item in (item for page in pages for item in page["files"]):
-        assert item["size"] == created[item["key"]]["size"]
-        assert item["etag"] == created[item["key"]]["etag"]
-        assert item["content_type"] is None
-        assert datetime.fromisoformat(item["last_modified"]).utcoffset() == timedelta(0)
+    # Sorted by UTF-8 bytes: capitals first, "a" before "a.txt", "é" last.
+    expected = ("C.txt", "a", "a.txt", "b.txt", "e.txt", "g.txt", "é.txt")
+    assert [entry["path"] for entry in entries] == [f"{folder}/{name}" for name in expected]
+    for entry in entries:
+        if entry["name"] == "a":
+            assert entry["type"] == "folder"
+            assert entry["size"] is entry["modified_at"] is entry["etag"] is None
+            continue
+        assert entry["type"] == "file"
+        assert entry["id"] is None
+        assert entry["size"] == created[entry["path"]]["size"]
+        assert entry["etag"] == created[entry["path"]]["etag"]
+        assert entry["content_type"] is None
+        assert datetime.fromisoformat(entry["modified_at"]).utcoffset() == timedelta(0)
 
-    # n = limit: the whole prefix fits in one page.
-    assert listed_keys(list_pages(provider_client, prefix=provider_prefix, limit=7)) == [
-        provider_prefix + name for name in expected
-    ]
+    assert list_folder(provider_client, folder + "/missing").status_code == 404
 
 
 # Folder listing (shared contract, #86): FileService.list_folder over each backend.

@@ -25,7 +25,7 @@ B=http://127.0.0.1:8000
 | [Metadata](#metadata) | `GET /files/metadata?path=` | Darsh Shani |
 | [Delete](#delete) | `DELETE /files?path=` | Faizal Rahman |
 | [Move](#move) | `PATCH /files?path=` | Vikram Markali |
-| [List](#list) | `GET /files` | Prateek Saxena |
+| [List](#list) | `GET /files?path=` | Prateek Saxena |
 
 ## Keys
 
@@ -78,8 +78,8 @@ must be sent as `%2B`. `curl -G --data-urlencode "path=$P"` does the encoding fo
 
 ## File info
 
-Create and Replace still return the legacy file info object. Metadata and Move return the shared model described in [Metadata](#metadata). List returns file info
-objects in its `files` array.
+Create and Replace still return the legacy file info object below. Metadata, Move, and
+List return the shared model described in [Metadata](#metadata) and [List](#list).
 
 | Field | JSON type | Meaning |
 |---|---|---|
@@ -119,9 +119,9 @@ service:
 
 | `error` | Status | When it happens | Does retrying help? |
 |---|---|---|---|
-| `invalid_request` | 400 | A key breaks a [key rule](#keys), the List `prefix` is longer than 1024 bytes, the List `limit` is not a whole number from 1 to 1000, or Create or Replace is missing the `file` form field or sends a `multipart/form-data` body that cannot be read (for example, no boundary). | No. Change the input. |
+| `invalid_request` | 400 | A key breaks a [key rule](#keys), a path breaks a [path rule](#paths), or Create or Replace is missing the `file` form field or sends a `multipart/form-data` body that cannot be read (for example, no boundary). | No. Change the input. |
 | `permission_denied` | 403 | The provider refused the service's credentials or permissions, for example a wrong secret key or a bucket policy that does not allow the operation. This is the service's configuration, not the caller's. | No, not until whoever runs the service fixes the credentials or permissions. |
-| `not_found` | 404 | No file exists under the key (Download, Metadata, Replace), or no file or folder exists at the path (Delete). | Not until a file is created there. |
+| `not_found` | 404 | No file exists under the key (Download, Metadata, Replace), no file or folder exists at the path (Delete), or nothing is stored under the folder (List). | Not until a file is created there. |
 | `conflict` | 409 | Create was called for a key that already has a file. | No. Use Replace, or Delete the file first. |
 | `file_too_large` | 413 | The upload to Create or Replace is larger than `MAX_UPLOAD_BYTES` (default 1 GiB). | No, not with the same file. |
 | `provider_error` | 502 | The provider refused the request for another reason: a missing bucket, an unsupported request, and so on. Usually a configuration problem, but it can also be a provider-side failure, such as throttling or an internal error, that lasted through the client's own retries. | Usually not: fix the configuration first. If the configuration is correct, retrying later sometimes succeeds. |
@@ -461,7 +461,7 @@ as a request to download an object named `metadata`.
 Success returns 200 and shared file info: `id` (null on S3), `name`, canonical
 `path`, byte `size`, UTC `modified_at` ending in `Z`, opaque unquoted `etag`, and
 `type` (null outside listings). Team 6 retains `content_type` as an extension.
-Create, Replace, and List keep their old models until their owners migrate them.
+Create and Replace keep their old model until their owner migrates it.
 
 Reading metadata performs `stat` only and neither downloads contents nor writes.
 A successful S3 HEAD gives metadata; an ambiguous miss adds a bucket probe.
@@ -557,7 +557,7 @@ caller most needs to know that the folder may be partly deleted.
   is gone. A 502 is usually a configuration problem, but it can also be a
   provider-side failure that outlasted the client's retries, so retrying later
   sometimes succeeds. Retrying later may help after a 503.
-* After an error for a folder, List with `prefix=<path>/` shows what remains, and
+* After an error for a folder, List with `path=<path>` shows what remains, and
   repeating the request deletes it. The retry returns 204 when it finishes, or 404
   if the failed request had already removed everything.
 
@@ -705,51 +705,52 @@ See [Move in TESTING.md](../TESTING.md#move) for the recorded tests.
 
 ## List
 
-`GET /files`. Owner: **Prateek Saxena**.
+`GET /files?path=`. Owner: **Prateek Saxena**.
 
 ### Meaning
 
-Returns one page of the files whose keys start with a prefix, sorted by key. Following
-`next_cursor` from page to page lists every matching file. It only reads: nothing in the
-bucket changes.
+Returns the files and folders directly inside one folder, sorted by path, in one
+array. It only reads: nothing in the bucket changes.
 
 ### Request
 
-`GET /files`, with no body. Every query parameter is optional.
+`GET /files`, with no body.
 
 | Parameter | Default | Constraints | Meaning |
 |---|---|---|---|
-| `prefix` | `""`, which lists every file | At most 1024 bytes as UTF-8. The [key rules](#keys) do not apply. | Only keys that start with exactly this text are listed. It is plain text, not a folder: `docs` matches `docs/a.txt`, `docs2/b.txt`, and `docsx.txt`. Use `docs/` to list only what is under `docs/`. |
-| `limit` | `100` | A whole number from 1 to 1000. | The most files this page may hold. |
-| `cursor` | none, which starts at the first page | A `next_cursor` from an earlier response with the same `prefix`, unchanged. | Where to continue. |
+| `path` | `/`, the root | The [path rules](#paths): at most 1024 UTF-8 bytes counting the leading `/`, which is optional. No trailing `/`. | The folder to list. |
 
-Percent-encode `prefix` and `cursor` in the URL. `curl -G --data-urlencode` does this
-for you, as in the example below.
+Percent-encode `path` in the URL. `curl -G --data-urlencode` does this for you.
 
 ### Success
 
-Status **200**, with this JSON object:
+Status **200**, with a JSON array of shared file info, one entry per direct child:
 
-| Field | JSON type | Meaning |
-|---|---|---|
-| `files` | array of [file info](#file-info) | The files on this page, sorted by key. At most `limit` of them, and possibly none. `content_type` is always `null`. |
-| `next_cursor` | string or null | `null` when there are no more files. Otherwise, send it back as `cursor`, with the same `prefix`, to get the next page. It is opaque: do not parse, build, or compare cursors. |
+| Field | JSON type | File | Folder |
+|---|---|---|---|
+| `id` | null | `null`: S3 has no IDs. | `null` |
+| `name` | string | The last path segment, such as `report.pdf`. | The folder's name, such as `sub`. |
+| `path` | string | The canonical path, such as `/docs/report.pdf`. | Such as `/docs/sub`, with no trailing `/`. |
+| `size` | integer or null | Size in bytes. | `null` |
+| `modified_at` | string or null | When the provider last wrote the file, ISO 8601 UTC ending in `Z`. | `null` |
+| `etag` | string or null | The provider's fingerprint, without quotes. | `null` |
+| `type` | string | `"file"` | `"folder"` |
+| `content_type` | null | Always `null`: the S3 list call does not return it. Team 6 extension. | `null` |
 
 What callers can rely on:
 
-* **Order.** Keys are sorted by their UTF-8 bytes. Uppercase comes before lowercase
-  (`B.txt` before `a.txt`), `.` before `/` (`a.txt` before `a/x.txt`), and non-ASCII
-  after ASCII (`é.txt` after `z.txt`).
-* **Depth.** Keys at every depth under the prefix are included. There is no grouping
-  into folders: `docs/` lists both `docs/a.txt` and `docs/sub/b.txt`.
-* **Completeness.** To read every matching file, keep sending `next_cursor` back until
-  it is `null`. Across those pages, every file that exists for the whole traversal
-  appears exactly once, and no file outside the prefix appears.
-* **Page size.** A page can hold fewer than `limit` files, even none, and still have a
-  `next_cursor`. Only a `null` cursor means the end. (S3 allows short pages. On OCI,
-  every page before the last was full in our runs.)
-* **No matches** is not an error: the response is 200 with
-  `{"files": [], "next_cursor": null}`.
+* **One level.** Only direct children are listed. A subfolder appears once, however
+  many files are under it. `docs2/` is not inside `docs/`.
+* **Order.** Entries are sorted by path, which is the order of UTF-8 bytes. Uppercase
+  comes before lowercase (`B.txt` before `a.txt`), a folder `a` before a file `a.txt`,
+  and non-ASCII after ASCII (`é.txt` after `z.txt`).
+* **Whole folder.** The service follows every provider page itself, so the array holds
+  the whole folder. There is no cursor and no limit. A large folder takes one provider
+  call per 1000 entries.
+* **The root** is never 404. With nothing stored, the response is `[]`.
+* For an unchanged file, `id`, `name`, `path`, `size`, `modified_at`, and `etag` match
+  [Metadata](#metadata). On OCI, `modified_at` from List and from Metadata can differ in
+  fractional seconds.
 
 ### Side effects
 
@@ -761,77 +762,55 @@ The body uses the [error format](#error-format).
 
 | Status | `error` | When |
 |---|---|---|
-| 400 | `invalid_request` | `limit` is not a whole number from 1 to 1000 (for example `0`, `1001`, or `abc`), or `prefix` is longer than 1024 bytes. The provider is not contacted. |
-| 400 | `invalid_request` | `cursor` is not a `next_cursor` this API returned for this `prefix`, for example `garbage`, a key name, or a cursor from another `prefix`. The provider is not contacted. |
+| 400 | `invalid_request` | `path` breaks a [path rule](#paths), for example `/docs/`, `/docs//a`, or `/docs/../a`. The provider is not contacted. |
 | 403 | `permission_denied` | The provider denied the service's credentials or permissions. |
+| 404 | `not_found` | Nothing is stored under the folder. This includes a file's own path, which is not a folder. |
 | 502 | `provider_error` | The provider refused the request, for example because of a missing bucket. |
 | 503 | `provider_unavailable` | The provider could not be reached or timed out. |
 
 ### Retry
 
-List only reads, so repeating any request is safe. After a 503, retry later with the
-same parameters, including the same `cursor`: on OCI, sending a cursor a second time
-returned the same page again. After a 400, retrying the same request gives the same
-result until the input changes. A 502 is usually a configuration problem and repeats
-until the configuration changes, but it can also be a passing provider-side failure, so
-retrying later sometimes succeeds (see [Error types](#error-types)).
+List only reads, so repeating any request is safe. After a 503, retry later. After a
+400 or 404, the same request gives the same result until the input or the bucket
+changes. A 502 is usually a configuration problem and repeats until the configuration
+changes, but it can also be a passing provider-side failure, so retrying later
+sometimes succeeds (see [Error types](#error-types)).
 
 ### Assumptions
 
-* **No snapshot.** Each page is read from the bucket as it is at that moment. A file
-  created or deleted while a caller is paging may or may not appear.
-* **Cursors belong to one prefix.** Send a cursor back only with the `prefix` it came
-  with. Every backend answers a cursor from another prefix with 400 `invalid_request`.
-  On S3 the cursor carries its prefix, because providers do not all check: OCI
-  continued from the cursor's position and returned 200 with a wrong (empty) page.
-  How long a cursor stays usable depends on the provider and has not been tested.
-* **Cursor strings change.** On OCI, two requests for the same page return different
-  `next_cursor` strings, and both work. Compare pages by their files, not by cursor.
-* **`content_type` is `null`**, because the S3 list call does not return it. Use
-  [Metadata](#metadata) for one file's type.
-* For an unchanged file, `key`, `size`, and `etag` are the same as in the Metadata and
-  Create or Replace responses. OCI reports `last_modified` in whole seconds.
-* The 1000 maximum for `limit` is S3's maximum number of keys per list call.
+* **Folders exist only while a file is under them**, as on S3. There are no empty
+  folders: a folder whose last file is deleted disappears and then lists as 404.
+* **No snapshot.** A folder of more than 1000 entries is read page by page. A file
+  created or deleted during the listing may or may not appear.
+* **`content_type` is `null`.** Use [Metadata](#metadata) for one file's type.
+* The old `GET /files?prefix=&limit=&cursor=` route is removed. Unknown query
+  parameters are ignored, so an old request lists the root instead of failing.
 
 ### Example
 
-Pick a prefix nobody else uses, for example `examples/list-demo/`, and check that it is
-empty first. Create three files, list them two per page, follow the cursor, then delete
-them. On macOS or Linux:
+On macOS or Linux, with a folder nobody else uses:
 
 ```bash
 B=http://127.0.0.1:8000
-P=examples/list-demo/
-curl -s -G $B/files --data-urlencode "prefix=$P"
+P=examples/list-demo
 printf 'x' > x.txt
-for name in c a b; do curl -s -o /dev/null -w '%{http_code}\n' -F "file=@x.txt" "$B/files/$P$name.txt"; done
-curl -s -G $B/files --data-urlencode "prefix=$P" --data-urlencode "limit=2"
+for name in b.txt a.txt sub/c.txt; do curl -s -o /dev/null -w '%{http_code}\n' -F "file=@x.txt" "$B/files/$P/$name"; done
+curl -s -G $B/files --data-urlencode "path=/$P"
 ```
 
-The first listing returns `{"files":[],"next_cursor":null}`, and each create prints
-`201`. The two-file page, from OCI (your `etag`, `last_modified`, and cursor will
-differ):
+Each create prints `201`. The listing, from the in-memory backend (your `etag` and
+`modified_at` will differ):
 
 ```json
-{"files":[{"key":"examples/list-demo/a.txt","size":1,"content_type":null,"etag":"9dd4e461268c8034f5c8564e155c67a6","last_modified":"2026-10-14T20:31:34Z"},{"key":"examples/list-demo/b.txt","size":1,"content_type":null,"etag":"9dd4e461268c8034f5c8564e155c67a6","last_modified":"2026-10-14T20:31:34Z"}],"next_cursor":"1:OsT0j2SY..."}
+[{"id":null,"name":"a.txt","path":"/examples/list-demo/a.txt","size":1,"modified_at":"2026-11-11T17:00:21.635773Z","etag":"9dd4e461268c8034f5c8564e155c67a6","type":"file","content_type":null},{"id":null,"name":"b.txt","path":"/examples/list-demo/b.txt","size":1,"modified_at":"2026-11-11T17:00:21.623566Z","etag":"9dd4e461268c8034f5c8564e155c67a6","type":"file","content_type":null},{"id":null,"name":"sub","path":"/examples/list-demo/sub","size":null,"modified_at":null,"etag":null,"type":"folder","content_type":null}]
 ```
 
-Send `next_cursor` back to get the last page:
+Clean up, then check that the folder is gone:
 
 ```bash
-curl -s -G $B/files --data-urlencode "prefix=$P" --data-urlencode "limit=2" --data-urlencode "cursor=<next_cursor>"
-```
-
-```json
-{"files":[{"key":"examples/list-demo/c.txt","size":1,"content_type":null,"etag":"9dd4e461268c8034f5c8564e155c67a6","last_modified":"2026-10-14T20:31:34Z"}],"next_cursor":null}
-```
-
-Clean up, then check that the prefix is empty again:
-
-```bash
-for name in a b c; do curl -s -o /dev/null -w '%{http_code}\n' -X DELETE "$B/files?path=$P$name.txt"; done
-curl -s -G $B/files --data-urlencode "prefix=$P"
+curl -s -o /dev/null -w '%{http_code}\n' -X DELETE -G $B/files --data-urlencode "path=/$P"
+curl -s -G $B/files --data-urlencode "path=/$P"
 rm x.txt
 ```
 
-Each delete prints `204`, and the listing returns `{"files":[],"next_cursor":null}`.
+The delete prints `204`, and the listing returns 404 `not_found`.

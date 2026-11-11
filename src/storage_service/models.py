@@ -6,7 +6,7 @@ them into JSON when a route returns one.
 """
 
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
 from cloud_storage_api import FileInfo as SharedFileInfo
@@ -92,4 +92,23 @@ def common_file_info(info: FileInfo) -> CommonFileInfo:
         etag=info.etag,
         type=None,
         content_type=info.content_type,
+    )
+
+
+def common_entry(entry: FolderEntry) -> CommonFileInfo:
+    """Convert one listed child to the common model, tagged ``file`` or ``folder``.
+
+    A folder has only a name, a path and its type: S3 keeps no size, time or etag
+    for a folder, which exists only while a file is under it.
+    """
+    if entry.info is not None:
+        return replace(common_file_info(entry.info), type="file")
+    return CommonFileInfo(
+        id=None,
+        name=entry.key.rsplit("/", 1)[-1],
+        path="/" + entry.key,
+        size=None,
+        modified_at=None,
+        etag=None,
+        type="folder",
     )

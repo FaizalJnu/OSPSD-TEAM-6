@@ -99,7 +99,7 @@ curl -F "file=@cat.jpg" $B/files/photos/cat.jpg             # again   -> 409
 curl "$B/files/metadata?path=photos/cat.jpg"                             # info    -> 200
 curl -o back.jpg "$B/files/download?path=photos/cat.jpg"   # download
 cmp cat.jpg back.jpg && echo "identical"
-curl "$B/files?prefix=photos/&limit=10"                     # list    -> 200
+curl "$B/files?path=/photos"                               # list    -> 200
 curl -X PUT -F "file=@other.jpg" $B/files/photos/cat.jpg    # replace -> 200
 curl -i -X DELETE "$B/files?path=photos/cat.jpg"            # delete  -> 204
 rm cat.jpg other.jpg back.jpg                               # clean up
@@ -117,7 +117,7 @@ curl.exe -F "file=@cat.jpg" %B%/files/photos/cat.jpg            & rem again: 409
 curl.exe "%B%/files/metadata?path=photos/cat.jpg"                            & rem info: 200
 curl.exe -o back.jpg "%B%/files/download?path=photos/cat.jpg"  & rem download
 fc /b cat.jpg back.jpg                                          & rem "no differences"
-curl.exe "%B%/files?prefix=photos/&limit=10"                    & rem list
+curl.exe "%B%/files?path=/photos"                               & rem list
 curl.exe -X PUT -F "file=@other.jpg" %B%/files/photos/cat.jpg   & rem replace: 200
 curl.exe -i -X DELETE "%B%/files?path=photos/cat.jpg"           & rem delete: 204
 del cat.jpg other.jpg back.jpg                                  & rem clean up

@@ -1429,6 +1429,23 @@ Tests: [tests/test_list.py](tests/test_list.py).
   provider errors become `ProviderError` or `ProviderUnavailable`. Both backends match the prefix
   as text, at every depth, in UTF-8 byte order.
 
+### Folder listing (shared contract, #86)
+
+`FileService.list_folder` is the storage side of the shared `GET /files?path=`. The
+route comes in a follow-up, after the shared error format and file info (#81).
+
+* With `delimiter="/"`, both backends return the files directly under the prefix and
+  each subfolder once, as a prefix ending in `/` (S3's `CommonPrefixes`). Files and
+  folders together count toward `limit`, and paging returns each one once. Contract
+  tests, on memory and on OCI.
+* `list_folder` follows every page, merges files and folders, and sorts them by key.
+  The Stubber test feeds three pages (one of them empty but with a token) with files
+  and folders mixed within a page.
+* `"/"` and `""` list the root, a path without its leading `/` works, a folder with
+  nothing under it is `FileNotFound`, and a bad path is `InvalidInput` without a
+  storage call.
+* Not yet run on OCI with more than 1000 entries in one folder.
+
 ### Cases and boundaries
 
 These follow the collection traversal example in `docs/testing.txt`. Expected keys are

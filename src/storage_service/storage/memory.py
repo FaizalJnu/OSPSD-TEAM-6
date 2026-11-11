@@ -49,15 +49,26 @@ class InMemoryStorage:
     def stat(self, key: str) -> FileInfo:
         return self._lookup(key).info
 
-    def list_files(self, prefix: str, limit: int, cursor: str | None) -> FilePage:
-        keys = sorted(key for key in self._files if key.startswith(prefix))
+    def list_files(
+        self, prefix: str, limit: int, cursor: str | None, delimiter: str | None = None
+    ) -> FilePage:
+        # Each entry is a key, or a folder prefix ending with the delimiter. S3 counts
+        # both toward the limit and sorts them together, so this does the same.
+        entries = sorted(
+            {
+                _folder_of(key, prefix, delimiter) or key
+                for key in self._files
+                if key.startswith(prefix)
+            }
+        )
         if cursor is not None:
             after = _decode_cursor(cursor, prefix)
-            keys = [key for key in keys if key > after]
-        page = keys[:limit]
-        next_cursor = _encode_cursor(prefix, page[-1]) if len(keys) > limit else None
-        files = [replace(self._files[key].info, content_type=None) for key in page]
-        return FilePage(files=files, next_cursor=next_cursor)
+            entries = [entry for entry in entries if entry > after]
+        page = entries[:limit]
+        next_cursor = _encode_cursor(prefix, page[-1]) if len(entries) > limit else None
+        files = [replace(self._files[e].info, content_type=None) for e in page if e in self._files]
+        folders = [entry for entry in page if entry not in self._files]
+        return FilePage(files=files, next_cursor=next_cursor, folders=folders)
 
     def copy(self, source_key: str, dest_key: str) -> FileInfo:
         # Like S3's CopyObject for a single-part file: same contents and etag, new time.
@@ -79,6 +90,14 @@ class InMemoryStorage:
         if stored is None:
             raise FileNotFound(f"no file named {key!r}")
         return stored
+
+
+def _folder_of(key: str, prefix: str, delimiter: str | None) -> str | None:
+    """The folder prefix that groups ``key`` one level below ``prefix``, if any."""
+    if delimiter is None:
+        return None
+    position = key.find(delimiter, len(prefix))
+    return None if position == -1 else key[: position + len(delimiter)]
 
 
 # A cursor names the prefix it was made for and the last key on its page. It is

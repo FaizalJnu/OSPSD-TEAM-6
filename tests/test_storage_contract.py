@@ -151,3 +151,35 @@ def test_list_matches_the_prefix_as_text_at_every_depth_in_byte_order(storage, p
     # non-ASCII after ASCII.
     expected = ("docs/B.txt", "docs/a.txt", "docs/sub/b.txt", "docs/é.txt")
     assert [f.key for f in page.files] == [prefix + name for name in expected]
+
+
+def test_list_with_a_delimiter_returns_direct_files_and_subfolders(storage, prefix):
+    for name in ("docs/a.txt", "docs/sub/b.txt", "docs/sub/deeper/c.txt", "docs/z/d.txt"):
+        put_bytes(storage, prefix + name)
+    put_bytes(storage, prefix + "docs2/e.txt")  # a look-alike, not inside docs/
+
+    page = storage.list_files(prefix + "docs/", 10, None, delimiter="/")
+
+    assert [f.key for f in page.files] == [prefix + "docs/a.txt"]
+    assert page.folders == [prefix + "docs/sub/", prefix + "docs/z/"]
+    assert page.next_cursor is None
+
+
+def test_list_with_a_delimiter_pages_over_files_and_folders_once_each(storage, prefix):
+    for name in ("a.txt", "b/x.txt", "b/y.txt", "c.txt", "d/z.txt"):
+        put_bytes(storage, prefix + name)
+
+    files: list[str] = []
+    folders: list[str] = []
+    cursor = None
+    for _ in range(10):
+        page = storage.list_files(prefix, 1, cursor, delimiter="/")
+        assert len(page.files) + len(page.folders) <= 1
+        files += [f.key for f in page.files]
+        folders += page.folders
+        cursor = page.next_cursor
+        if cursor is None:
+            break
+
+    assert files == [prefix + "a.txt", prefix + "c.txt"]
+    assert folders == [prefix + "b/", prefix + "d/"]

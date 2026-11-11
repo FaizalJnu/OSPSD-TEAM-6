@@ -6,7 +6,7 @@ them into JSON when a route returns one.
 """
 
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from cloud_storage_api import FileInfo as SharedFileInfo
@@ -40,10 +40,26 @@ class FilePage:
 
     next_cursor is None on the last page. Otherwise, pass it back as ``cursor``
     to get the next page. Cursors are opaque: do not parse or build them.
+
+    folders is only filled when the listing used a delimiter: the folder prefixes
+    one level down, each ending with the delimiter, for example "docs/sub/".
     """
 
     files: list[FileInfo]
     next_cursor: str | None
+    folders: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class FolderEntry:
+    """One direct child of a listed folder.
+
+    key:  The child's key. A folder's key has no trailing "/", for example "docs/sub".
+    info: The file's info, or None when the child is a folder.
+    """
+
+    key: str
+    info: FileInfo | None
 
 
 @dataclass(frozen=True)

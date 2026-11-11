@@ -80,6 +80,19 @@ def test_delete_removes_the_file(storage, prefix):
         storage.stat(key)
 
 
+def test_delete_many_removes_the_keys_and_ignores_missing_ones(storage, prefix):
+    for name in ("a", "sub/b", "keep"):
+        put_bytes(storage, prefix + name)
+
+    failed = storage.delete_many([prefix + "a", prefix + "sub/b", prefix + "missing"])
+
+    assert failed == []
+    for name in ("a", "sub/b"):
+        with pytest.raises(FileNotFound):
+            storage.stat(prefix + name)
+    assert storage.stat(prefix + "keep").key == prefix + "keep"
+
+
 def test_list_is_sorted_paginated_and_has_no_content_type(storage, prefix):
     for name in ("c", "a", "b"):
         put_bytes(storage, prefix + name)

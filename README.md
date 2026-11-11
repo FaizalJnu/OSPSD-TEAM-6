@@ -132,7 +132,7 @@ Add `-i` to any command to show the status code and response headers.
 | `POST` | `/files/{key}` | Create a file (form field `file`) |
 | `PUT` | `/files/{key}` | Replace an existing file |
 | `GET` | `/files/download?path=` | Download a file (streamed) |
-| `DELETE` | `/files?path=` | Delete a file |
+| `DELETE` | `/files?path=` | Delete a file, or a folder and everything under it |
 | `GET` | `/metadata/{key}` | Get file info as JSON |
 | `GET` | `/files` | List files: `prefix`, `limit` (1 to 1000), `cursor` |
 
@@ -206,6 +206,8 @@ up, the test layout and fixtures, and what each operation's tests check.
 * Create, replace, and delete first check whether the file exists, then act,
   using two separate provider calls. If two clients write to the same key at
   the same time, both can pass the check and the last write wins.
+* A folder delete is not all-or-nothing. If it fails partway, some files are
+  gone and others remain, and repeating the request deletes what is left.
 * Listings do not include content types, because the S3 list call does not
   return them.
 * Backups and redundancy are handled by the storage provider.

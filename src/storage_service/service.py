@@ -8,7 +8,8 @@ Rules:
 
 * Create refuses to overwrite: it fails with FileAlreadyExists.
 * Replace only works on a file that exists: otherwise FileNotFound.
-* Delete of a missing file fails with FileNotFound, so typos are visible.
+* Delete of a path with no file or folder fails with FileNotFound, so typos are
+  visible. Delete of a folder removes everything under it, and is not all-or-nothing.
 * The server picks the content type from the key's extension. Whatever type
   the client claims is ignored.
 * A client names a file by its path, with or without a leading "/". The storage
@@ -26,6 +27,7 @@ attempted.
 import mimetypes
 from collections.abc import Iterator
 from contextlib import contextmanager
+from itertools import batched
 from typing import BinaryIO
 
 from storage_service.errors import (
@@ -33,6 +35,7 @@ from storage_service.errors import (
     FileNotFound,
     FileTooLarge,
     InvalidInput,
+    ProviderError,
     StorageError,
 )
 from storage_service.models import FileDownload, FileInfo, FilePage
@@ -41,6 +44,7 @@ from storage_service.storage.base import StorageClient
 MAX_KEY_BYTES = 1024  # S3's limit on key length
 MAX_PATH_BYTES = 1024  # the shared contract's limit, which counts the leading "/"
 MAX_PAGE_SIZE = 1000  # S3 returns at most 1000 keys per list call
+MAX_DELETE_BATCH = 1000  # S3 accepts at most 1000 keys per DeleteObjects call
 FALLBACK_CONTENT_TYPE = "application/octet-stream"
 
 
@@ -86,12 +90,59 @@ class FileService:
             return self._storage.list_files(prefix, limit, cursor)
 
     def delete(self, path: str) -> None:
+        """Delete the file at ``path``, or else the folder there and everything under it.
+
+        S3 lets a file and a folder share a path. Then only the file is deleted.
+        """
         canonical = normalize_path(path)
         key = path_to_key(canonical)
-        if not self._exists(key):
-            raise FileNotFound(f"no file at {canonical!r}", storage_call="stat")
-        with _storage_call("delete"):
-            self._storage.delete(key)
+        if self._exists(key):
+            with _storage_call("delete"):
+                self._storage.delete(key)
+            return
+        # The "/" keeps a folder named "docs" from matching "docs2/a.txt".
+        keys = self._keys_under(f"{key}/")
+        if not keys:
+            raise FileNotFound(f"no file or folder at {canonical!r}", storage_call="list_files")
+        self._delete_folder_keys(keys, canonical)
+
+    def _keys_under(self, prefix: str) -> list[str]:
+        """Every key under ``prefix``, following every page.
+
+        A page can be short, or even empty, and still have a cursor, so stop only when
+        there is no cursor. Folder Delete lists everything before deleting anything: a
+        failed listing then changes nothing, and deleting cannot disturb the cursor.
+        """
+        keys: list[str] = []
+        cursor: str | None = None
+        while True:
+            with _storage_call("list_files"):
+                page = self._storage.list_files(prefix, MAX_PAGE_SIZE, cursor)
+            keys += [info.key for info in page.files]
+            cursor = page.next_cursor
+            if cursor is None:
+                return keys
+
+    def _delete_folder_keys(self, keys: list[str], folder: str) -> None:
+        """Delete ``keys`` in batches, stopping at the first batch that does not finish.
+
+        Once a batch has finished, or when a batch reports keys it could not delete, the
+        failure becomes a ``ProviderError`` whatever went wrong: the caller needs to know
+        the folder may be partly deleted more than why. A retry deletes whatever is left.
+        """
+        unfinished = f"the delete of folder {folder!r} did not finish; some files may remain"
+        for number, batch in enumerate(batched(keys, MAX_DELETE_BATCH, strict=False)):
+            try:
+                with _storage_call("delete_many"):
+                    failed = self._storage.delete_many(batch)
+            except StorageError as err:
+                if number == 0:
+                    raise  # no batch has finished, so report the failure as it is
+                raise ProviderError(
+                    unfinished, storage_call="delete_many", provider_code=err.provider_code
+                ) from err
+            if failed:
+                raise ProviderError(unfinished, storage_call="delete_many")
 
     def _exists(self, key: str) -> bool:
         try:

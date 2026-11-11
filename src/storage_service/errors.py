@@ -13,7 +13,7 @@ class StorageError(Exception):
     (see ``routers/error_handlers.py``):
 
     * ``storage_call``: the storage call ("stat", "put", "get", "list_files",
-      "delete") that raised the error, or whose answer made the service raise it.
+      "delete", "delete_many") that raised the error, or whose answer made the service raise it.
       ``None`` means the request was rejected before storage was called.
     * ``provider_code``: the provider's or SDK's own name for the failure, such as
       ``NoSuchBucket`` or ``EndpointConnectionError``. It describes the provider,

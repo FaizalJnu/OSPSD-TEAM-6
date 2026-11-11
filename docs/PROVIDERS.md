@@ -30,6 +30,10 @@ The provider the README documents.
   [Connect a real provider (OCI Object Storage)](../README.md#connect-a-real-provider-oci-object-storage)
   in the README. It covers the endpoint, region, keys, and bucket policy.
 * **Known bugs:** see [fixesRequired.md](../fixesRequired.md).
+* **Bulk delete checksum:** OCI requires `Content-MD5`, `x-amz-checksum-sha256`, or
+  `x-amz-checksum-crc32c` on `DeleteObjects`. It answers boto3's default, CRC32, with
+  400 `InvalidRequest`, and the `AWS_*_CHECKSUM_*` settings do not change that, so
+  `S3Storage.delete_many` asks for SHA-256. Without it, every folder Delete returns 502.
 
 ## AWS S3
 

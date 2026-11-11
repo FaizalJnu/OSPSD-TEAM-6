@@ -48,8 +48,8 @@ from storage_service.models import (
     CommonFileInfo,
     FileDownload,
     FileInfo,
-    FilePage,
     FolderEntry,
+    common_entry,
     common_file_info,
 )
 from storage_service.storage.base import StorageClient
@@ -109,13 +109,9 @@ class FileService:
         key = path_to_key(normalize_path(path))
         return common_file_info(self.stat(key))
 
-    def list_files(self, prefix: str = "", limit: int = 100, cursor: str | None = None) -> FilePage:
-        if not 1 <= limit <= MAX_PAGE_SIZE:
-            raise InvalidInput(f"limit must be between 1 and {MAX_PAGE_SIZE}")
-        if len(prefix.encode("utf-8")) > MAX_KEY_BYTES:
-            raise InvalidInput(f"prefix is longer than {MAX_KEY_BYTES} bytes")
-        with _storage_call("list_files"):
-            return self._storage.list_files(prefix, limit, cursor)
+    def list_entries(self, path: str) -> list[CommonFileInfo]:
+        """The folder at ``path`` as the shared contract lists it, in common form."""
+        return [common_entry(entry) for entry in self.list_folder(path)]
 
     def list_folder(self, path: str) -> list[FolderEntry]:
         """The files and folders directly inside the folder at ``path``, sorted by key.

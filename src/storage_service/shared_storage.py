@@ -92,23 +92,7 @@ class SharedDocumentStorage(DocumentStorage):
         return self._service.get_metadata(path)
 
     def list_files(self, path: str) -> list[SharedFileInfo]:
-        result: list[SharedFileInfo] = []
-        for entry in self._service.list_folder(path):
-            if entry.info is not None:
-                info = common_file_info(entry.info)
-                info.type = "file"
-            else:
-                info = CommonFileInfo(
-                    id=None,
-                    name=entry.key.rsplit("/", 1)[-1],
-                    path="/" + entry.key,
-                    size=None,
-                    modified_at=None,
-                    etag=None,
-                    type="folder",
-                )
-            result.append(info)
-        return result
+        return [*self._service.list_entries(path)]
 
     def move(self, from_path: str, to_path: str) -> CommonFileInfo:
         return self._service.move(from_path, to_path)

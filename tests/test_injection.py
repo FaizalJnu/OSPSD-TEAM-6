@@ -63,7 +63,7 @@ def test_create_app_with_a_service_never_reads_settings_or_builds_storage(monkey
     response = client.get("/files")
 
     assert response.status_code == 200
-    assert response.json() == {"files": [], "next_cursor": None}
+    assert response.json() == []
     assert fake.calls == [("list_files", "")]
 
 
@@ -75,8 +75,8 @@ def test_each_app_keeps_its_own_storage():
     assert send_file(first_client, "POST", "notes.txt", b"data").status_code == 201
 
     assert second.calls == []
-    assert second_client.get("/files").json()["files"] == []
-    assert [f["key"] for f in first_client.get("/files").json()["files"]] == ["notes.txt"]
+    assert second_client.get("/files").json() == []
+    assert [f["path"] for f in first_client.get("/files").json()] == ["/notes.txt"]
 
 
 def test_create_app_without_a_service_builds_storage_from_the_environment(monkeypatch):

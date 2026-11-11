@@ -51,7 +51,7 @@ def test_invalid_key_is_400(client):
     response = send_file(client, "POST", "a//b.txt", b"data")
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "invalid_request"
-    assert client.get("/files").json()["files"] == []  # nothing was stored
+    assert client.get("/files").json() == []  # nothing was stored
 
 
 # --- Level 1: the full contract over HTTP (in-memory storage) ---

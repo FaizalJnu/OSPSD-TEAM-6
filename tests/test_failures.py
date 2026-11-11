@@ -64,11 +64,11 @@ def test_invalid_input_is_logged_as_rejected_before_the_provider(fake, fake_clie
 
 
 def test_input_fastapi_rejects_is_logged_like_our_own(fake_client, caplog):
-    response = fake_client.get("/files", params={"limit": "abc"})
+    response = fake_client.post("/files/notes.txt")  # no file field
 
     assert response.status_code == 400
     event = failure_log(caplog, response)
-    assert event["operation"] == "list_files"
+    assert event["operation"] == "create_file"
     assert event["error"] == "invalid_request"
     assert event["provider_involved"] is False
 
@@ -177,11 +177,16 @@ def test_provider_messages_stay_out_of_responses_and_logs(stubbed_s3, caplog):
         service_message="Either the bucket named 'team-bucket' does not exist in the "
         "namespace 'secretnamespace' or you are not authorized to access it",
         http_status_code=404,
-        expected_params={"Bucket": "test-bucket", "Prefix": "docs/", "MaxKeys": 2},
+        expected_params={
+            "Bucket": "test-bucket",
+            "Prefix": "docs/",
+            "MaxKeys": 1000,
+            "Delimiter": "/",
+        },
     )
     client = TestClient(create_app(FileService(storage, max_upload_bytes=1024)))
 
-    response = client.get("/files", params={"prefix": "docs/", "limit": 2})
+    response = client.get("/files", params={"path": "/docs"})
 
     assert response.status_code == 502
     assert response.json() == {
@@ -415,7 +420,7 @@ def test_openapi_lists_each_routes_errors_with_our_body_and_no_422(client):
 
     every_route = {"400", "403", "500", "502", "503"}
     expected = {
-        ("GET", "/files"): every_route,
+        ("GET", "/files"): every_route | {"404"},
         ("POST", "/files/{key}"): every_route | {"409", "413"},
         ("PUT", "/files/{key}"): every_route | {"404", "413"},
         ("GET", "/files/download"): every_route | {"404"},

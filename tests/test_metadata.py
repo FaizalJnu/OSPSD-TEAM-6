@@ -56,15 +56,12 @@ def test_metadata_and_listing_report_the_same_file(client):
     key = "docs/report.pdf"
     assert send_file(client, "POST", key, b"report").status_code == 201
     metadata = client.get("/files/metadata", params={"path": key})
-    listing = client.get("/files", params={"prefix": "docs/"})
+    listing = client.get("/files", params={"path": "/docs"})
     assert metadata.status_code == listing.status_code == 200
-    listed = listing.json()["files"]
-    assert len(listed) == 1
-    assert metadata.json()["path"] == "/" + listed[0]["key"]
-    assert metadata.json()["modified_at"] == listed[0]["last_modified"]
-    for field in ("size", "etag"):
-        assert listed[0][field] == metadata.json()[field]
-    assert listed[0]["content_type"] is None
+    [listed] = listing.json()
+    for field in ("id", "name", "path", "size", "modified_at", "etag"):
+        assert listed[field] == metadata.json()[field]
+    assert listed["content_type"] is None
 
 
 def test_metadata_missing_file_returns_the_public_error(client):
@@ -231,15 +228,13 @@ def test_metadata_reports_real_provider_values_and_matches_listing(
     assert meta["size"] == created.json()["size"]
     assert provider_client.get("/files/download", params={"path": key}).content == data
 
-    listing = provider_client.get("/files", params={"prefix": provider_prefix})
+    listing = provider_client.get("/files", params={"path": provider_prefix.removesuffix("/")})
     assert listing.status_code == 200
-    files = listing.json()["files"]
-    assert len(files) == 1
-    assert meta["path"] == "/" + files[0]["key"]
-    for field in ("size", "etag"):
-        assert files[0][field] == meta[field]
-    listed_modified = datetime.fromisoformat(files[0]["last_modified"])
+    [listed] = listing.json()
+    for field in ("id", "name", "path", "size", "etag"):
+        assert listed[field] == meta[field]
+    listed_modified = datetime.fromisoformat(listed["modified_at"])
     assert listed_modified.utcoffset() == timedelta(0)
     # HEAD and LIST may encode fractional seconds with different precision.
     assert abs((listed_modified - modified).total_seconds()) < 1
-    assert files[0]["content_type"] is None
+    assert listed["content_type"] is None

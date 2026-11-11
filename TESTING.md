@@ -51,10 +51,10 @@ delete their files afterwards.
 | [tests/test_bucket_errors.py](tests/test_bucket_errors.py) | FIX-2: missing/denied buckets, probe failures, and HTTP checks before writes |
 | [tests/test_delete.py](tests/test_delete.py) | Delete: `DELETE /files?path=` |
 | [tests/test_move.py](tests/test_move.py) | Move: `PATCH /files?path=` |
-| [tests/test_list.py](tests/test_list.py) | List: `GET /files` |
+| [tests/test_list.py](tests/test_list.py) | List: `GET /files?path=` |
 | [tests/test_service.py](tests/test_service.py) | The key and path rules and the content-type choice, without HTTP |
 | [tests/test_storage_contract.py](tests/test_storage_contract.py) | The same tests for every storage backend |
-| [tests/test_invalid_input.py](tests/test_invalid_input.py) | Invalid input that FastAPI rejects first (a bad List `limit`, a missing `file` field) returns 400 `InvalidInput` |
+| [tests/test_invalid_input.py](tests/test_invalid_input.py) | Invalid input that FastAPI rejects first (a missing `file` field) returns 400 `InvalidInput` |
 | [tests/test_injection.py](tests/test_injection.py) | Application tests over a controlled backend: storage calls made, provider failures, how the app is built, and the routes it serves |
 | [tests/test_failures.py](tests/test_failures.py) | The error model across operations (Level 5): access denial, sanitized errors, the failure log, errors outside any operation (no route, wrong method, unreadable body, a bug), and the errors `/openapi.json` lists |
 | [tests/fakes.py](tests/fakes.py) | `FakeStorage`, the controlled backend (below) |
@@ -380,8 +380,8 @@ noted:
 * `test_a_successful_request_logs_nothing`
 * `test_invalid_input_is_logged_as_rejected_before_the_provider`: 400, `WARNING`,
   `provider_involved` false, no `write_outcome` for a read, and no storage call.
-* `test_input_fastapi_rejects_is_logged_like_our_own`: `limit=abc` is logged as
-  `list_files`, 400 `InvalidInput`.
+* `test_input_fastapi_rejects_is_logged_like_our_own`: a Create without the `file`
+  field is logged as `create_file`, 400 `InvalidInput`.
 * `test_a_missing_file_is_logged_as_reported_by_the_provider`: 404, `storage_call`
   `stat`.
 * `test_access_denied_is_403_and_logged_for_whoever_runs_the_service`: 403 with the
@@ -1402,165 +1402,111 @@ and the stubbed S3 test, and removing the destination folder check failed the fo
 Owner: **Prateek Saxena**. Contract: [docs/API.md](docs/API.md#list).
 Tests: [tests/test_list.py](tests/test_list.py).
 
+`GET /files?path=` lists one folder level in the shared format. It replaced the paged
+`GET /files?prefix=&limit=&cursor=` route and its `ListResponse`. The storage layer
+still pages with cursors, because List and folder Delete both read every page of
+`list_files`, so the storage-level paging tests stay.
+
 ### Contract checked
 
-* A 200 returns exactly `files` and `next_cursor`, and each file has exactly the five
-  [file info](docs/API.md#file-info) fields: `content_type` is `null`, `etag` has no
-  quotes and equals the Create response's `etag`, and `last_modified` is UTC.
-* Following `next_cursor` until it is `null` returns every matching file exactly once,
-  sorted by UTF-8 bytes. No page holds more than `limit` files, and no file outside the
-  prefix appears.
-* The prefix is plain text matched at the start of the key, at every depth.
-* `limit` from 1 to 1000 and a `prefix` of up to 1024 bytes are accepted. The values
-  just outside are 400 `InvalidInput`.
-* A cursor this API did not produce, or one from another prefix, is 400 `InvalidInput`
-  on both backends, without a provider call. `S3Storage` wraps the provider's token
-  with its prefix, sends the token back unchanged, and turns the provider's
-  `InvalidArgument` for a sent token (for example an expired one) into `InvalidInput`.
-  It keeps `InvalidArgument` a `ProviderError` when no cursor was sent.
-* A file that exists for the whole traversal appears once, even when other files are
-  created between pages.
-* The service makes exactly one storage call per request, with `prefix`, `limit`, and
-  `cursor` passed through unchanged, and returns storage's page unchanged. Invalid
-  input never reaches storage. A `ProviderError` or `ProviderUnavailable` from storage
-  becomes 502 or 503 in the [error format](docs/API.md#error-format).
+* A 200 is a JSON array of shared [file info](docs/API.md#file-info), sorted by path:
+  the files and folders directly inside the folder, each once. Deeper keys and look-alike
+  neighbors (`docs2/c.txt` next to `docs/`) never appear.
+* A file entry equals the Metadata response for that file, except `type` is `"file"`
+  and `content_type` is `null`.
+* A folder entry has `id`, `size`, `modified_at`, `etag`, and `content_type` `null`,
+  its last segment as `name`, its canonical path, and `type` `"folder"`.
+* No `path`, `/`, and `""` list the root. The empty root is `[]`, not 404. A path
+  without its leading `/` works.
+* A missing folder, and a file's path, are 404 `not_found`.
+* A bad path (trailing `/`, `//`, `.` or `..` segments, 1025 bytes) is 400
+  `invalid_request` without a storage call.
+* A folder of 1001 files, more than one storage page, comes back whole in one array.
+* The service asks storage for the folder's prefix with `delimiter="/"` and the largest
+  page, and turns its files and folder prefixes into shared entries. Storage failures
+  become 403, 502, or 503 in the [error format](docs/API.md#error-format).
+* `FileService.list_folder` (#86) follows every page, merges files and folders, and
+  sorts them by key. With `delimiter="/"`, both backends return the files directly under
+  the prefix and each subfolder once (S3's `CommonPrefixes`). Contract tests, on memory
+  and on OCI.
 * The `list_files` contract in
   [storage/base.py](src/storage_service/storage/base.py) holds for `S3Storage`: a
   `list_objects_v2` answer becomes a `FilePage` with ETag quotes stripped,
   `content_type` `None`, and `NextContinuationToken` wrapped in `next_cursor`, and
-  provider errors become `ProviderError` or `ProviderUnavailable`. Both backends match the prefix
-  as text, at every depth, in UTF-8 byte order.
-
-### Folder listing (shared contract, #86)
-
-`FileService.list_folder` is the storage side of the shared `GET /files?path=`. The
-route comes in a follow-up, after the shared error format and file info (#81).
-
-* With `delimiter="/"`, both backends return the files directly under the prefix and
-  each subfolder once, as a prefix ending in `/` (S3's `CommonPrefixes`). Files and
-  folders together count toward `limit`, and paging returns each one once. Contract
-  tests, on memory and on OCI.
-* `list_folder` follows every page, merges files and folders, and sorts them by key.
-  The Stubber test feeds three pages (one of them empty but with a token) with files
-  and folders mixed within a page.
-* `"/"` and `""` list the root, a path without its leading `/` works, a folder with
-  nothing under it is `FileNotFound`, and a bad path is `InvalidInput` without a
-  storage call.
-* Not yet run on OCI with more than 1000 entries in one folder.
+  provider errors become `ProviderError` or `ProviderUnavailable`. A cursor this
+  backend did not produce, or one from another prefix, is `InvalidInput` without a
+  provider call.
 
 ### Cases and boundaries
 
-These follow the collection traversal example in `docs/testing.txt`. Expected keys are
-written out by hand, not computed with the code under test.
-
-* **Collection size against the limit.** With `limit=3`: n = 0, n = 2 (below the
-  limit), n = 3 (at it), and n = 4 (one above it). The smallest limit, 1, with three
-  files. Seven files at three per page, which takes at least three pages.
-* **Prefix.** Neighbors just before and just after the prefix in sort order
-  (`seven.txt` and `seven2/h.txt` around `seven/`). Look-alikes `docs2/c.txt`,
-  `docsx.txt`, and `other/docs/d.txt`. A nested key, `docs/sub/b.txt`. The same files
-  listed with `docs` instead of `docs/`.
-* **Order.** Keys uploaded out of order, with uppercase, `.` against `/`, and a
-  non-ASCII character.
-* **Limits.** `limit` of 1 and 1000 are accepted; 0, 1001, and `abc` are rejected. A
-  `prefix` of exactly 1024 bytes is accepted and 1025 bytes is rejected. It is built
-  from `é`, two bytes each, to show that the limit counts bytes, not characters.
-* **Changes between pages.** After the first page, one file is created before the
-  position reached so far and one after it.
-* **Cursors this API did not produce.** A plain string (`garbage`), a string shaped
-  like a provider token (`abc123`), and a key name (`docs/a.txt`, which the old
-  in-memory cursor format accepted), plus a real cursor sent with another prefix. On
-  S3, also a bare provider token, a cursor with our mark but a broken body, and a real
-  cursor sent with another prefix, none of which reach the provider. Also the same
-  provider code with and without a cursor, to show that only a sent cursor becomes
-  `InvalidInput`. The contract test sends a real cursor with another prefix on every
-  backend, including OCI.
-* **What storage answers (controlled storage).** A page with a cursor, given the
-  caller's own cursor; the default parameters; each kind of invalid input; and each of
-  the two provider errors.
-* **What the provider answers (translation).** A page with more to come, with a plain
-  MD5 ETag and a multipart ETag (`-2` suffix), and provider-only fields such as the
-  storage class. The last page, without `NextContinuationToken`. No matches, where S3
-  leaves out `Contents` entirely. Keys sent URL-encoded. `AccessDenied` (403) and
-  `NoSuchBucket` (404): List names no file, so even a 404 must not become
-  `FileNotFound`. A connection failure.
-
-The tests follow the cursor until it is `null` and never require a particular number of
-pages, because the contract allows short pages. The traversal helper fails after 50
-pages, so a cursor that never runs out fails the test instead of hanging it.
+* **Depth.** `docs/b.txt`, `docs/a.txt`, `docs/sub/x.txt`, and `docs/sub/deep/y.txt`,
+  with `top.txt` above and `docs2/c.txt` beside: `/docs` lists `a.txt`, `b.txt`, and
+  `sub` once.
+* **Root.** No `path`, `/`, and `""`, over a top-level file and a folder, and over
+  empty storage.
+* **Missing.** A folder with nothing under it, and a file's own path.
+* **Bad paths.** `/docs/`, `/docs//a`, `/docs/../a`, `/a/./b`, and 1025 bytes.
+* **Size.** 1001 files, one more than a storage page.
+* **Order on OCI.** Uppercase, a folder `a` next to `a.txt`, and a non-ASCII name.
+* **What storage answers (controlled storage).** One file and one folder prefix; each
+  of the three provider errors.
+* **Paging in the service.** The Stubber feeds three pages, one empty but with a token,
+  with files and folders mixed within a page.
 
 ### Tests
 
-The tests reach storage in four ways, from fastest to slowest:
-
 * **In-memory storage** (`client`): the API's behavior over a small real collection.
 * **Controlled storage** (Level 4): `controlled_storage` is
-  `create_autospec(StorageClient, instance=True, spec_set=True)`. It has exactly
-  `StorageClient`'s methods and signatures, so a call with the wrong arguments fails,
-  and it does only what a test tells it to. `controlled_client` passes it to
-  `FileService` and then `create_app(service)`, the same path production uses with
-  the `S3Storage` that `main.build_storage` creates. It does not imitate S3 at all.
-  It shows what the service sends to storage and how storage's answers and failures
-  reach the caller. It needs only the standard library, so these tests do not depend
-  on `tests/fakes.py` (L4-FAKE), which records only the prefix of a List call.
+  `create_autospec(StorageClient, instance=True, spec_set=True)`, passed to
+  `FileService` and then `create_app(service)`. It does only what a test tells it to,
+  and shows what the service sends to storage and how storage's answers and failures
+  reach the caller.
 * **Translation** (`stubbed_s3`, Level 3): the real `S3Storage` over a stubbed boto3
-  client. The Stubber checks the request parameters and the response shape against
-  the S3 API model.
+  client.
 * **Real provider** (`provider_client`): the whole path against a bucket.
 
-None of the first three need network access or credentials.
+HTTP behavior, on the in-memory backend:
 
-HTTP behavior, on the in-memory backend through `create_app(service)`:
-
-* [`test_list_returns_every_promised_field`](tests/test_list.py): 200; the body has
-  exactly `files` and `next_cursor`; the file has exactly the five fields, with the
-  right key and size, `content_type` `null`, the Create `etag` without quotes, and a
-  UTC `last_modified` ending in `Z`.
-* [`test_list_of_empty_storage_with_default_parameters_is_one_empty_page`](tests/test_list.py):
-  `GET /files` with no parameters on empty storage returns
-  `{"files": [], "next_cursor": null}`.
-* [`test_traversal_returns_every_file_once_in_order`](tests/test_list.py), for n = 0,
-  n < limit, n = limit, n = limit + 1, and limit = 1: following the cursor lists
-  exactly the expected keys, in order, with no page over the limit and a file outside
-  the prefix left out.
-* [`test_seven_files_three_per_page_each_appear_once_in_order`](tests/test_list.py):
-  all seven keys exactly once, in order, without the neighbors on either side.
-* [`test_list_sorts_keys_by_their_utf8_bytes`](tests/test_list.py):
-  `B.txt`, `a.txt`, `a/x.txt`, `b.txt`, `é.txt`.
-* [`test_prefix_is_plain_text_matched_at_the_start_of_the_key`](tests/test_list.py):
-  `docs/` lists only the two keys under it, nested one included; `docs` also lists
-  `docs2/c.txt` and `docsx.txt`; `other/docs/d.txt` never appears.
-* [`test_largest_limit_is_accepted`](tests/test_list.py): `limit=1000` returns 200.
-* [`test_prefix_of_1024_bytes_is_accepted_and_1025_is_400`](tests/test_list.py): 200,
-  then 400 `InvalidInput`.
-* [`test_files_present_for_the_whole_traversal_appear_once_despite_changes`](tests/test_list.py):
-  the three original files appear exactly once each.
-* [`test_list_with_a_cursor_this_api_did_not_produce_is_400`](tests/test_list.py):
-  `garbage`, `abc123`, and a key name (`docs/a.txt`, which the old in-memory cursor
-  format accepted) each return 400 `InvalidInput`.
-* [`test_list_with_a_cursor_from_another_prefix_is_400`](tests/test_list.py): a real
-  `next_cursor` from `docs/` sent with `img/` returns 400 `InvalidInput`.
-* [`test_list_pages_through_files_with_a_cursor`](tests/test_list.py) and
-  [`test_list_rejects_an_out_of_range_limit`](tests/test_list.py), from before this
-  section: two pages with a prefix; `limit` 0 and 1001 return 400. The error body for
-  `limit` 0, 1001, and `abc` is checked in
-  [tests/test_invalid_input.py](tests/test_invalid_input.py).
+* [`test_list_returns_direct_files_and_folders_sorted_by_path`](tests/test_list.py):
+  `/docs/a.txt`, `/docs/b.txt`, `/docs/sub`.
+* [`test_list_file_entry_is_the_shared_file_info_metadata_returns`](tests/test_list.py):
+  the entry equals Metadata's body with `type` `"file"` and `content_type` `null`.
+* [`test_list_folder_entry_has_only_a_name_path_and_type`](tests/test_list.py): the
+  whole folder entry, field by field.
+* [`test_list_without_a_folder_lists_the_root`](tests/test_list.py), for no `path`,
+  `/`, and `""`: `/docs`, `/top.txt`.
+* [`test_list_of_the_empty_root_is_an_empty_array`](tests/test_list.py): 200 `[]`.
+* [`test_list_accepts_a_folder_path_without_the_leading_slash`](tests/test_list.py).
+* [`test_list_of_a_missing_folder_is_404`](tests/test_list.py) and
+  [`test_list_of_a_file_path_is_404`](tests/test_list.py).
+* [`test_list_with_a_bad_path_is_400_without_calling_storage`](tests/test_list.py):
+  400 `invalid_request`, and `FakeStorage` records no call.
+* [`test_list_returns_a_folder_of_more_than_one_storage_page_in_one_array`](tests/test_list.py):
+  all 1001 paths, in order.
+* [`test_metadata_and_listing_report_the_same_file`](tests/test_metadata.py): `id`,
+  `name`, `path`, `size`, `modified_at`, and `etag` agree with Metadata.
 
 HTTP behavior over controlled storage:
 
-* [`test_list_returns_the_page_storage_gives_and_passes_the_cursor_through`](tests/test_list.py):
-  storage's page comes back as JSON unchanged, `next_cursor` included, and the only
-  storage call is `list_files("docs/", 5, "cursor-from-caller")`.
-* [`test_list_defaults_reach_storage_as_every_file_100_per_page`](tests/test_list.py):
-  `GET /files` calls `list_files("", 100, None)`.
-* [`test_invalid_list_input_never_reaches_storage`](tests/test_list.py), for `limit`
-  0, 1001, and `abc`, and a 1025-byte prefix: 400 `InvalidInput`, and no storage call
-  at all.
+* [`test_list_turns_the_storage_page_into_shared_entries`](tests/test_list.py): one
+  file and one folder prefix become the two shared entries, and the only storage call
+  is `list_files("docs/", 1000, None, delimiter="/")`.
 * [`test_list_reports_storage_failures_in_our_error_format`](tests/test_list.py):
-  `ProviderError` gives 502 and `ProviderUnavailable` gives 503, each with exactly
-  `error` and `detail`.
+  `AccessDenied`, `ProviderError`, and `ProviderUnavailable` give 403, 502, and 503,
+  each with exactly `code` and `message`.
 
-Translation, with `stubbed_s3` (no network):
+`FileService.list_folder`, without HTTP (#86):
+
+* `test_list_folder_returns_direct_files_and_folders_sorted_by_key`,
+  `test_list_folder_accepts_a_path_without_the_leading_slash`,
+  `test_list_folder_of_the_root_lists_the_top_level`,
+  `test_list_folder_of_a_missing_folder_is_file_not_found`,
+  `test_list_folder_of_the_empty_root_is_an_empty_list`,
+  `test_list_folder_rejects_a_bad_path_without_calling_storage`, and
+  `test_s3_list_folder_follows_every_page_and_merges_files_and_folders`.
+
+Storage paging, which List and folder Delete both rely on. Translation, with
+`stubbed_s3` (no network):
 
 * [`test_s3_list_translates_a_provider_page_into_a_file_page`](tests/test_list.py):
   `list_objects_v2` is called with the bucket, prefix, and `MaxKeys`, and no
@@ -1602,26 +1548,64 @@ suite, S3 with `-m provider`):
 
 Real provider (marked `provider`):
 
-* [`test_list_pages_through_the_real_provider`](tests/test_list.py): seven files with
-  uppercase, nested, and non-ASCII keys, listed three per page. At least three pages;
-  the keys in UTF-8 byte order; `size` and `etag` equal to the Create response;
-  `content_type` `null`; UTC `last_modified`. With `limit=7` (n = limit), the same
-  seven keys.
+* [`test_list_folder_on_the_real_provider`](tests/test_list.py): files with uppercase,
+  nested, and non-ASCII keys, and a folder `a` beside `a.txt`. The paths come back in
+  UTF-8 byte order with `a` once as a folder. Each file entry has `id` `null`, the
+  Create response's `size` and `etag`, `content_type` `null`, and a UTC `modified_at`.
+  A missing folder is 404.
+* [`test_metadata_reports_real_provider_values_and_matches_listing`](tests/test_metadata.py):
+  List and Metadata agree on `id`, `name`, `path`, `size`, and `etag`, and their
+  `modified_at` values are less than a second apart.
 
-**A test that detects a defect** (`docs/testing.txt` section 1.5). The in-memory backend
-was changed to end the listing one file early whenever the last page would hold exactly
-one file (`len(keys) > limit + 1` instead of `len(keys) > limit`). Five tests failed,
-among them `test_traversal_returns_every_file_once_in_order[n=limit+1]`, which got
-`p/a.txt` to `p/c.txt` instead of `p/a.txt` to `p/d.txt`, and
-`test_seven_files_three_per_page_each_appear_once_in_order`, which was missing
-`seven/g.txt`. The change was reverted, and all List tests pass again.
-
-Two more changes were tried and reverted the same way. With the service passing `None`
-instead of the caller's cursor, six tests failed. The controlled-storage test showed the
-wrong call, and the traversal tests stopped at the 50-page limit instead of hanging.
-With `S3Storage` keeping the ETag quotes in listings, the page translation test failed.
+**A test that detects a defect** (`docs/testing.txt` section 1.5). `common_entry` was
+changed to tag folders as `"file"`: `test_list_folder_entry_has_only_a_name_path_and_type`
+and `test_list_turns_the_storage_page_into_shared_entries` failed. It was then changed to
+leave a file's `type` `null`, as Metadata does:
+`test_list_file_entry_is_the_shared_file_info_metadata_returns` and the controlled-storage
+test failed. Both changes were reverted, and all List tests pass again.
 
 ### Real-provider verification
+
+The two runs below used the paged route that `GET /files?path=` replaced. They are kept
+because they show how OCI pages and treats cursors, which `list_folder` still relies on.
+
+#### List route, `GET /files?path=`
+
+- Provider: OCI Object Storage, us-ashburn-1, my own private test bucket
+- Date: 2026-11-11
+- Commit: this branch, on `86-list-folder` (#87) after #81
+- Provider command:
+  `uv run --env-file .env pytest -m provider tests/test_list.py tests/test_metadata.py`
+- Observed: `2 passed, 63 deselected` (`test_list_folder_on_the_real_provider` and
+  the Metadata provider test).
+
+#### More than 1000 entries in one folder
+
+- Provider: OCI Object Storage, us-ashburn-1, my own private test bucket
+- Date: 2026-11-11
+- Commit: a08969e (`89-list-route`)
+- Setup: under a fresh folder `P=api-tests/list-1000-<uuid>`, 1005 one-byte files
+  `0000.txt` to `1004.txt`, plus `sub/x.txt` and `sub/deep/y.txt`. Also a neighbor
+  `<P>x/n.txt`, a sibling whose name starts with the folder's name. The objects were
+  uploaded through `S3Storage.put` (16 threads, about 8 s for 1008 objects). Then,
+  through `create_app` over the same `S3Storage`, with a botocore
+  `provide-client-params` hook counting `ListObjectsV2` calls:
+  ```text
+  GET /files?path=/<P>
+  DELETE /files?path=/<P>     DELETE /files?path=/<P>x
+  GET /files?path=/<P>        GET /files?path=/<P>x
+  ```
+- Expected: 200 with 1006 entries: the 1005 files in order, then `sub` once as a
+  folder. The neighbor and `sub/deep` do not appear. At least two provider pages. Both
+  deletes 204, then both listings 404.
+- Observed, three runs, the same each time: 200 with exactly the expected 1006
+  paths, each once, in order (1005 `file`, 1 `folder`). The neighbor was absent. Every
+  file entry had `id` `null`, `size` 1, `content_type` `null`, and a `modified_at`
+  ending in `Z`. The request took 0.27–0.34 s. The run with the hook made two calls,
+  `ListObjectsV2(MaxKeys=1000)` and then one with a `ContinuationToken`, so the
+  service merged two provider pages. Cleanup: 204 and 204, then 404 `not_found` for
+  both paths.
+
 
 #### Run by Faizal Rahman, with Claude Code (covering for Prateek)
 
@@ -1736,7 +1720,12 @@ same bucket. Its output is the one shown there, and its prefix was empty afterwa
 * **Changes between pages** are tested only on the in-memory backend.
 * **Short or empty pages that still have a cursor** never happened on OCI, so the
   "continue until `null`" rule was exercised only with full pages.
-* **Cursor lifetime** and **more than 1000 matching files** are not tested.
+* **Cursor lifetime** is not tested. More than 1000 entries in one folder was run on
+  OCI by hand (above), not by a provider test, because uploading 1000 objects is too
+  slow for every `-m provider` run.
+* **Empty folders.** On S3 a folder exists only while a file is under it, so an empty
+  folder is 404. Dropbox keeps empty folders and lists them as `[]`. The shared
+  contract has not settled this (shared #3).
 
 
 ## Shared streaming adoption (0.3.1)

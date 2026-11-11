@@ -186,10 +186,12 @@ up, the test layout and fixtures, and what each operation's tests check.
   stores each object's size, content type, ETag, and modification time, and a
   separate database would be a second copy that can fall out of sync. We plan
   to revisit this if we add search, sharing, or access history.
-* **Streaming.** Downloads are streamed from the provider in 1 MiB chunks.
+* **Streaming.** Downloads read from the provider in 1 MiB chunks and are emitted
+  through the shared streaming interface in bounded chunks.
   FastAPI saves each upload to a temporary file, which is then sent to the
   provider in 8 MB parts (multipart upload for large files). Memory use stays
-  flat regardless of file size.
+  flat regardless of file size. HTTP downloads use `open_download`, never the
+  shared interface's explicitly buffered bytes compatibility method.
 * **Content type.** The server sets the content type from the key's extension
   and ignores the type sent by the client. Downloads are served as attachments
   with `X-Content-Type-Options: nosniff`.

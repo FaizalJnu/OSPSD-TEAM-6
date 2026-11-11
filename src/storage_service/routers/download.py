@@ -4,11 +4,13 @@ from collections.abc import Iterator
 from contextlib import suppress
 from urllib.parse import quote
 
+from cloud_storage_api import DownloadStream
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
-from starlette.types import Send
+from starlette.types import Receive, Scope, Send
 
-from storage_service.routers.deps import PathQuery, Service
+from storage_service.errors import ProviderError
+from storage_service.routers.deps import PathQuery, SharedStorage
 from storage_service.routers.error_handlers import error_responses, log_interrupted_download
 
 router = APIRouter()
@@ -30,19 +32,31 @@ router = APIRouter()
         ),
     },
 )
-def download_file(path: PathQuery, service: Service, request: Request) -> StreamingResponse:
-    download = service.download(path)
-    info = download.info
-    filename = info.key.rsplit("/", 1)[-1]
-    headers = {
-        "Content-Length": str(info.size),
-        "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
-        "ETag": f'"{info.etag}"',
-        # Tell browsers to trust our Content-Type instead of guessing from the bytes.
-        "X-Content-Type-Options": "nosniff",
-    }
-    chunks = _logging_failures(download.chunks, request, info.size)
-    return _DownloadResponse(chunks, media_type=info.content_type, headers=headers)
+def download_file(path: PathQuery, storage: SharedStorage, request: Request) -> StreamingResponse:
+    download = storage.open_download(path)
+    try:
+        info = download.info
+        if info.size is None:
+            raise ProviderError(
+                "the provider returned a download without a file size", storage_call="get"
+            )
+        headers = {
+            "Content-Length": str(info.size),
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(info.name)}",
+            "X-Content-Type-Options": "nosniff",
+        }
+        if info.etag is not None:
+            headers["ETag"] = f'"{info.etag}"'
+        chunks = _logging_failures(download.chunks(), request, info.size)
+        return _DownloadResponse(
+            chunks,
+            download=download,
+            media_type=getattr(info, "content_type", None),
+            headers=headers,
+        )
+    except BaseException:
+        download.close()
+        raise
 
 
 class _CutOff(Exception):
@@ -60,6 +74,23 @@ class _DownloadResponse(StreamingResponse):
     (uvicorn logs "ASGI callable returned without completing response."), and the
     caller receives fewer bytes than ``Content-Length``, which is how it can tell.
     """
+
+    def __init__(
+        self,
+        chunks: Iterator[bytes],
+        *,
+        download: DownloadStream,
+        media_type: str | None,
+        headers: dict[str, str],
+    ) -> None:
+        super().__init__(chunks, media_type=media_type, headers=headers)
+        self._download = download
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            self._download.close()
 
     async def stream_response(self, send: Send) -> None:
         with suppress(_CutOff):

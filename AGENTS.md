@@ -10,6 +10,7 @@ src/storage_service/
   config.py          Reads settings from environment variables
   routers/           HTTP layer: one module per operation, plus deps.py and error_handlers.py
   service.py         The rules: validation, create vs replace, size limits
+  shared_storage.py  Tagged DocumentStorage adapter; streaming and bounded bytes compatibility
   errors.py          Our error types (plain Python, no HTTP)
   models.py          Data shapes: FileInfo, FilePage, FileDownload
   storage/base.py    The StorageClient contract every backend implements
@@ -53,7 +54,9 @@ no network), and checks against a real bucket (`provider_client`, marked
 * A new backend is one new module in `storage/` that passes
   `tests/test_storage_contract.py`, plus one branch in `main.build_storage`.
 * Stream file contents. Never read a whole file into memory outside tests and
-  `storage/memory.py`.
+  `storage/memory.py`, except the explicit legacy `DocumentStorage.download`
+  compatibility method in `shared_storage.py`, capped at 150 MiB. HTTP downloads
+  must use `open_download`; they never use the legacy bytes method.
 
 ## Commands
 

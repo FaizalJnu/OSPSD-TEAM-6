@@ -1,9 +1,10 @@
 """Metadata: ``GET /files/metadata?path=``."""
 
+from cloud_storage_api import FileInfo as SharedFileInfo
 from fastapi import APIRouter
 
 from storage_service.models import CommonFileInfo
-from storage_service.routers.deps import PathQuery, Service
+from storage_service.routers.deps import PathQuery, SharedStorage
 from storage_service.routers.error_handlers import error_responses
 
 router = APIRouter()
@@ -11,6 +12,7 @@ router = APIRouter()
 
 @router.get(
     "/files/metadata",
+    response_model=CommonFileInfo,
     summary="Read file metadata",
     responses=error_responses(
         {
@@ -22,7 +24,7 @@ router = APIRouter()
         }
     ),
 )
-def get_metadata(path: PathQuery, service: Service) -> CommonFileInfo:
+def get_metadata(path: PathQuery, storage: SharedStorage) -> SharedFileInfo:
     """Return shared file info with null S3 id and UTC modification time.
 
     The canonical path is at most 1024 UTF-8 bytes including its leading slash, with no
@@ -34,4 +36,4 @@ def get_metadata(path: PathQuery, service: Service) -> CommonFileInfo:
     Fix invalid input or provider configuration before retrying; an unavailable
     provider may recover later. A missing file must be created before retrying.
     """
-    return service.get_metadata(path)
+    return storage.get_metadata(path)

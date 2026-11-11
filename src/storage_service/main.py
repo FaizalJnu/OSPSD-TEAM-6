@@ -22,6 +22,7 @@ from storage_service.routers.error_handlers import (
     validation_error_handler,
 )
 from storage_service.service import FileService
+from storage_service.shared_storage import SharedDocumentStorage
 from storage_service.storage.base import StorageClient
 from storage_service.storage.memory import InMemoryStorage
 from storage_service.storage.s3 import S3Storage
@@ -37,6 +38,7 @@ def create_app(service: FileService | None = None) -> FastAPI:
         service = build_service(load_settings())
     app = FastAPI(title="Storage Service", version=version("storage-service"))
     app.state.file_service = service
+    app.state.document_storage = SharedDocumentStorage(service)
     app.include_router(listing.router)
     app.include_router(upload.router)
     app.include_router(metadata.router)

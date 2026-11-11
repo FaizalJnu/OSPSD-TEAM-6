@@ -22,6 +22,7 @@ tests/
   test_metadata.py         GET /files/metadata?path=
   test_bucket_errors.py    Missing-bucket errors across metadata and existence checks
   test_delete.py           DELETE /files?path=
+  test_move.py             PATCH /files?path= (move: copy, then delete)
   test_list.py             GET /files
   test_service.py          Input rules
   test_storage_contract.py Same tests for every backend; S3 runs only with -m provider

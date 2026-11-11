@@ -59,6 +59,13 @@ class InMemoryStorage:
         files = [replace(self._files[key].info, content_type=None) for key in page]
         return FilePage(files=files, next_cursor=next_cursor)
 
+    def copy(self, source_key: str, dest_key: str) -> FileInfo:
+        # Like S3's CopyObject for a single-part file: same contents and etag, new time.
+        stored = self._lookup(source_key)
+        info = replace(stored.info, key=dest_key, last_modified=datetime.now(UTC))
+        self._files[dest_key] = _StoredFile(info=info, data=stored.data)
+        return info
+
     def delete(self, key: str) -> None:
         self._files.pop(key, None)
 

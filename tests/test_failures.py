@@ -211,7 +211,7 @@ def test_a_path_with_no_route_is_route_not_found_not_a_missing_file(fake, fake_c
 @pytest.mark.parametrize(
     ("method", "path", "allowed"),
     [
-        ("POST", "/files", "DELETE, GET"),
+        ("POST", "/files", "DELETE, GET, PATCH"),
         # Starlette's own Allow names only the first route that matches the path: POST.
         ("PATCH", "/files/notes.txt", "POST, PUT"),
     ],
@@ -421,6 +421,7 @@ def test_openapi_lists_each_routes_errors_with_our_body_and_no_422(client):
         ("GET", "/files/download"): every_route | {"404"},
         ("DELETE", "/files"): every_route | {"404"},
         ("GET", "/files/metadata"): every_route | {"404"},
+        ("PATCH", "/files"): every_route | {"404", "409", "422"},
     }
     error_body = {"$ref": "#/components/schemas/ErrorBody"}
     for (method, path), statuses in expected.items():

@@ -150,6 +150,18 @@ class S3Storage:
         next_cursor = None if token is None else _encode_cursor(prefix, token)
         return FilePage(files=files, next_cursor=next_cursor)
 
+    def copy(self, source_key: str, dest_key: str) -> FileInfo:
+        # CopyObject copies inside the provider, so the contents never pass through this
+        # service. It keeps the source's content type. AWS documents a limit of 5 GB per
+        # CopyObject call; whether OCI has the same limit is not verified.
+        with _translate_errors(source_key):
+            self._client.copy_object(
+                Bucket=self._bucket,
+                Key=dest_key,
+                CopySource={"Bucket": self._bucket, "Key": source_key},
+            )
+        return self.stat(dest_key)
+
     def delete(self, key: str) -> None:
         with _translate_errors():
             self._client.delete_object(Bucket=self._bucket, Key=key)

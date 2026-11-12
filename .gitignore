@@ -221,3 +221,7 @@ __marimo__/
 docs/*.txt
 instructions.md
 
+# Personal working notes, kept local.
+/plan.md
+/resume.md
+

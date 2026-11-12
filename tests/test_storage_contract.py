@@ -87,6 +87,10 @@ def test_delete_of_a_missing_key_is_silent(storage, prefix):
     storage.delete(prefix + "missing.txt")
 
 
+def test_check_health_of_working_storage_returns_nothing(storage):
+    assert storage.check_health() is None
+
+
 def test_delete_removes_the_file(storage, prefix):
     key = prefix + "gone.txt"
     put_bytes(storage, key)

@@ -136,6 +136,8 @@ Add `-i` to any command to show the status code and response headers.
 | `PATCH` | `/files?path=` | Move a file (JSON body `{"new_path": ...}`) |
 | `GET` | `/files/metadata?path=` | Get file info as JSON |
 | `GET` | `/files` | List files: `prefix`, `limit` (1 to 1000), `cursor` |
+| `GET` | `/health` | Liveness: `{"status": "ok"}` with no provider call |
+| `GET` | `/health/provider` | Provider check: one HeadBucket on the configured bucket |
 
 The key rules, response fields, statuses, and errors are in
 [docs/API.md](docs/API.md).

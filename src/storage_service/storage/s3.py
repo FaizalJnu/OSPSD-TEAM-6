@@ -37,6 +37,8 @@ DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 _NOT_FOUND_CODES = {"404", "NoSuchKey", "NotFound"}
 # HEAD cannot distinguish a missing key from a missing/inaccessible bucket.
 _AMBIGUOUS_HEAD_NOT_FOUND_CODES = {"404", "NotFound"}
+# Error codes HeadBucket returns when the configured bucket does not exist.
+_MISSING_BUCKET_CODES = {"404", "NotFound", "NoSuchBucket"}
 # Error codes for refused credentials or permissions. Any HTTP 403 counts too: a HEAD
 # response has no body, so its code is only the status, "403".
 _ACCESS_DENIED_CODES = {
@@ -121,6 +123,19 @@ class S3Storage:
                         ) from bucket_err
                 raise
         return _info_from_response(key, response)
+
+    def check_health(self) -> None:
+        with _translate_errors():
+            try:
+                self._client.head_bucket(Bucket=self._bucket)
+            except ClientError as err:
+                # Never expose the bucket name or the raw provider code.
+                if _error_code(err) in _MISSING_BUCKET_CODES:
+                    raise ProviderError(
+                        "the configured bucket does not exist or is not accessible",
+                        provider_code=_error_code(err),
+                    ) from err
+                raise
 
     def list_files(
         self, prefix: str, limit: int, cursor: str | None, delimiter: str | None = None

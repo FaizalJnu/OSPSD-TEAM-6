@@ -17,6 +17,8 @@ Rules every backend must follow:
   not remove instead of raising for them.
 * ``list_files`` returns keys in sorted order, at most ``limit`` per page, with
   ``content_type`` set to None (S3 listings do not include it).
+* ``check_health`` makes one cheap provider call and returns nothing when the
+  configured storage can be used.
 * Provider failures surface as ``ProviderError`` or ``ProviderUnavailable``.
   SDK-specific exceptions must never escape a backend.
 
@@ -149,5 +151,17 @@ class StorageClient(Protocol):
 
         Raises ``AccessDenied``, ``ProviderError`` or ``ProviderUnavailable`` if the call
         as a whole fails. Any of the keys may or may not have been removed by then.
+        """
+        ...
+
+    def check_health(self) -> None:
+        """Check with one cheap provider call that the configured storage can be used.
+
+        Only reads, and reads no file. The S3 backend sends one HeadBucket. Returns
+        nothing when the storage answers.
+
+        Raises ``AccessDenied`` if the provider refuses the credentials,
+        ``ProviderError`` if the configured storage is missing or the provider rejects
+        the call, and ``ProviderUnavailable`` if the provider cannot be reached.
         """
         ...

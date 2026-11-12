@@ -59,6 +59,7 @@ delete their files afterwards.
 | [tests/test_failures.py](tests/test_failures.py) | The error model across operations (Level 5): access denial, sanitized errors, the failure log, errors outside any operation (no route, wrong method, unreadable body, a bug), and the errors `/openapi.json` lists |
 | [tests/fakes.py](tests/fakes.py) | `FakeStorage`, the controlled backend (below) |
 | [tests/test_cleanup.py](tests/test_cleanup.py) | `delete_everything_under`, the cleanup helper the provider tests rely on |
+| [tests/test_health.py](tests/test_health.py) | Health: `GET /health` and `GET /health/provider` |
 
 Each operation's file holds all of that operation's tests. There are three kinds:
 
@@ -472,6 +473,98 @@ the 500 handler and was logged as a 500.
 * `write_outcome` is `unknown` for any failure of the write call, including an explicit
   403 from it. That is conservative: a refused write most likely changed nothing.
 * Throttling and provider-side 5xx errors are still 502 `ProviderError` (F1).
+
+## Health
+
+`GET /health` and `GET /health/provider`. Owner: **Faizal Rahman**. The contract is in
+[docs/API.md](docs/API.md#health).
+
+### Contract checked
+
+* `GET /health` returns 200 `{"status": "ok"}` without any storage call, and keeps
+  doing so while the provider is down.
+* `GET /health/provider` makes exactly one storage call, `check_health`, through the
+  shared interface's `check_health()`, and returns 200 `{"status": "ok"}` when it
+  succeeds.
+* Every failed check is 503 `provider_unavailable` with the message "the storage
+  provider health check failed", whether the storage refused the credentials, had no
+  bucket, or could not be reached. The failure log names the operation
+  `provider_health` and the storage call `check_health`, keeps the provider's code,
+  and has no `write_outcome`, because a check never writes.
+* `S3Storage.check_health` sends one `HeadBucket` for the configured bucket and
+  classifies the answer like the [missing-bucket probe](#missing-bucket-regression-fix-2):
+  a missing bucket is `ProviderError` with the same safe message, a refusal is
+  `AccessDenied`, and a connection failure is `ProviderUnavailable`.
+
+### Tests
+
+In [tests/test_health.py](tests/test_health.py):
+
+* Over `FakeStorage`: `/health` with no storage call; `/health` still 200 while
+  `/health/provider` is 503; one `check_health` call on success; `AccessDenied`,
+  `ProviderError`, and `ProviderUnavailable` from storage each give 503 with the same
+  body, and a log line with that error's `provider_code`.
+* Over `stubbed_s3`: one `HeadBucket` on success. `404`, `NotFound`, and
+  `NoSuchBucket` are `ProviderError` with the missing-bucket message. `403`,
+  `AccessDenied`, and `InvalidAccessKeyId` are `AccessDenied`. `InternalError` (500)
+  is `ProviderError`. A connection failure is `ProviderUnavailable`.
+* [tests/test_storage_contract.py](tests/test_storage_contract.py):
+  `test_check_health_of_working_storage_returns_nothing`, on every backend.
+* [tests/test_injection.py](tests/test_injection.py) and
+  [tests/test_failures.py](tests/test_failures.py): the app serves both routes, and
+  `/openapi.json` lists their errors with the shared body.
+* [tests/test_shared_storage.py](tests/test_shared_storage.py) already calls the shared
+  `check_health()`, now backed by `HeadBucket`, in memory and on the real provider.
+
+**A test that detects a defect.** With `GET /health` changed to call the provider
+check, two tests failed (`test_health_is_ok_without_a_storage_call` and
+`test_health_stays_ok_while_the_provider_is_down`). With `S3Storage.check_health`
+no longer recognizing a missing bucket, the three missing-bucket cases failed. Both
+changes were reverted.
+
+### Real-provider verification
+
+#### Run by Faizal Rahman, with Claude Code
+
+- Provider: OCI Object Storage, us-ashburn-1
+- Date: 2026-11-11
+- Commit: 07f3168 (`dev` after #90 and #92), plus this branch's Health changes
+- Command: `uv run --env-file .env pytest -m provider tests/test_health.py
+  tests/test_shared_storage.py
+  "tests/test_storage_contract.py::test_check_health_of_working_storage_returns_nothing"`
+- Expected: both routes 200 on the real bucket. With a bucket name that was never
+  created, `/health` 200 and `/health/provider` 503. With a wrong secret key, 503.
+  The shared interface round trip, which ends with `check_health()`, passes.
+- Observed: `5 passed, 33 deselected`
+- Also ran: the service locally with `uvicorn`, first on the real bucket, then with
+  `S3_BUCKET` set to a name that does not exist:
+  ```text
+  real bucket:
+  $ curl -s -w ' %{http_code}\n' $B/health
+  {"status":"ok"} 200
+  $ curl -s -w ' %{http_code}\n' $B/health/provider
+  {"status":"ok"} 200
+
+  missing bucket:
+  $ curl -s -w ' %{http_code}\n' $B/health
+  {"status":"ok"} 200
+  $ curl -s -w ' %{http_code}\n' $B/health/provider
+  {"error":{"code":"provider_unavailable","message":"the storage provider health check failed"}} 503
+  ```
+  The server logged `{"level": "ERROR", "event": "request_failed", "operation":
+  "provider_health", "status": 503, "error": "provider_unavailable", "detail": "the
+  storage provider health check failed", "provider_involved": true, "storage_call":
+  "check_health", "provider_code": "404"}`.
+- Cleanup: none needed. The checks write nothing, and the missing bucket is never
+  created.
+
+### Gaps
+
+* One person's real-provider run so far.
+* An unreachable provider is tested only with the stub, not against a real network
+  failure.
+* The deployed service at https://ds.packapunch.xyz does not have these routes until it
+  is redeployed from a build that includes them.
 
 ## Filling in an operation section
 

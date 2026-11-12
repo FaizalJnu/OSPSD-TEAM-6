@@ -13,7 +13,7 @@ from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException
 
 from storage_service.config import Settings, load_settings
-from storage_service.routers import delete, download, listing, metadata, move, upload
+from storage_service.routers import delete, download, health, listing, metadata, move, upload
 from storage_service.routers.error_handlers import (
     http_error_handler,
     internal_error_handler,
@@ -45,6 +45,7 @@ def create_app(service: FileService | None = None) -> FastAPI:
     app.include_router(download.router)
     app.include_router(delete.router)
     app.include_router(move.router)
+    app.include_router(health.router)
     app.add_exception_handler(SharedStorageError, storage_error_handler)
     app.add_exception_handler(RequestValidationError, validation_error_handler)
     # Starlette's own errors (no route, wrong method, unreadable body), and bugs.

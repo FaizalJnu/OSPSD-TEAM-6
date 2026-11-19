@@ -146,6 +146,50 @@ Metadata's complete contract and example are in
 [docs/API.md](docs/API.md#metadata); verification is recorded in
 [TESTING.md](TESTING.md#metadata).
 
+## Use the shared DocumentStorage adapter in another service
+
+Other services can use our S3 implementation of the shared
+[`cloud-storage-api`](https://github.com/Dayana20/ospsd26-cloud-storage) 0.3.1
+`DocumentStorage` interface in-process, without running our HTTP service.
+
+Install the package **without** the `server` extra. FastAPI, Uvicorn and
+python-multipart are then neither installed nor constrained, so your own web
+framework pins are unaffected. Our `[tool.uv.sources]` entries do not carry over
+to your project, so declare the `cloud-storage-api` source yourself:
+
+```toml
+[project]
+requires-python = ">=3.13"
+dependencies = ["storage-service", "cloud-storage-api"]
+
+[tool.uv.sources]
+storage-service = { git = "https://github.com/FaizalJnu/OSPSD-TEAM-6", tag = "v0.2.0" }
+cloud-storage-api = { git = "https://github.com/Dayana20/ospsd26-cloud-storage", subdirectory = "src/cloud_storage_api", rev = "0.3.1" }
+```
+
+Pin a release tag. `v0.2.0` is the first release that includes this adapter
+builder (issue #99). The repository is private, so ask the team for read access.
+
+```python
+from storage_service.wiring import document_storage_from_env
+
+storage = document_storage_from_env()  # reads STORAGE_BACKEND and S3_* from os.environ
+info = storage.create("/reports/q3.txt", b"hello")  # raises ConflictError if the path exists
+
+with storage.open_download("/reports/q3.txt") as download:
+    print(download.info.size)
+    for chunk in download.chunks():
+        ...
+```
+
+`document_storage_from_env` reads the same settings as the HTTP service:
+`STORAGE_BACKEND` (`s3`, or `memory` for tests), the five `S3_*` settings, and
+optionally `MAX_UPLOAD_BYTES` (default 1 GiB). See `.env.example`. A missing or
+invalid setting raises `storage_service.config.ConfigError`, which names the
+setting but never its value. Pass a mapping instead of using the environment:
+`document_storage_from_env({"STORAGE_BACKEND": "memory"})`. Operations raise the
+shared `cloud_storage_api.errors` types.
+
 ## Tests
 
 ```bash

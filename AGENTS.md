@@ -6,7 +6,8 @@ Guidance for contributors and coding agents. Read `README.md` first for setup.
 
 ```
 src/storage_service/
-  main.py            Builds the app and picks the storage backend (the only wiring point)
+  main.py            Builds the FastAPI app over the service from wiring.py
+  wiring.py          Picks the storage backend (the only wiring point); imports no web framework
   config.py          Reads settings from environment variables
   routers/           HTTP layer: one module per operation, plus deps.py and error_handlers.py
   service.py         The rules: validation, create vs replace, size limits
@@ -34,6 +35,7 @@ tests/
   fakes.py                 FakeStorage: records calls, raises configured errors, cuts downloads off
   test_cleanup.py          The provider-test cleanup helper follows every page
   test_health.py           GET /health and GET /health/provider
+  test_packaging.py        The shared adapter installs and imports without the HTTP service
 docs/
   API.md             HTTP contract: keys, file info, errors, one section per operation
   PROVIDERS.md       Settings and provider-test results for each S3-compatible provider
@@ -48,12 +50,13 @@ no network), and checks against a real bucket (`provider_client`, marked
 ## Architecture rules
 
 * Dependencies point one way: `routers` -> `service` -> `storage.base` <- backends.
-* Only `routers/` and `main.py` import FastAPI. Only `storage/s3.py` imports
-  boto3 or botocore. Provider SDK types and exceptions never leave their backend.
+* Only `routers/` and `main.py` import FastAPI. FastAPI, Uvicorn and
+  python-multipart are in the `server` extra, so other teams can install the
+  shared adapter without them. Only `storage/s3.py` imports boto3 or botocore. Provider SDK types and exceptions never leave their backend.
   (Tests may use botocore's `Stubber` to test `storage/s3.py` without network.)
 * The service never mentions HTTP status codes. Routes never contain rules.
 * A new backend is one new module in `storage/` that passes
-  `tests/test_storage_contract.py`, plus one branch in `main.build_storage`.
+  `tests/test_storage_contract.py`, plus one branch in `wiring.build_storage`.
 * Stream file contents. Never read a whole file into memory outside tests and
   `storage/memory.py`, except the explicit legacy `DocumentStorage.download`
   compatibility method in `shared_storage.py`, capped at 150 MiB. HTTP downloads

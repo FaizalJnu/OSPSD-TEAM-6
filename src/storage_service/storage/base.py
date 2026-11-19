@@ -3,7 +3,7 @@
 ``StorageClient`` has one method for each thing an operation needs from storage,
 in our own types, so the service never sees a provider SDK. Adding a provider
 (a local disk, Google Drive, ...) means adding one module to this package
-and one branch in ``main.build_storage``. Nothing else has to change.
+and one branch in ``wiring.build_storage``. Nothing else has to change.
 ``docs/ARCHITECTURE.md`` explains why each method exists and how the backend is
 wired in.
 

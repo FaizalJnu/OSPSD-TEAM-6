@@ -14,9 +14,9 @@ from collections.abc import Iterator
 import pytest
 
 from storage_service.errors import FileNotFound, InvalidInput
-from storage_service.main import build_storage
 from storage_service.storage.base import StorageClient
 from storage_service.storage.memory import InMemoryStorage
+from storage_service.wiring import build_storage
 from tests.conftest import delete_everything_under, load_provider_settings
 
 

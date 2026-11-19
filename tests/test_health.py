@@ -14,7 +14,8 @@ from botocore.exceptions import EndpointConnectionError
 from fastapi.testclient import TestClient
 
 from storage_service.errors import AccessDenied, ProviderError, ProviderUnavailable
-from storage_service.main import build_service, create_app
+from storage_service.main import create_app
+from storage_service.wiring import build_service
 from tests.conftest import load_provider_settings
 
 OK = {"status": "ok"}

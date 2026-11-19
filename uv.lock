@@ -607,6 +607,10 @@ source = { editable = "." }
 dependencies = [
     { name = "boto3" },
     { name = "cloud-storage-api" },
+]
+
+[package.optional-dependencies]
+server = [
     { name = "fastapi" },
     { name = "python-multipart" },
     { name = "uvicorn" },
@@ -618,16 +622,18 @@ dev = [
     { name = "mypy" },
     { name = "pytest" },
     { name = "ruff" },
+    { name = "storage-service", extra = ["server"] },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "boto3", specifier = ">=1.43.108" },
     { name = "cloud-storage-api", git = "https://github.com/Dayana20/ospsd26-cloud-storage?subdirectory=src%2Fcloud_storage_api&rev=0.3.1" },
-    { name = "fastapi", specifier = ">=0.142.2" },
-    { name = "python-multipart", specifier = ">=0.0.32" },
-    { name = "uvicorn", specifier = ">=0.54.0" },
+    { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.142.2" },
+    { name = "python-multipart", marker = "extra == 'server'", specifier = ">=0.0.32" },
+    { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.54.0" },
 ]
+provides-extras = ["server"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -635,6 +641,7 @@ dev = [
     { name = "mypy", specifier = ">=2.4.0" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "ruff", specifier = ">=0.16.10" },
+    { name = "storage-service", extras = ["server"] },
 ]
 
 [[package]]

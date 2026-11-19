@@ -56,7 +56,7 @@ def test_create_app_with_a_service_never_reads_settings_or_builds_storage(monkey
         raise AssertionError("create_app built its own storage despite an injected service")
 
     monkeypatch.setattr("storage_service.main.load_settings", must_not_run)
-    monkeypatch.setattr("storage_service.main.build_storage", must_not_run)
+    monkeypatch.setattr("storage_service.main.build_service", must_not_run)
     fake = FakeStorage()
     client = TestClient(create_app(FileService(fake, max_upload_bytes=MAX_UPLOAD_BYTES)))
 

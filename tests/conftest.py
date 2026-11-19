@@ -22,11 +22,12 @@ from botocore.stub import Stubber
 from fastapi.testclient import TestClient
 
 from storage_service.config import ConfigError, Settings, load_settings
-from storage_service.main import build_storage, create_app
+from storage_service.main import create_app
 from storage_service.service import FileService
 from storage_service.storage.base import StorageClient
 from storage_service.storage.memory import InMemoryStorage
 from storage_service.storage.s3 import S3Storage
+from storage_service.wiring import build_storage
 from tests.fakes import FakeStorage
 
 MAX_UPLOAD_BYTES = 1024

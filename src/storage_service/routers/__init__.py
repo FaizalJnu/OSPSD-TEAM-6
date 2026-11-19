@@ -10,9 +10,12 @@ method, and shapes the response. All decisions live in the service.
     DELETE /files              delete a file (query: path)
     GET    /files/metadata     a file's info as JSON (query: path)
     PATCH  /files              move a file (query: path; JSON body: new_path)
+    GET    /health             the API is running (no provider call)
+    GET    /health/provider    the storage provider can be used (one cheap call)
 
 Each operation lives in its own module: ``listing.py``, ``upload.py`` (create and
-replace), ``download.py``, ``metadata.py``, ``delete.py``, and ``move.py``. ``deps.py`` hands
+replace), ``download.py``, ``metadata.py``, ``delete.py``, ``move.py``, and
+``health.py``. ``deps.py`` hands
 every route the FileService, and ``error_handlers.py`` gives every error response,
 ours and the framework's, the same JSON format.
 """

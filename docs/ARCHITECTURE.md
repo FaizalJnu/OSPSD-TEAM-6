@@ -88,6 +88,7 @@ and nothing else:
 | `copy` | Move | Copy a file inside the provider (S3 `CopyObject`), so the contents never pass through the service. S3 has no move call, so Move is a service rule: check, `copy`, then `delete`. |
 | `delete` | Delete, Move | Remove a file. Silent for a missing key, like S3; the service turns that into a 404 by checking with `stat` first. |
 | `delete_many` | Delete of a folder | Remove up to 1000 keys in one provider call, and return the keys it could not remove, because S3 reports those in a successful response. The service lists the keys and splits them into batches. |
+| `check_health` | `GET /health/provider`, the shared interface's `check_health()` | One cheap call (S3 `HeadBucket`) that shows whether the configured storage can be used, without reading any file. |
 
 Everything provider-specific stays behind it: the endpoint, bucket, and credentials;
 path-style addressing; retries and timeouts; multipart uploads; ETag quoting; S3's

@@ -427,6 +427,8 @@ def test_openapi_lists_each_routes_errors_with_our_body_and_no_422(client):
         ("DELETE", "/files"): every_route | {"404"},
         ("GET", "/files/metadata"): every_route | {"404"},
         ("PATCH", "/files"): every_route | {"404", "409", "422"},
+        ("GET", "/health"): {"500"},
+        ("GET", "/health/provider"): {"500", "503"},
     }
     error_body = {"$ref": "#/components/schemas/ErrorBody"}
     for (method, path), statuses in expected.items():

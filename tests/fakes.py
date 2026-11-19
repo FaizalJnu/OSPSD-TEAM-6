@@ -18,7 +18,9 @@ from storage_service.models import FileDownload, FileInfo, FilePage
 from storage_service.storage.base import StorageClient
 from storage_service.storage.memory import InMemoryStorage
 
-Method = Literal["put", "get", "stat", "list_files", "copy", "delete", "delete_many"]
+Method = Literal[
+    "put", "get", "stat", "list_files", "copy", "delete", "delete_many", "check_health"
+]
 
 
 class FakeStorage:
@@ -93,6 +95,9 @@ class FakeStorage:
         allowed = [key for key in keys if key not in self.refused_keys]
         self._run("delete_many", ",".join(keys), lambda: self._store.delete_many(allowed))
         return refused
+
+    def check_health(self) -> None:
+        self._run("check_health", "", self._store.check_health)
 
     def _run[T](self, method: Method, key: str, apply: Callable[[], T]) -> T:
         """Record the call, then apply it to the store and raise as configured."""

@@ -72,9 +72,9 @@ class FileService:
         return self._max_upload_bytes
 
     def check_health(self) -> None:
-        """Make one lightweight read against the configured storage."""
-        with _storage_call("list_files"):
-            self._storage.list_files("", 1, None)
+        """Check with one cheap provider call that storage can be used. Changes nothing."""
+        with _storage_call("check_health"):
+            self._storage.check_health()
 
     def create(self, key: str, stream: BinaryIO, size: int) -> FileInfo:
         """Store a new file. Fails if the key is already taken."""

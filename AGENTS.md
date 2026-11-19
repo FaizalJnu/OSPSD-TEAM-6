@@ -33,6 +33,7 @@ tests/
                            errors outside any operation, and the errors /openapi.json lists
   fakes.py                 FakeStorage: records calls, raises configured errors, cuts downloads off
   test_cleanup.py          The provider-test cleanup helper follows every page
+  test_health.py           GET /health and GET /health/provider
 docs/
   API.md             HTTP contract: keys, file info, errors, one section per operation
   PROVIDERS.md       Settings and provider-test results for each S3-compatible provider

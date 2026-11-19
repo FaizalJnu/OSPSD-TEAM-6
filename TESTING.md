@@ -1751,3 +1751,66 @@ Verified on the `shared-streaming-031` working tree, November 11, 2026:
 Provider variables were inherited from secure environment settings; no `.env` file
 was used. The cloud runner used a credential-free SDK config for its existing AWS
 profile guard. No credentials, bucket names, or signed requests are recorded here.
+
+## Shared conformance suite
+
+The shared conformance suite (shared PR #6, `conformance/tests` in the shared
+repository) checks a service through its HTTP API only, so the same 55 tests run
+against any team's service. It was run two ways: against our HTTP routes, and against
+our shared adapter served through the suite's reference HTTP layer.
+
+#### Run by Prateek Saxena
+
+- Date: 2026-11-11
+- Commits: Team 6 `dev` at 07f3168 (after #90); shared suite at a8bd832
+  (`conformance-suite`, merged with shared `main` after #12).
+- Each test writes under its own `/conformance-<random>` folder and deletes it
+  afterwards.
+
+**1. Our service's routes.** The service ran locally on the in-memory backend:
+```bash
+STORAGE_BACKEND=memory uv run uvicorn storage_service.main:create_app --factory --port 8781
+# in the shared repository:
+CONFORMANCE_BASE_URL=http://127.0.0.1:8781 uv run pytest conformance/tests --no-cov
+```
+- Observed: `49 failed, 6 passed`. Every failure comes from one of two operations
+  that are not on the shared routes yet:
+  - 46 tests create files with `POST /files` and the form fields `file` and `path`
+    (Create and Replace still use `POST` and `PUT /files/{key}`). They get 405
+    `method_not_allowed`, `this path does not accept POST`. Most of these tests use
+    Create only to set up their files.
+  - 3 tests use `GET /health` and `GET /health/provider`, which return 404
+    `route_not_found`. One of them is `test_wrong_method`, which sends `POST /health`
+    and expects 405.
+- Passed: missing file for Download and Metadata (404), missing folder and bad path
+  for List, an unknown route, and bad paths for the other operations.
+- So this run does not yet show whether our migrated routes conform: most tests
+  can't create their files. It should be repeated after Create, Replace, and the
+  health checks move to the shared routes.
+
+**2. Our shared adapter.** `SharedDocumentStorage` (from #92, the adapter that maps
+the shared `DocumentStorage` interface onto `FileService`) was served through the
+suite's reference HTTP app, as the conformance README allows
+(`build_app(MyStorage())`). This checks our service rules and storage behavior
+against the contract, through the shared HTTP layer, not our own routes. The
+launcher, run from this repository:
+```python
+# uv run [--env-file .env] python serve_adapter.py <port> <shared-repo-path>
+settings = load_settings()
+service = FileService(build_storage(settings), max_upload_bytes=settings.max_upload_bytes)
+uvicorn.run(build_app(SharedDocumentStorage(service)), host="127.0.0.1", port=port)
+```
+- In-memory backend: `55 passed in 0.35s`.
+- OCI Object Storage, us-ashburn-1, my own private test bucket (`--env-file .env`):
+  `55 passed in 27.02s`.
+- Cleanup: afterwards, `GET /files?path=/` on the bucket listed no `/conformance-*`
+  folder.
+
+### Gaps
+
+* **Our routes are not conformance-checked yet.** Run 1 has to be repeated after
+  Create, Replace, and the health checks move to the shared routes.
+* **The deployed service has not been run against**, and CI does not run the suite.
+* **Proposed rules.** 23 of the 55 tests check rules not agreed yet (marked
+  `proposed`: download and metadata routes #8, move #5, route and method errors #4).
+  They passed, but they can still change.

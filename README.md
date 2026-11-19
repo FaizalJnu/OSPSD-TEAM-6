@@ -160,7 +160,9 @@ to your project, so declare the `cloud-storage-api` source yourself:
 
 ```toml
 [project]
+
 requires-python = ">=3.12"
+
 dependencies = ["storage-service", "cloud-storage-api"]
 
 [tool.uv.sources]

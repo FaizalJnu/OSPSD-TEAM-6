@@ -6,8 +6,10 @@ them into JSON when a route returns one.
 """
 
 from collections.abc import Iterator
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
+
+from cloud_storage_api import FileInfo as SharedFileInfo
 
 
 @dataclass(frozen=True)
@@ -38,10 +40,26 @@ class FilePage:
 
     next_cursor is None on the last page. Otherwise, pass it back as ``cursor``
     to get the next page. Cursors are opaque: do not parse or build them.
+
+    folders is only filled when the listing used a delimiter: the folder prefixes
+    one level down, each ending with the delimiter, for example "docs/sub/".
     """
 
     files: list[FileInfo]
     next_cursor: str | None
+    folders: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class FolderEntry:
+    """One direct child of a listed folder.
+
+    key:  The child's key. A folder's key has no trailing "/", for example "docs/sub".
+    info: The file's info, or None when the child is a folder.
+    """
+
+    key: str
+    info: FileInfo | None
 
 
 @dataclass(frozen=True)
@@ -54,3 +72,43 @@ class FileDownload:
 
     info: FileInfo
     chunks: Iterator[bytes]
+
+
+@dataclass
+class CommonFileInfo(SharedFileInfo):
+    """Tagged shared file info with Team 6's retained content-type extension."""
+
+    content_type: str | None = None
+
+
+def common_file_info(info: FileInfo) -> CommonFileInfo:
+    """Convert provider metadata to the common model without inventing an S3 id."""
+    return CommonFileInfo(
+        id=None,
+        name=info.key.rsplit("/", 1)[-1],
+        path="/" + info.key,
+        size=info.size,
+        modified_at=info.last_modified.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+        etag=info.etag,
+        type=None,
+        content_type=info.content_type,
+    )
+
+
+def common_entry(entry: FolderEntry) -> CommonFileInfo:
+    """Convert one listed child to the common model, tagged ``file`` or ``folder``.
+
+    A folder has only a name, a path and its type: S3 keeps no size, time or etag
+    for a folder, which exists only while a file is under it.
+    """
+    if entry.info is not None:
+        return replace(common_file_info(entry.info), type="file")
+    return CommonFileInfo(
+        id=None,
+        name=entry.key.rsplit("/", 1)[-1],
+        path="/" + entry.key,
+        size=None,
+        modified_at=None,
+        etag=None,
+        type="folder",
+    )

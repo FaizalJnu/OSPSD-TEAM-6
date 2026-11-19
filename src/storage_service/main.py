@@ -7,12 +7,22 @@ This is the only place that decides which storage backend gets used. Run with:
 
 from importlib.metadata import version
 
+from cloud_storage_api.errors import StorageError as SharedStorageError
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException
 
 from storage_service.config import Settings, load_settings
-from storage_service.errors import StorageError
-from storage_service.routes import router, storage_error_handler
+from storage_service.routers import delete, download, listing, metadata, move, upload
+from storage_service.routers.error_handlers import (
+    http_error_handler,
+    internal_error_handler,
+    remove_validation_responses,
+    storage_error_handler,
+    validation_error_handler,
+)
 from storage_service.service import FileService
+from storage_service.shared_storage import SharedDocumentStorage
 from storage_service.storage.base import StorageClient
 from storage_service.storage.memory import InMemoryStorage
 from storage_service.storage.s3 import S3Storage
@@ -28,8 +38,19 @@ def create_app(service: FileService | None = None) -> FastAPI:
         service = build_service(load_settings())
     app = FastAPI(title="Storage Service", version=version("storage-service"))
     app.state.file_service = service
-    app.include_router(router)
-    app.add_exception_handler(StorageError, storage_error_handler)
+    app.state.document_storage = SharedDocumentStorage(service)
+    app.include_router(listing.router)
+    app.include_router(upload.router)
+    app.include_router(metadata.router)
+    app.include_router(download.router)
+    app.include_router(delete.router)
+    app.include_router(move.router)
+    app.add_exception_handler(SharedStorageError, storage_error_handler)
+    app.add_exception_handler(RequestValidationError, validation_error_handler)
+    # Starlette's own errors (no route, wrong method, unreadable body), and bugs.
+    app.add_exception_handler(HTTPException, http_error_handler)
+    app.add_exception_handler(Exception, internal_error_handler)
+    remove_validation_responses(app)
     return app
 
 

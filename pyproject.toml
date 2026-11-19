@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "boto3>=1.43.108",
+    "cloud-storage-api",
     "fastapi>=0.142.2",
     "python-multipart>=0.0.32",
     "uvicorn>=0.54.0",
@@ -25,6 +26,11 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Tests that need a real bucket are opt-in: `uv run --env-file .env pytest -m provider`.
+# A later -m on the command line replaces the one here. --strict-markers turns a
+# misspelled marker into an error instead of a test that silently runs in the fast suite.
+addopts = "-m 'not provider' --strict-markers"
+markers = ["provider: needs a real S3-compatible bucket configured in .env"]
 
 [tool.ruff]
 line-length = 100
@@ -49,3 +55,6 @@ module = ["tests.*"]
 disallow_untyped_defs = false
 disallow_incomplete_defs = false
 check_untyped_defs = true
+
+[tool.uv.sources]
+cloud-storage-api = { git = "https://github.com/Dayana20/ospsd26-cloud-storage", subdirectory = "src/cloud_storage_api", rev = "0.3.1" }

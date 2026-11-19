@@ -7,12 +7,16 @@ It deliberately copies S3's behavior, limitations included (silent deletes, no
 content type in listings), so a test that passes here means something for S3.
 """
 
+import base64
+import binascii
 import hashlib
+import json
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import BinaryIO
 
-from storage_service.errors import FileNotFound
+from storage_service.errors import FileNotFound, InvalidInput
 from storage_service.models import FileDownload, FileInfo, FilePage
 
 
@@ -45,20 +49,80 @@ class InMemoryStorage:
     def stat(self, key: str) -> FileInfo:
         return self._lookup(key).info
 
-    def list_files(self, prefix: str, limit: int, cursor: str | None) -> FilePage:
-        keys = sorted(key for key in self._files if key.startswith(prefix))
+    def list_files(
+        self, prefix: str, limit: int, cursor: str | None, delimiter: str | None = None
+    ) -> FilePage:
+        # Each entry is a key, or a folder prefix ending with the delimiter. S3 counts
+        # both toward the limit and sorts them together, so this does the same.
+        entries = sorted(
+            {
+                _folder_of(key, prefix, delimiter) or key
+                for key in self._files
+                if key.startswith(prefix)
+            }
+        )
         if cursor is not None:
-            keys = [key for key in keys if key > cursor]
-        page = keys[:limit]
-        next_cursor = page[-1] if len(keys) > limit else None
-        files = [replace(self._files[key].info, content_type=None) for key in page]
-        return FilePage(files=files, next_cursor=next_cursor)
+            after = _decode_cursor(cursor, prefix)
+            entries = [entry for entry in entries if entry > after]
+        page = entries[:limit]
+        next_cursor = _encode_cursor(prefix, page[-1]) if len(entries) > limit else None
+        files = [replace(self._files[e].info, content_type=None) for e in page if e in self._files]
+        folders = [entry for entry in page if entry not in self._files]
+        return FilePage(files=files, next_cursor=next_cursor, folders=folders)
+
+    def copy(self, source_key: str, dest_key: str) -> FileInfo:
+        # Like S3's CopyObject for a single-part file: same contents and etag, new time.
+        stored = self._lookup(source_key)
+        info = replace(stored.info, key=dest_key, last_modified=datetime.now(UTC))
+        self._files[dest_key] = _StoredFile(info=info, data=stored.data)
+        return info
 
     def delete(self, key: str) -> None:
         self._files.pop(key, None)
+
+    def delete_many(self, keys: Sequence[str]) -> list[str]:
+        for key in keys:
+            self._files.pop(key, None)
+        return []
 
     def _lookup(self, key: str) -> _StoredFile:
         stored = self._files.get(key)
         if stored is None:
             raise FileNotFound(f"no file named {key!r}")
         return stored
+
+
+def _folder_of(key: str, prefix: str, delimiter: str | None) -> str | None:
+    """The folder prefix that groups ``key`` one level below ``prefix``, if any."""
+    if delimiter is None:
+        return None
+    position = key.find(delimiter, len(prefix))
+    return None if position == -1 else key[: position + len(delimiter)]
+
+
+# A cursor names the prefix it was made for and the last key on its page. It is
+# encoded so that callers treat it as opaque, and so that a string this backend did
+# not produce can be told apart and rejected, as S3 rejects an unknown token.
+_CURSOR_MARK = "mem1."
+
+
+def _encode_cursor(prefix: str, last_key: str) -> str:
+    payload = json.dumps({"prefix": prefix, "after": last_key}).encode()
+    return _CURSOR_MARK + base64.urlsafe_b64encode(payload).decode()
+
+
+def _decode_cursor(cursor: str, prefix: str) -> str:
+    """Return the key the cursor continues after, or raise ``InvalidInput``."""
+    invalid = InvalidInput("cursor is not a next_cursor this API returned for this prefix")
+    if not cursor.startswith(_CURSOR_MARK):
+        raise invalid
+    try:
+        fields = json.loads(base64.urlsafe_b64decode(cursor[len(_CURSOR_MARK) :]))
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        raise invalid from None
+    if not isinstance(fields, dict) or fields.get("prefix") != prefix:
+        raise invalid
+    after = fields.get("after")
+    if not isinstance(after, str):
+        raise invalid
+    return after

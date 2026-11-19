@@ -73,7 +73,9 @@ uv run ruff check --fix . && uv run ruff format .
 ```
 
 CI runs lint, the format check, the type check, and the fast tests on every pull
-request, every push to `main`, and every release tag. All must pass to merge.
+request, every push to `main`, and every release tag. A second job repeats the
+type check and the fast tests on Python 3.12, the oldest version `pyproject.toml`
+allows. All must pass to merge.
 
 ## Contribution rules
 

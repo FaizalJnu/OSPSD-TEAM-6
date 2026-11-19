@@ -183,7 +183,7 @@ class FileService:
         the folder may be partly deleted more than why. A retry deletes whatever is left.
         """
         unfinished = f"the delete of folder {folder!r} did not finish; some files may remain"
-        for number, batch in enumerate(batched(keys, MAX_DELETE_BATCH, strict=False)):
+        for number, batch in enumerate(batched(keys, MAX_DELETE_BATCH)):
             try:
                 with _storage_call("delete_many"):
                     failed = self._storage.delete_many(batch)

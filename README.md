@@ -19,7 +19,8 @@ Team 6, OSPSD Fall 2026.
 ## Requirements
 
 * [uv](https://docs.astral.sh/uv/)
-* Python 3.13, pinned in `.python-version`. uv downloads it automatically if
+* Python 3.12 or later. Development uses 3.13, pinned in `.python-version`;
+  CI also runs the type check and fast tests on 3.12. uv downloads Python if
   it is not installed.
 * For a real provider: an S3-compatible bucket and an access key pair
 
@@ -159,7 +160,9 @@ to your project, so declare the `cloud-storage-api` source yourself:
 
 ```toml
 [project]
-requires-python = ">=3.13"
+
+requires-python = ">=3.12"
+
 dependencies = ["storage-service", "cloud-storage-api"]
 
 [tool.uv.sources]
@@ -200,7 +203,8 @@ uv run mypy                                          # type check (strict on src
 ```
 
 CI runs the lint, format, type, and fast test checks on every pull request,
-every push to `main`, and every release tag. All of them must pass before a
+every push to `main`, and every release tag, and repeats the type and fast test
+checks on Python 3.12, the oldest supported version. All of them must pass before a
 merge or a release. CI has no provider credentials, so the `provider` tests
 never run there. Run them yourself before a release.
 

@@ -36,3 +36,29 @@ jobs:
 
       - name: Fast tests (in-memory storage, no credentials needed)
         run: uv run pytest
+
+  # The oldest Python that pyproject.toml allows, so another team can install the
+  # package on it (#99). A separate job keeps the `checks` name that branch
+  # protection on main requires. Lint and format do not depend on the interpreter.
+  checks-python-312:
+    runs-on: ubuntu-latest
+    env:
+      UV_PYTHON: "3.12"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Install dependencies exactly as locked, on Python 3.12
+        run: uv sync --locked
+
+      - name: Confirm the interpreter
+        run: uv run python --version
+
+      - name: Type check
+        run: uv run mypy
+
+      - name: Fast tests (in-memory storage, no credentials needed)
+        run: uv run pytest

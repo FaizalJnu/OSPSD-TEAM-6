@@ -449,8 +449,8 @@ def test_wrong_credentials_are_access_denied_on_the_real_provider(provider_clien
 
     with TestClient(create_app(build_service(wrong))) as denied:
         responses = [
-            denied.get("/files/metadata"),
-            denied.get("/files", params={"prefix": provider_prefix}),
+            denied.get("/files/metadata", params={"path": key}),
+            denied.get("/files", params={"path": provider_prefix.rstrip("/")}),
             send_file(denied, "POST", key, b"never stored"),
         ]
 
@@ -460,5 +460,4 @@ def test_wrong_credentials_are_access_denied_on_the_real_provider(provider_clien
             "error": {"code": "permission_denied", "message": "the storage provider denied access"}
         }
     # Create stopped at its existence check, so nothing was written.
-    listing = provider_client.get("/files", params={"prefix": provider_prefix})
-    assert listing.json() == {"files": [], "next_cursor": None}
+    assert provider_client.get("/files/metadata", params={"path": key}).status_code == 404

@@ -16,8 +16,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from storage_service.errors import AccessDenied, ProviderUnavailable, StorageError
-from storage_service.main import build_service, create_app
+from storage_service.main import create_app
 from storage_service.service import FileService
+from storage_service.wiring import build_service
 from tests.conftest import MAX_UPLOAD_BYTES, load_provider_settings, send_file
 
 LOGGER = "storage_service.routers.error_handlers"

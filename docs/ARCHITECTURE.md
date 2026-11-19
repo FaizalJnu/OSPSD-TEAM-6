@@ -39,7 +39,8 @@ backends implement. Three facts keep the boundary clear:
 
 * Only `routers/` and `main.py` import FastAPI.
 * Only `storage/s3.py` imports boto3. No SDK type or exception leaves it.
-* Only `main.build_storage` decides which backend is used.
+* Only `wiring.build_storage` decides which backend is used. `wiring.py` imports no
+  web framework, so other programs can build the shared adapter without it.
 
 ## One request, end to end
 
@@ -100,8 +101,9 @@ download is being read, is listed under [Known limits](#known-limits).
 
 ## Wiring
 
-The real backend reaches a route in one path, all in
-[main.py](../src/storage_service/main.py) and
+The real backend reaches a route in one path, through
+[main.py](../src/storage_service/main.py),
+[wiring.py](../src/storage_service/wiring.py) and
 [routers/deps.py](../src/storage_service/routers/deps.py):
 
 1. `create_app()` is called with no service, as uvicorn does, so it calls
@@ -130,8 +132,13 @@ Tests supply their own backend at step 4 by passing a ready-made service to
 front of its client, not the application.
 
 Replacing S3 with another provider means one new module in `storage/` that implements
-`StorageClient` and passes the contract tests, plus one branch in `build_storage`.
+`StorageClient` and passes the contract tests, plus one branch in `wiring.build_storage`.
 `service.py`, `routers/`, and the HTTP contract do not change.
+
+Programs that need only the shared `DocumentStorage` interface, such as other teams'
+services, skip steps 1, 4 and 5: `wiring.document_storage_from_env()` runs steps 2 and
+3 from the same settings and wraps the service in `SharedDocumentStorage`. It never
+imports FastAPI, which is only required by the package's `server` extra.
 
 ## State and resources
 

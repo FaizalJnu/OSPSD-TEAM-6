@@ -16,8 +16,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from storage_service.errors import AccessDenied, ProviderUnavailable, StorageError
-from storage_service.main import build_service, create_app
+from storage_service.main import create_app
 from storage_service.service import FileService
+from storage_service.wiring import build_service
 from tests.conftest import MAX_UPLOAD_BYTES, load_provider_settings, send_file
 
 LOGGER = "storage_service.routers.error_handlers"
@@ -427,6 +428,8 @@ def test_openapi_lists_each_routes_errors_with_our_body_and_no_422(client):
         ("DELETE", "/files"): every_route | {"404"},
         ("GET", "/files/metadata"): every_route | {"404"},
         ("PATCH", "/files"): every_route | {"404", "409", "422"},
+        ("GET", "/health"): {"500"},
+        ("GET", "/health/provider"): {"500", "503"},
     }
     error_body = {"$ref": "#/components/schemas/ErrorBody"}
     for (method, path), statuses in expected.items():
@@ -449,8 +452,8 @@ def test_wrong_credentials_are_access_denied_on_the_real_provider(provider_clien
 
     with TestClient(create_app(build_service(wrong))) as denied:
         responses = [
-            denied.get("/files/metadata"),
-            denied.get("/files", params={"prefix": provider_prefix}),
+            denied.get("/files/metadata", params={"path": key}),
+            denied.get("/files", params={"path": provider_prefix.rstrip("/")}),
             send_file(denied, "POST", key, b"never stored"),
         ]
 
@@ -460,5 +463,4 @@ def test_wrong_credentials_are_access_denied_on_the_real_provider(provider_clien
             "error": {"code": "permission_denied", "message": "the storage provider denied access"}
         }
     # Create stopped at its existence check, so nothing was written.
-    listing = provider_client.get("/files", params={"prefix": provider_prefix})
-    assert listing.json() == {"files": [], "next_cursor": None}
+    assert provider_client.get("/files/metadata", params={"path": key}).status_code == 404

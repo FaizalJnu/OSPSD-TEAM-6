@@ -3,7 +3,7 @@
 ``StorageClient`` has one method for each thing an operation needs from storage,
 in our own types, so the service never sees a provider SDK. Adding a provider
 (a local disk, Google Drive, ...) means adding one module to this package
-and one branch in ``main.build_storage``. Nothing else has to change.
+and one branch in ``wiring.build_storage``. Nothing else has to change.
 ``docs/ARCHITECTURE.md`` explains why each method exists and how the backend is
 wired in.
 
@@ -17,6 +17,8 @@ Rules every backend must follow:
   not remove instead of raising for them.
 * ``list_files`` returns keys in sorted order, at most ``limit`` per page, with
   ``content_type`` set to None (S3 listings do not include it).
+* ``check_health`` makes one cheap provider call and returns nothing when the
+  configured storage can be used.
 * Provider failures surface as ``ProviderError`` or ``ProviderUnavailable``.
   SDK-specific exceptions must never escape a backend.
 
@@ -149,5 +151,17 @@ class StorageClient(Protocol):
 
         Raises ``AccessDenied``, ``ProviderError`` or ``ProviderUnavailable`` if the call
         as a whole fails. Any of the keys may or may not have been removed by then.
+        """
+        ...
+
+    def check_health(self) -> None:
+        """Check with one cheap provider call that the configured storage can be used.
+
+        Only reads, and reads no file. The S3 backend sends one HeadBucket. Returns
+        nothing when the storage answers.
+
+        Raises ``AccessDenied`` if the provider refuses the credentials,
+        ``ProviderError`` if the configured storage is missing or the provider rejects
+        the call, and ``ProviderUnavailable`` if the provider cannot be reached.
         """
         ...

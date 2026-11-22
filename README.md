@@ -19,7 +19,8 @@ Team 6, OSPSD Fall 2026.
 ## Requirements
 
 * [uv](https://docs.astral.sh/uv/)
-* Python 3.13, pinned in `.python-version`. uv downloads it automatically if
+* Python 3.12 or later. Development uses 3.13, pinned in `.python-version`;
+  CI also runs the type check and fast tests on 3.12. uv downloads Python if
   it is not installed.
 * For a real provider: an S3-compatible bucket and an access key pair
 
@@ -136,6 +137,8 @@ Add `-i` to any command to show the status code and response headers.
 | `PATCH` | `/files?path=` | Move a file (JSON body `{"new_path": ...}`) |
 | `GET` | `/files/metadata?path=` | Get file info as JSON |
 | `GET` | `/files` | List files: `prefix`, `limit` (1 to 1000), `cursor` |
+| `GET` | `/health` | Liveness: `{"status": "ok"}` with no provider call |
+| `GET` | `/health/provider` | Provider check: one HeadBucket on the configured bucket |
 
 The key rules, response fields, statuses, and errors are in
 [docs/API.md](docs/API.md).
@@ -143,6 +146,52 @@ The key rules, response fields, statuses, and errors are in
 Metadata's complete contract and example are in
 [docs/API.md](docs/API.md#metadata); verification is recorded in
 [TESTING.md](TESTING.md#metadata).
+
+## Use the shared DocumentStorage adapter in another service
+
+Other services can use our S3 implementation of the shared
+[`cloud-storage-api`](https://github.com/Dayana20/ospsd26-cloud-storage) 0.3.1
+`DocumentStorage` interface in-process, without running our HTTP service.
+
+Install the package **without** the `server` extra. FastAPI, Uvicorn and
+python-multipart are then neither installed nor constrained, so your own web
+framework pins are unaffected. Our `[tool.uv.sources]` entries do not carry over
+to your project, so declare the `cloud-storage-api` source yourself:
+
+```toml
+[project]
+
+requires-python = ">=3.12"
+
+dependencies = ["storage-service", "cloud-storage-api"]
+
+[tool.uv.sources]
+storage-service = { git = "https://github.com/FaizalJnu/OSPSD-TEAM-6", tag = "v0.2.0" }
+cloud-storage-api = { git = "https://github.com/Dayana20/ospsd26-cloud-storage", subdirectory = "src/cloud_storage_api", rev = "0.3.1" }
+```
+
+Pin a release tag. `v0.2.0` is the first release that includes this adapter
+builder (issue #99). The repository is private, so ask the team for read access.
+
+```python
+from storage_service.wiring import document_storage_from_env
+
+storage = document_storage_from_env()  # reads STORAGE_BACKEND and S3_* from os.environ
+info = storage.create("/reports/q3.txt", b"hello")  # raises ConflictError if the path exists
+
+with storage.open_download("/reports/q3.txt") as download:
+    print(download.info.size)
+    for chunk in download.chunks():
+        ...
+```
+
+`document_storage_from_env` reads the same settings as the HTTP service:
+`STORAGE_BACKEND` (`s3`, or `memory` for tests), the five `S3_*` settings, and
+optionally `MAX_UPLOAD_BYTES` (default 1 GiB). See `.env.example`. A missing or
+invalid setting raises `storage_service.config.ConfigError`, which names the
+setting but never its value. Pass a mapping instead of using the environment:
+`document_storage_from_env({"STORAGE_BACKEND": "memory"})`. Operations raise the
+shared `cloud_storage_api.errors` types.
 
 ## Tests
 
@@ -154,7 +203,8 @@ uv run mypy                                          # type check (strict on src
 ```
 
 CI runs the lint, format, type, and fast test checks on every pull request,
-every push to `main`, and every release tag. All of them must pass before a
+every push to `main`, and every release tag, and repeats the type and fast test
+checks on Python 3.12, the oldest supported version. All of them must pass before a
 merge or a release. CI has no provider credentials, so the `provider` tests
 never run there. Run them yourself before a release.
 

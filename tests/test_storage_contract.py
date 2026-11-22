@@ -14,9 +14,9 @@ from collections.abc import Iterator
 import pytest
 
 from storage_service.errors import FileNotFound, InvalidInput
-from storage_service.main import build_storage
 from storage_service.storage.base import StorageClient
 from storage_service.storage.memory import InMemoryStorage
+from storage_service.wiring import build_storage
 from tests.conftest import delete_everything_under, load_provider_settings
 
 
@@ -85,6 +85,10 @@ def test_copy_makes_a_second_file_and_keeps_the_original(storage, prefix):
 
 def test_delete_of_a_missing_key_is_silent(storage, prefix):
     storage.delete(prefix + "missing.txt")
+
+
+def test_check_health_of_working_storage_returns_nothing(storage):
+    assert storage.check_health() is None
 
 
 def test_delete_removes_the_file(storage, prefix):

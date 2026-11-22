@@ -56,7 +56,7 @@ def test_create_app_with_a_service_never_reads_settings_or_builds_storage(monkey
         raise AssertionError("create_app built its own storage despite an injected service")
 
     monkeypatch.setattr("storage_service.main.load_settings", must_not_run)
-    monkeypatch.setattr("storage_service.main.build_storage", must_not_run)
+    monkeypatch.setattr("storage_service.main.build_service", must_not_run)
     fake = FakeStorage()
     client = TestClient(create_app(FileService(fake, max_upload_bytes=MAX_UPLOAD_BYTES)))
 
@@ -93,7 +93,7 @@ def test_create_app_without_a_service_builds_storage_from_the_environment(monkey
     assert client.get("/files/metadata?path=too-big.bin").status_code == 404
 
 
-def test_the_app_serves_the_seven_operations_and_nothing_else(client):
+def test_the_app_serves_the_seven_operations_and_two_health_checks_and_nothing_else(client):
     paths = client.get("/openapi.json").json()["paths"]
     routes = {(method.upper(), path) for path, methods in paths.items() for method in methods}
     assert routes == {
@@ -104,6 +104,8 @@ def test_the_app_serves_the_seven_operations_and_nothing_else(client):
         ("DELETE", "/files"),
         ("GET", "/files/metadata"),
         ("PATCH", "/files"),
+        ("GET", "/health"),
+        ("GET", "/health/provider"),
     }
 
     # The schema shows {key} whether or not it may contain "/", so check that a key with

@@ -85,6 +85,9 @@ class InMemoryStorage:
             self._files.pop(key, None)
         return []
 
+    def check_health(self) -> None:
+        """Memory is always there to answer, so this never fails."""
+
     def _lookup(self, key: str) -> _StoredFile:
         stored = self._files.get(key)
         if stored is None:

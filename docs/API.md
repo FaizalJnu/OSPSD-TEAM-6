@@ -27,6 +27,9 @@ B=http://127.0.0.1:8000
 | [Move](#move) | `PATCH /files?path=` | Vikram Markali |
 | [List](#list) | `GET /files?path=` | Prateek Saxena |
 
+The service also has two [health checks](#health), `GET /health` and
+`GET /health/provider`. Owner: Faizal Rahman.
+
 ## Keys
 
 A **key** is a file's full name, including any folder-like prefix, such as
@@ -474,6 +477,81 @@ writes.
 ```bash
 curl -G --data-urlencode 'path=/docs/report.pdf' "$B/files/metadata"
 ```
+
+## Health
+
+`GET /health` and `GET /health/provider`. Owner: **Faizal Rahman**. These are the
+shared design's API health and provider health checks. `GET /health/provider` serves
+the shared interface's `check_health()` (cloud-storage-api 0.3.1).
+
+### Meaning
+
+* `GET /health` says the service is running and can answer requests. It does not
+  contact the provider, so a provider outage never fails it. Use it as the liveness
+  check, so that an outage does not make the platform restart the service.
+* `GET /health/provider` says the configured storage can be used right now. It makes
+  one cheap provider call. Use it to tell a provider problem from a service problem,
+  not as a liveness check.
+
+Both only read. Neither reads or lists any file.
+
+### Request
+
+No parameters and no body. Any other method is 405 `method_not_allowed`.
+
+### Success
+
+**200** with `{"status": "ok"}` from either route.
+
+### Side effects
+
+None. `GET /health/provider` sends one S3 `HeadBucket` for the configured bucket.
+
+### Errors
+
+`GET /health` has none, apart from the 500 `internal_error` any route can return.
+`GET /health/provider` uses the shared [error format](#error-format):
+
+| Status | Error | When |
+|---|---|---|
+| 503 | `provider_unavailable` | The check failed, with the message "the storage provider health check failed". The provider could not be reached or timed out, refused the service's credentials, has no bucket with the configured name, or rejected the check for another reason. |
+
+Every failure is 503, unlike the file operations, which tell a refusal (403) or a
+missing bucket (502) apart. The shared interface requires it: `check_health()` raises
+`ProviderUnavailableError` on any failure, and the shared design gives 503 for a
+failed provider check. The cause is in the [failure log](#failure-logs):
+`storage_call` is `check_health` and `provider_code` is the provider's code, such as
+`404` for a missing bucket or `403` for refused credentials.
+
+Missing settings never reach these routes: the service does not start without its S3
+settings, so there is no "not configured" answer.
+
+### Retry
+
+Both are safe to repeat. A 503 caused by an outage clears by itself. One caused by
+the credentials or the bucket name lasts until the configuration is fixed: check the
+failure log's `provider_code` to tell them apart.
+
+### Assumptions
+
+* A 200 from `GET /health/provider` means the bucket answered one `HeadBucket`. It
+  does not prove that every operation will succeed: a credential can be allowed to
+  check the bucket and still be refused a write.
+* The SDK retries a failed check up to three more times before the route answers, so
+  an unreachable provider can take several seconds to give 503.
+
+### Example
+
+```bash
+curl -s -w ' %{http_code}\n' $B/health
+curl -s -w ' %{http_code}\n' $B/health/provider
+```
+
+Each prints `{"status":"ok"} 200` against a working bucket. With a bucket name that
+does not exist in `S3_BUCKET`, the second prints
+`{"error":{"code":"provider_unavailable","message":"the storage provider health check failed"}} 503`,
+while the first still prints `{"status":"ok"} 200`. Nothing needs cleaning up.
+See [Health in TESTING.md](../TESTING.md#health) for the recorded tests.
 
 ## Delete
 

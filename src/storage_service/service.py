@@ -72,9 +72,9 @@ class FileService:
         return self._max_upload_bytes
 
     def check_health(self) -> None:
-        """Make one lightweight read against the configured storage."""
-        with _storage_call("list_files"):
-            self._storage.list_files("", 1, None)
+        """Check with one cheap provider call that storage can be used. Changes nothing."""
+        with _storage_call("check_health"):
+            self._storage.check_health()
 
     def create(self, key: str, stream: BinaryIO, size: int) -> FileInfo:
         """Store a new file. Fails if the key is already taken."""
@@ -183,7 +183,7 @@ class FileService:
         the folder may be partly deleted more than why. A retry deletes whatever is left.
         """
         unfinished = f"the delete of folder {folder!r} did not finish; some files may remain"
-        for number, batch in enumerate(batched(keys, MAX_DELETE_BATCH, strict=False)):
+        for number, batch in enumerate(batched(keys, MAX_DELETE_BATCH)):
             try:
                 with _storage_call("delete_many"):
                     failed = self._storage.delete_many(batch)

@@ -11,10 +11,11 @@ from fastapi.testclient import TestClient
 from starlette.requests import ClientDisconnect
 
 from storage_service.errors import FileTooLarge, ProviderUnavailable
-from storage_service.main import build_service, create_app
+from storage_service.main import create_app
 from storage_service.models import FileDownload
 from storage_service.service import FileService
 from storage_service.shared_storage import SharedDocumentStorage
+from storage_service.wiring import build_service
 from tests.conftest import load_provider_settings
 from tests.fakes import FakeStorage
 

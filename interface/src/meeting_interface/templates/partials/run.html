@@ -1,0 +1,28 @@
+{% if error %}
+<div class="error" role="alert">
+  <h2>{{ help.title }}</h2>
+  <p>{{ error.message }}</p>
+  <p><strong>What to do:</strong> {{ help.next_step }}</p>
+</div>
+{% elif status == "succeeded" %}
+<h2>Your review meeting is ready</h2>
+{% else %}
+<div class="error" role="alert">
+  <h2>Not every step finished.</h2>
+  <p><strong>What to do:</strong> Check the steps below. A step marked Not sure may have happened: open its service to see before running again.</p>
+</div>
+{% endif %}
+
+{% if steps %}
+<ol class="steps">
+  {% for s in steps %}
+  <li data-step="{{ s.step }}" data-status="{{ s.status.value }}">
+    <span class="label">{{ step_label(s.step) }}</span>
+    <span class="status">{{ status_label(s.status) }}</span>
+    {% if s.detail %}<span class="detail">{{ s.detail }}</span>{% endif %}
+    {% set href = safe_link(s.link) %}
+    {% if href %}<a href="{{ href }}" target="_blank" rel="noopener noreferrer">Open</a>{% endif %}
+  </li>
+  {% endfor %}
+</ol>
+{% endif %}

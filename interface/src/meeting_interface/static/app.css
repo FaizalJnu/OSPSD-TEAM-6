@@ -1,0 +1,21 @@
+:root { --fg: #1b1b1f; --bg: #ffffff; --muted: #5b5b66; --ok: #1a7f37; --bad: #b42318; --warn: #9a6700; --line: #d0d0d7; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg: #ececf1; --bg: #16161a; --muted: #a0a0ab; --ok: #4ac26b; --bad: #ff7b72; --warn: #d29922; --line: #3a3a44; }
+}
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; }
+main { max-width: 40rem; margin: 0 auto; padding: 1.5rem 1rem; }
+form { display: grid; gap: 0.75rem; }
+label { display: grid; gap: 0.25rem; }
+input, button { font: inherit; padding: 0.5rem; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
+button { cursor: pointer; }
+.htmx-indicator { display: none; color: var(--muted); }
+.htmx-request.htmx-indicator { display: block; }
+.steps { padding-left: 1.25rem; }
+.steps li { margin: 0.5rem 0; }
+.status { font-weight: 600; margin-left: 0.5rem; }
+.detail { display: block; color: var(--muted); }
+[data-status="succeeded"] .status { color: var(--ok); }
+[data-status="failed"] .status { color: var(--bad); }
+[data-status="uncertain"] .status { color: var(--warn); }
+[data-status="skipped"] .status, [data-status="pending"] .status { color: var(--muted); }
+.error { border-left: 4px solid var(--bad); padding: 0.25rem 1rem; }

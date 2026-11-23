@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Prepare a review meeting</h1>
+<p>Reads your open issues, books the review event, saves the agenda, and links it on the event and an issue.</p>
+
+<form hx-post="/runs" hx-target="#result" hx-indicator="#working" hx-disabled-elt="find button">
+  <label>Project <input name="project" required></label>
+  <label>Meeting date <input name="meeting_date" type="date" required></label>
+  <label>Agenda title <input name="title" required></label>
+  <button type="submit">Prepare meeting</button>
+</form>
+
+<p id="working" class="htmx-indicator" role="status">
+  Working: talking to the issue tracker, calendar, and storage. This can take up to a minute.
+</p>
+
+<section id="result" aria-live="polite"></section>
+{% endblock %}

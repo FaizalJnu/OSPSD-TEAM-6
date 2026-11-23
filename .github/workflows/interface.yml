@@ -1,0 +1,41 @@
+name: Interface CI
+
+# The web interface in interface/: its own uv project and lockfile. It calls only
+# our API service, so it installs nothing from the root project or product/.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+jobs:
+  interface:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: interface
+    steps:
+      # Test the pull request's own head commit, as the storage service's CI does.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Show the commit under test
+        run: git log -1 --format='%H %s'
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Install dependencies exactly as locked
+        run: uv sync --locked
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Check formatting
+        run: uv run ruff format --check .
+
+      - name: Type check
+        run: uv run mypy
+
+      - name: Tests (fake API, no network or credentials)
+        run: uv run pytest

@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  {# Our CSP blocks inline styles, so htmx must not inject its own. #}
+  <meta name="htmx-config" content='{"includeIndicatorStyles": false}'>
+  <title>{% block title %}Meeting prep{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/htmx.min.js" defer></script>
+</head>
+<body>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

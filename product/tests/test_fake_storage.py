@@ -3,6 +3,7 @@
 import pytest
 from cloud_storage_api import (
     ConflictError,
+    InvalidOperationError,
     InvalidRequestError,
     NotFoundError,
     ProviderUnavailableError,
@@ -99,6 +100,39 @@ def test_move_refuses_an_existing_destination(storage):
 
     assert moved.path == "/c.txt"
     assert sorted(storage.files) == ["/b.txt", "/c.txt"]
+
+
+def test_move_to_the_same_path_is_an_invalid_operation(storage):
+    storage.create("/a.txt", b"a")
+
+    with pytest.raises(InvalidOperationError):
+        storage.move("/a.txt", "a.txt")
+    assert storage.download("/a.txt") == b"a"
+
+
+def test_move_that_changes_only_letter_case_is_an_invalid_operation(storage):
+    storage.create("/Notes/A.md", b"a")
+
+    with pytest.raises(InvalidOperationError):
+        storage.move("/Notes/A.md", "/notes/a.md")
+    assert sorted(storage.files) == ["/Notes/A.md"]
+
+
+def test_move_of_a_folder_is_an_invalid_operation(storage):
+    storage.create("/runs/1.json", b"1")
+
+    with pytest.raises(InvalidOperationError):
+        storage.move("/runs", "/archive")
+    assert sorted(storage.files) == ["/runs/1.json"]
+
+
+def test_move_onto_an_existing_folder_is_a_conflict(storage):
+    storage.create("/a.txt", b"a")
+    storage.create("/runs/1.json", b"1")
+
+    with pytest.raises(ConflictError):
+        storage.move("/a.txt", "/runs")
+    assert sorted(storage.files) == ["/a.txt", "/runs/1.json"]
 
 
 def test_delete_removes_a_folder_and_everything_in_it(storage):

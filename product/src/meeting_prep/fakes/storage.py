@@ -13,6 +13,7 @@ from cloud_storage_api import (
     ConflictError,
     DocumentStorage,
     FileInfo,
+    InvalidOperationError,
     InvalidRequestError,
     NotFoundError,
     ProviderUnavailableError,
@@ -108,13 +109,26 @@ class FakeStorage(FakeBase, DocumentStorage):
             return listing
 
     def move(self, from_path: str, to_path: str) -> FileInfo:
+        """Move one file, refusing what the storage service refuses, in the same order.
+
+        The paths must differ, and not only in letter case; only a file can be moved,
+        not a folder; and nothing, neither a file nor a folder, may be at ``to_path``.
+        """
         with self._lock:
             failure = self._start("move", from_path, to_path)
             source = normalize_path(from_path)
             destination = normalize_path(to_path)
+            if destination == source:
+                raise InvalidOperationError(f"{destination!r} is already the file's path")
+            if destination.casefold() == source.casefold():
+                raise InvalidOperationError("a move cannot change only the letter case of a path")
+            if source not in self.files and self._is_folder(source):
+                raise InvalidOperationError(f"{source!r} is a folder; only files can be moved")
             stored = self._lookup(source)
             if destination in self.files:
                 raise ConflictError(f"a file already exists at {destination!r}")
+            if self._is_folder(destination):
+                raise ConflictError(f"a folder already exists at {destination!r}")
             info = self._store(destination, stored.content)
             del self.files[source]
             self._finish(failure)
@@ -147,6 +161,11 @@ class FakeStorage(FakeBase, DocumentStorage):
         )
         self.files[canonical] = stored
         return _file_info(canonical, stored)
+
+    def _is_folder(self, canonical: str) -> bool:
+        """Whether any file is stored under ``canonical + "/"``, which makes it a folder."""
+        prefix = f"{canonical}/"
+        return any(key.startswith(prefix) for key in self.files)
 
     def _lookup(self, canonical: str) -> _Stored:
         stored = self.files.get(canonical)

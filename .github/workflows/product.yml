@@ -1,0 +1,60 @@
+name: Product CI
+
+# The meeting prep product in product/: its own uv project, lockfile and Python
+# (3.14, which Team 5's calendar package requires). It installs the storage
+# service from this same commit, so it runs on every change, not only changes
+# under product/.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+jobs:
+  product:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: product
+    services:
+      # A disposable database for the migration tests marked postgres.
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      # Test the pull request's own head commit, as the storage service's CI does.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Show the commit under test
+        run: git log -1 --format='%H %s'
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Install dependencies exactly as locked
+        run: uv sync --locked
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Check formatting
+        run: uv run ruff format --check .
+
+      - name: Type check
+        run: uv run mypy
+
+      - name: Fast tests (fakes and SQLite, no network or credentials)
+        run: uv run pytest
+
+      - name: Migration tests on Postgres
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+        run: uv run pytest -m postgres

@@ -1,0 +1,5 @@
+# Local SQLite databases (DATABASE_URL=sqlite:///dev.sqlite3)
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm

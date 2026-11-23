@@ -40,6 +40,8 @@ docs/
   API.md             HTTP contract: keys, file info, errors, one section per operation
   PROVIDERS.md       Settings and provider-test results for each S3-compatible provider
 TESTING.md           Check commands, test layout, fixtures, and each operation's test record
+product/             HW3 meeting prep product: its own uv project on Python 3.14, with its
+                     own lockfile, rules and checks. Read product/README.md before working there
 ```
 
 Each operation's file holds all of its tests: HTTP behavior on the in-memory

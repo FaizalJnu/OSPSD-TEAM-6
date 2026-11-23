@@ -1,0 +1,92 @@
+[project]
+name = "team6-meeting-prep"
+version = "0.1.0"
+description = "Team 6's HW3 product: a meeting prep agent over storage, issue tracker and calendar."
+readme = "README.md"
+# Team 5's calendar package requires Python 3.14 (its pyproject.toml).
+requires-python = ">=3.14"
+dependencies = [
+    # Shared contracts, pinned to immutable tags. They are PEP 508 URLs, not
+    # [tool.uv.sources] entries, because the implementations below declare the
+    # same URLs, and uv treats a source entry and a URL for the same package as
+    # conflicting requirements.
+    "calendar-contract @ git+https://github.com/Airbus-A330/OSPSD-Calendar.git@v0.1.0",
+    "cloud-storage-api @ git+https://github.com/Dayana20/ospsd26-cloud-storage@0.3.1#subdirectory=src/cloud_storage_api",
+    "issue-tracker-contract @ git+https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git@issue-tracker-contract-v1.1.0#subdirectory=contract",
+    # Implementations, chosen at startup by STORAGE_PROVIDER, TRACKER_PROVIDER and
+    # CALENDAR_PROVIDER. Only meeting_prep/factories.py imports them.
+    "storage-service",
+    "team-4-issue-tracker-trello",
+    "team5-calendar",
+    # Database access and migrations: SQLite in development and tests, Postgres
+    # (Neon) when deployed. Only meeting_prep/db/ imports these.
+    "alembic>=1.17",
+    "psycopg[binary]>=3.2",
+    "sqlalchemy>=2.1",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.7,<0.14"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "meeting_prep"
+
+[tool.uv.sources]
+# Our own storage service, from the same commit as this project. Editable, so a
+# change under ../src is picked up without a reinstall. A container image
+# installs it with `uv sync --locked --no-editable`.
+storage-service = { path = "..", editable = true }
+# Every partner package is pinned to an immutable release tag. Never pin a branch.
+team-4-issue-tracker-trello = { git = "https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git", tag = "team-4-issue-tracker-trello-v1.0.0", subdirectory = "team-4-trello-impl" }
+team5-calendar = { git = "https://github.com/juno-junhyuk-lee/OSPSD-Team-5.git", tag = "team5-calendar-v0.1.0", subdirectory = "packages/team5-calendar" }
+
+[dependency-groups]
+dev = [
+    "mypy>=2.4.0",
+    "pytest>=9.1.1",
+    "ruff>=0.16.10",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Tests marked provider or postgres are opt-in (see README.md, Tests). A later -m on
+# the command line replaces this one. --strict-markers turns a misspelled marker into
+# an error instead of a test that silently runs in the fast suite.
+addopts = "-m 'not provider and not postgres' --strict-markers"
+markers = [
+    "provider: calls a real provider with the test accounts in .env",
+    "postgres: needs a Postgres database at TEST_DATABASE_URL",
+]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.mypy]
+strict = true
+files = ["src", "tests"]
+mypy_path = "src"
+explicit_package_bases = true  # names test files tests.test_*, so the override below applies
+
+[[tool.mypy.overrides]]
+# Our storage service is annotated and type-checked in strict mode, but ships no
+# py.typed marker. Read its source anyway, so its types reach factories.py.
+module = ["storage_service.*"]
+follow_untyped_imports = true
+
+[[tool.mypy.overrides]]
+# Tests take pytest fixtures and stay unannotated. Their bodies are still checked.
+module = ["tests.*"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = true
+
+[tool.pyright]
+# Editors (Pylance, pyright) resolve imports from this project's .venv, not the
+# repository root's, which lacks the partner packages.
+venvPath = "."
+venv = ".venv"

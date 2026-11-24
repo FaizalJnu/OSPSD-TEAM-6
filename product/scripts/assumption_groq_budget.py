@@ -1,0 +1,205 @@
+"""Assumption test: one scenario-1 run fits in Groq's 8,000 tokens per minute.
+
+Runs the real agent service flow (the system_v1 prompt, the four meeting tools, the
+default limits) with the live GroqModel and the test fake ApiClient, seeded with 10
+open issues, 2 upcoming events and 1 document. It sends the scenario-1 message five
+times in new conversations, 60 seconds apart, and prints one line of metrics per run
+and a summary as JSON. It never prints the key, the prompts or the replies.
+
+    uv run --env-file .env python scripts/assumption_groq_budget.py --prompt v2
+
+``--prompt v1`` runs the first prompt, system_v1, without the date line, to measure
+the date change on its own. It changes this script's service only; the agent service
+always runs system_v2 with the date line.
+"""
+
+import argparse
+import asyncio
+import dataclasses
+import json
+import sys
+import tempfile
+import time
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
+from zoneinfo import ZoneInfo
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # for tests.fake_api
+
+from tests.fake_api import FakeApi  # noqa: E402
+
+from meeting_prep.agent import service as service_module  # noqa: E402
+from meeting_prep.agent.api_client import OpenIssue, UpcomingEvent  # noqa: E402
+from meeting_prep.agent.model import (
+    GroqModel,  # noqa: E402
+    Message,  # noqa: E402
+)
+from meeting_prep.agent.proposals import REVIEW_MEETING  # noqa: E402
+from meeting_prep.agent.service import DEFAULT_LIMITS, AgentService, system_prompt  # noqa: E402
+from meeting_prep.db import create_engine_for, upgrade  # noqa: E402
+from meeting_prep.db.agent_store import AgentStore  # noqa: E402
+
+USER = "assumption-user"
+MESSAGE = (
+    "Prepare our sprint review titled Sprint 12 review for next Tuesday 3 to 3:30 pm "
+    "Eastern from the open issues"
+)
+RUNS = 5
+PAUSE_SECONDS = 60
+TOKENS_PER_MINUTE = 8_000
+TIME_ZONE = "America/New_York"
+REPLY_CHARACTERS = 600  # replies are about test data only
+
+ISSUES = [
+    ("Fix login redirect loop on Safari", "6b01c2a1"),
+    ("Folder delete leaves empty prefixes on OCI", "6b01c2a2"),
+    ("Agenda document links to the wrong event", "6b01c2a3"),
+    ("Retry-After not shown in the interface", "6b01c2a4"),
+    ("Add pagination to the issues view", "6b01c2a5"),
+    ("Calendar token expires after 7 days", "6b01c2a6"),
+    ("Rate limit errors during the load test", "6b01c2a7"),
+    ("Write the getting-started page", "6b01c2a8"),
+    ("Dashboard panel for stuck runs", "6b01c2a9"),
+    ("Release checklist for v0.3.0", "6b01c2b0"),
+]
+NOTES = """# Sprint 12 notes
+
+- Storage v0.2.0 is released; v0.3.0 needs the folder delete fix.
+- The Safari login loop blocks two testers.
+- Open question: do we keep the 7-day Google token for the demo?
+- Action: Prateek to finish the getting-started page before Wednesday.
+"""
+
+
+def seeded_api() -> FakeApi:
+    api = FakeApi()
+    api.issues = {USER: [OpenIssue(f"card-{i}", title) for title, i in ISSUES]}
+    api.events = {
+        USER: [
+            UpcomingEvent("evt-1", "Team standup", "2026-11-24T14:00:00Z", "2026-11-24T14:15:00Z"),
+            UpcomingEvent(
+                "evt-2", "Advisor check-in", "2026-11-26T19:00:00Z", "2026-11-26T19:30:00Z"
+            ),
+        ]
+    }
+    api.documents = {(USER, "/reviews/sprint-12-notes.md"): NOTES}
+    return api
+
+
+async def one_run(service: AgentService, api: FakeApi) -> dict[str, Any]:
+    conversation = service.create_conversation(USER, TIME_ZONE)
+    api.calls.clear()
+    started = time.monotonic()
+    reply = await service.send_message(USER, conversation.id, MESSAGE)
+    seconds = time.monotonic() - started
+    record = service.store.get_run(USER, reply.run_id) or {}
+    proposal = reply.proposal
+    arguments: dict[str, Any] = {}
+    if proposal is not None and proposal.actions and proposal.actions[0].kind == REVIEW_MEETING:
+        arguments = dict(proposal.actions[0].arguments)
+    steps = record.get("steps", [])
+    prompt, completion = record.get("prompt_tokens", 0), record.get("completion_tokens", 0)
+    return {
+        "success": bool(arguments),  # the tool only stores a proposal whose arguments validated
+        "stop_reason": reply.stop_reason,
+        "steps": len(steps),
+        "tool_calls": [step["tool"] for step in steps],
+        "tool_errors": [step["error"]["code"] for step in steps if step["error"]],
+        "model_calls": record.get("model_calls", 0),
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": prompt + completion,
+        "seconds": round(seconds, 1),
+        "rate_limited": reply.stop_reason == "rate_limited",
+        "retry_after": reply.retry_after,
+        "error": record.get("error"),
+        "proposed_start": arguments.get("start"),
+        "proposed_end": arguments.get("end"),
+        "agenda_items": len(arguments.get("agenda", [])) if arguments else 0,
+        "correct_date": is_correct(arguments, datetime.now(UTC)) if arguments else False,
+        # Why a run stopped without a proposal. The reply is about the seeded test data.
+        "reply": None if arguments else (reply.text or "")[:REPLY_CHARACTERS],
+    }
+
+
+def is_correct(arguments: dict[str, Any], now: datetime) -> bool:
+    """A Tuesday after today, 15:00 to 15:30 in America/New_York."""
+    zone = ZoneInfo(TIME_ZONE)
+    try:
+        start = datetime.fromisoformat(str(arguments["start"])).astimezone(zone)
+        end = datetime.fromisoformat(str(arguments["end"])).astimezone(zone)
+    except KeyError, ValueError:
+        return False
+    return (
+        start.strftime("%A") == "Tuesday"
+        and start.date() > now.astimezone(zone).date()
+        and (start.hour, start.minute) == (15, 0)
+        and end - start == timedelta(minutes=30)
+    )
+
+
+def use_system_v1(service: AgentService) -> None:
+    """For this script only: the system_v1 prompt, and no date line for the model.
+
+    The service puts the date line second. The loop is called without it, and it is
+    put back in the result so the service saves the run's new messages as usual.
+    """
+    service.prompt = system_prompt("system_v1")
+    real_run = service_module.run
+
+    async def run_without_date(messages: list[Message], *args: Any, **kwargs: Any) -> Any:
+        date_line = messages[1]
+        result = await real_run([messages[0], *messages[2:]], *args, **kwargs)
+        kept = (result.messages[0], date_line, *result.messages[1:])
+        return dataclasses.replace(result, messages=kept)
+
+    service_module.run = run_without_date  # type: ignore[assignment]
+
+
+async def main() -> int:
+    parser = argparse.ArgumentParser(description="Groq token budget for scenario 1")
+    parser.add_argument("--prompt", choices=["v1", "v2"], default="v2")
+    prompt = parser.parse_args().prompt
+    model = GroqModel.from_env()
+    api = seeded_api()
+    with tempfile.TemporaryDirectory() as folder:
+        url = f"sqlite:///{Path(folder) / 'assumption.sqlite3'}"
+        upgrade(url)
+        engine = create_engine_for(url)
+        service = AgentService(AgentStore(engine), model, api, limits=DEFAULT_LIMITS)
+        if prompt == "v1":
+            use_system_v1(service)
+        runs = []
+        for number in range(1, RUNS + 1):
+            if number > 1:
+                await asyncio.sleep(PAUSE_SECONDS)
+            result = {"run": number, **await one_run(service, api)}
+            runs.append(result)
+            print(json.dumps(result), flush=True)
+        engine.dispose()
+
+    totals = [run["total_tokens"] for run in runs]
+    average = sum(totals) / len(totals)
+    summary = {
+        "prompt": "system_v1, no date line" if prompt == "v1" else "system_v2, date line",
+        "model": model.model,
+        "limits": {
+            "max_steps": DEFAULT_LIMITS.max_steps,
+            "max_seconds": DEFAULT_LIMITS.max_seconds,
+            "max_total_tokens": DEFAULT_LIMITS.max_total_tokens,
+        },
+        "successes": sum(run["success"] for run in runs),
+        "correct_dates": sum(run["correct_date"] for run in runs),
+        "average_tokens": round(average),
+        "max_tokens": max(totals),
+        "runs_per_minute_at_average": TOKENS_PER_MINUTE // round(average) if average else None,
+        "runs_per_minute_at_max": TOKENS_PER_MINUTE // max(totals) if max(totals) else None,
+        "rate_limited_runs": sum(run["rate_limited"] for run in runs),
+    }
+    print(json.dumps({"summary": summary}), flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(asyncio.run(main()))

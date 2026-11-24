@@ -20,6 +20,23 @@ uv run mypy                              # strict on src/
 
 CI also runs the Postgres migration tests (see Tests).
 
+## Run the fixed workflow locally
+
+For a local run with all three in-memory providers, start the API from `product/`:
+
+```bash
+STORAGE_PROVIDER=fake TRACKER_PROVIDER=fake CALENDAR_PROVIDER=fake \
+  DATABASE_URL=sqlite:///dev.sqlite3 PRODUCT_API_KEY=local-demo \
+  uv run uvicorn meeting_prep.api.main:create_app --factory
+```
+
+`GET /health` reports the running revision from `RELEASE`. Send
+`Authorization: Bearer local-demo` to `GET /health/providers` or
+`POST /v1/review-meetings`. The POST body contains `title`, `start`, `end`, and
+`agenda`. Use a future meeting time with an explicit UTC offset. A completed new
+run returns `201`; sending the same request again returns `200` with
+`replayed: true`. The fake providers lose their contents when the process stops.
+
 ## Code map
 
 | Path | What it does | Owner |
@@ -31,6 +48,11 @@ CI also runs the Postgres migration tests (see Tests).
 | `src/meeting_prep/agent/` | The agent: `model.py` (`ModelClient`, `GroqModel` from `GROQ_API_KEY` and `AGENT_MODEL`, and `ScriptedModel` for tests), `tools.py` (tool registry with validated pydantic arguments), `loop.py` (the loop, its limits and stop reasons). Never imports the registry, adapters, orchestrator or fakes; the model, tools and loop import no web framework | Vikram |
 | `src/meeting_prep/agent/app.py`, `service.py`, `tools_meeting.py`, `proposals.py`, `api_client.py` | The agent service: its HTTP API, conversations, the meeting tools, proposals and approvals, and the `ApiClient` it reads and executes through. See `docs/agent.md` | Vikram |
 | `src/meeting_prep/db/tables/agent.py`, `db/agent_store.py` | The agent's tables (migration `0002`) and their user-scoped queries | Vikram |
+| `src/meeting_prep/orchestrator.py` | `POST /v1/review-meetings` without the web: step 0 validation, claim, the lease and the 20 s guard, the steps in order, resume, and the response built from the run record. Raises `ReviewMeetingError` with the operation's codes | Vikram |
+| `src/meeting_prep/run_record.py` | Pure: the request's run ID, the run record's JSON (design §1.6), the step states, and the lease and resume rules | Vikram |
+| `src/meeting_prep/agenda.py` | Pure: the agenda's path and Markdown bytes. The same inputs always give the same bytes | Vikram |
+| `src/meeting_prep/adapters/base.py` | `StepError` and the storage, tracker and calendar protocols the orchestrator calls. The adapters implement them | Vikram (interface); Darsh (adapters) |
+| `scripts/resolve_run.py` | Records an operator's answer for a run stopped at `outcome_unknown`: `--event-id <id>` or `--no-event` | Vikram |
 | `tests/test_import_boundary.py` | Who may import what. Read it before adding a package | |
 
 Packages the import rules already expect:

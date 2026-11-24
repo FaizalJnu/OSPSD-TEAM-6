@@ -104,13 +104,67 @@ The prompt moved to `system_v2`, which tells the model to work out relative date
 from that line and to state the exact weekday and date when it proposes. Runs record
 `prompt_version: system_v2`.
 
-**Rerun.** On 2026-11-23, with the same script, message, seeded data, model and
+**How the change was isolated.** `scripts/assumption_groq_budget.py --prompt v1` runs
+`system_v1` with no date line; `--prompt v2` runs `system_v2` with the date line, as
+the service does. The switch exists in the script only.
+
+Both runs used everything else unchanged:
+- the same seeded data, model (`openai/gpt-oss-120b`) and default limits
+- a conversation in `America/New_York`
+- this message, which names the title so the run does not stop to ask for it: "Prepare
+  our sprint review titled Sprint 12 review for next Tuesday 3 to 3:30 pm Eastern from
+  the open issues"
+
+There were 5 runs per prompt, 60 seconds apart, on Monday 2026-11-23. A proposal is
+correct if it is a Tuesday after today, 15:00 to 15:30 America/New_York.
+
+| | v1: `system_v1`, no date line | v2: `system_v2`, date line |
+|---|---|---|
+| Proposals made | 4 of 5 | 5 of 5 |
+| Proposals with a correct date | 1 of 4 | 5 of 5 |
+| Dates proposed | Tuesday 2026-12-01 once, Saturday 2026-11-28 three times | Tuesday 2026-11-24 every time |
+| Average tokens per run | 4,053 | 4,639 |
+| Maximum tokens per run | 4,540 | 4,721 |
+| 429s | 0 | 0 |
+
+| Run | v1 result | v1 tokens (prompt / completion) | v2 result | v2 tokens (prompt / completion) |
+|---|---|---|---|---|
+| 1 | proposal, Tue 2026-12-01, correct | 4,216 (3,447 / 769) | proposal, Tue 2026-11-24, correct | 4,484 (3,779 / 705) |
+| 2 | proposal, Sat 2026-11-28 | 4,262 (3,444 / 818) | proposal, Tue 2026-11-24, correct | 4,721 (3,778 / 943) |
+| 3 | proposal, Sat 2026-11-28 | 4,297 (3,450 / 847) | proposal, Tue 2026-11-24, correct | 4,699 (3,776 / 923) |
+| 4 | no proposal | 2,951 (2,008 / 943) | proposal, Tue 2026-11-24, correct | 4,640 (3,776 / 864) |
+| 5 | proposal, Sat 2026-11-28 | 4,540 (3,449 / 1,091) | proposal, Tue 2026-11-24, correct | 4,649 (3,778 / 871) |
+
+Every proposal was 15:00 to 15:30 Eastern with 10 agenda items, and no tool returned
+an error. Each run with a proposal made 3 model calls (read the issues, propose,
+answer), in 2.7 to 6.1 seconds.
+
+**Why the run without a proposal stopped.** v1 run 4 read the issues, then asked which
+Tuesday the user meant, offering "tomorrow (Tuesday 2026-11-24)". With no date given,
+it could not tell.
+
+**Result. The change works:**
+- **Correct dates:** 1 of 4 before, 5 of 5 after. Every v2 proposal picked the
+  nearest Tuesday.
+- **Proposals:** 4 of 5 before, 5 of 5 after.
+- **Cost:** v2 adds about 330 prompt tokens to each of the three model calls (the date
+  line and the longer prompt). That is about 300 more tokens per successful run:
+  4,639 on average, against 4,329 for v1's four successful runs.
+- **Budget:** one run still fits in 8,000 tokens per minute (8,000 / 4,721 = 1.69),
+  and two still do not. The budget conclusion above is unchanged.
+
+### History: first rerun, with a message that gave no title
+
+The first rerun used the original message, which names no title, and ran only v2.
+It could not isolate the date change. It is kept here as a record.
+
+On 2026-11-23, with the same script, message, seeded data, model and
 limits, the conversation was created in `America/New_York`. There were 5 runs, 60
 seconds apart. A proposal counts as correct if it is a Tuesday after today, 15:00 to
 15:30 America/New_York. The script now also keeps the reply of a run that ends
 without a proposal; replies are about the seeded test data only.
 
-| | Before (`system_v1`, no date) | After (`system_v2`, date line) |
+| | First test (`system_v1`, no date) | First rerun (`system_v2`, date line) |
 |---|---|---|
 | Proposals made | 3 of 5 | 0 of 5 |
 | Proposals with a correct date | 0 of 3 (all Saturday 2026-11-28) | none to check |
@@ -119,7 +173,7 @@ without a proposal; replies are about the seeded test data only.
 | Maximum tokens per run | 4,486 | 2,798 |
 | 429s | 0 | 0 |
 
-| Run (after) | Tools called | Model calls | Prompt / completion tokens | Total | Time |
+| Run (first rerun) | Tools called | Model calls | Prompt / completion tokens | Total | Time |
 |---|---|---|---|---|---|
 | 1 | `list_open_issues` | 2 | 2,214 / 390 | 2,604 | 2.5 s |
 | 2 | `list_open_issues` | 2 | 2,214 / 584 | 2,798 | 2.5 s |
@@ -147,11 +201,6 @@ two runs stopped.
   extra questions. The question rule did not change, and the first test already had
   2 of 5 runs without a proposal.
 
-**Next measurement (not done here).** The scenario message leaves the title open. To
-check the proposal date, either:
-- answer the clarifying question in a second turn of the same conversation, or
-- send a message that names the title.
-
-Either is a test change, not a product change. The product question for the brief is
-whether the agent should pick a default title, such as "Sprint review", instead of
-asking.
+**Next measurement.** Done above, with a message that names the title. The product
+question for the brief remains: should the agent pick a default title, such as
+"Sprint review", instead of asking?

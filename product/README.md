@@ -20,6 +20,23 @@ uv run mypy                              # strict on src/
 
 CI also runs the Postgres migration tests (see Tests).
 
+## Run the fixed workflow locally
+
+For a local run with all three in-memory providers, start the API from `product/`:
+
+```bash
+STORAGE_PROVIDER=fake TRACKER_PROVIDER=fake CALENDAR_PROVIDER=fake \
+  DATABASE_URL=sqlite:///dev.sqlite3 PRODUCT_API_KEY=local-demo \
+  uv run uvicorn meeting_prep.api.main:create_app --factory
+```
+
+`GET /health` reports the running revision from `RELEASE`. Send
+`Authorization: Bearer local-demo` to `GET /health/providers` or
+`POST /v1/review-meetings`. The POST body contains `title`, `start`, `end`, and
+`agenda`. Use a future meeting time with an explicit UTC offset. A completed new
+run returns `201`; sending the same request again returns `200` with
+`replayed: true`. The fake providers lose their contents when the process stops.
+
 ## Code map
 
 | Path | What it does | Owner |

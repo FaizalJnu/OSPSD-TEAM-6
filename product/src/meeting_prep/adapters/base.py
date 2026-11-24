@@ -41,6 +41,7 @@ class StepError(Exception):
         retryable: bool,
         may_have_applied: bool,
         provider_code: str | None = None,
+        provider_cause: str | None = None,
     ) -> None:
         super().__init__(f"{step}: {code}")
         self.step: Step = step
@@ -48,6 +49,7 @@ class StepError(Exception):
         self.retryable = retryable
         self.may_have_applied = may_have_applied
         self.provider_code = provider_code
+        self.provider_cause = provider_cause
 
 
 @dataclass(frozen=True)

@@ -6,10 +6,16 @@ open issues, 2 upcoming events and 1 document. It sends the scenario-1 message f
 times in new conversations, 60 seconds apart, and prints one line of metrics per run
 and a summary as JSON. It never prints the key, the prompts or the replies.
 
-    uv run --env-file .env python scripts/assumption_groq_budget.py
+    uv run --env-file .env python scripts/assumption_groq_budget.py --prompt v2
+
+``--prompt v1`` runs the first prompt, system_v1, without the date line, to measure
+the date change on its own. It changes this script's service only; the agent service
+always runs system_v2 with the date line.
 """
 
+import argparse
 import asyncio
+import dataclasses
 import json
 import sys
 import tempfile
@@ -23,15 +29,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # for tests.fake_a
 
 from tests.fake_api import FakeApi  # noqa: E402
 
+from meeting_prep.agent import service as service_module  # noqa: E402
 from meeting_prep.agent.api_client import OpenIssue, UpcomingEvent  # noqa: E402
-from meeting_prep.agent.model import GroqModel  # noqa: E402
+from meeting_prep.agent.model import (
+    GroqModel,  # noqa: E402
+    Message,  # noqa: E402
+)
 from meeting_prep.agent.proposals import REVIEW_MEETING  # noqa: E402
-from meeting_prep.agent.service import DEFAULT_LIMITS, AgentService  # noqa: E402
+from meeting_prep.agent.service import DEFAULT_LIMITS, AgentService, system_prompt  # noqa: E402
 from meeting_prep.db import create_engine_for, upgrade  # noqa: E402
 from meeting_prep.db.agent_store import AgentStore  # noqa: E402
 
 USER = "assumption-user"
-MESSAGE = "Prepare our sprint review for next Tuesday 3 to 3:30 pm Eastern from the open issues"
+MESSAGE = (
+    "Prepare our sprint review titled Sprint 12 review for next Tuesday 3 to 3:30 pm "
+    "Eastern from the open issues"
+)
 RUNS = 5
 PAUSE_SECONDS = 60
 TOKENS_PER_MINUTE = 8_000
@@ -126,7 +139,28 @@ def is_correct(arguments: dict[str, Any], now: datetime) -> bool:
     )
 
 
+def use_system_v1(service: AgentService) -> None:
+    """For this script only: the system_v1 prompt, and no date line for the model.
+
+    The service puts the date line second. The loop is called without it, and it is
+    put back in the result so the service saves the run's new messages as usual.
+    """
+    service.prompt = system_prompt("system_v1")
+    real_run = service_module.run
+
+    async def run_without_date(messages: list[Message], *args: Any, **kwargs: Any) -> Any:
+        date_line = messages[1]
+        result = await real_run([messages[0], *messages[2:]], *args, **kwargs)
+        kept = (result.messages[0], date_line, *result.messages[1:])
+        return dataclasses.replace(result, messages=kept)
+
+    service_module.run = run_without_date  # type: ignore[assignment]
+
+
 async def main() -> int:
+    parser = argparse.ArgumentParser(description="Groq token budget for scenario 1")
+    parser.add_argument("--prompt", choices=["v1", "v2"], default="v2")
+    prompt = parser.parse_args().prompt
     model = GroqModel.from_env()
     api = seeded_api()
     with tempfile.TemporaryDirectory() as folder:
@@ -134,6 +168,8 @@ async def main() -> int:
         upgrade(url)
         engine = create_engine_for(url)
         service = AgentService(AgentStore(engine), model, api, limits=DEFAULT_LIMITS)
+        if prompt == "v1":
+            use_system_v1(service)
         runs = []
         for number in range(1, RUNS + 1):
             if number > 1:
@@ -146,6 +182,7 @@ async def main() -> int:
     totals = [run["total_tokens"] for run in runs]
     average = sum(totals) / len(totals)
     summary = {
+        "prompt": "system_v1, no date line" if prompt == "v1" else "system_v2, date line",
         "model": model.model,
         "limits": {
             "max_steps": DEFAULT_LIMITS.max_steps,

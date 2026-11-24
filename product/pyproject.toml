@@ -23,6 +23,7 @@ dependencies = [
     "alembic>=1.17",
     "psycopg[binary]>=3.2",
     "sqlalchemy>=2.1",
+    "groq>=1.7.0",
 ]
 
 [build-system]

@@ -61,9 +61,14 @@ RULES = (
         only_in=("meeting_prep.db",),
     ),
     Rule(
-        "The workflow, adapters and agent loop run without a web framework",
+        "The workflow, adapters and agent run without a web framework",
         imports=("fastapi", "starlette", "uvicorn"),
-        only_in=("meeting_prep.api", "meeting_prep.agent"),
+        only_in=("meeting_prep.api",),
+    ),
+    Rule(
+        "The model provider's SDK stays inside the model client",
+        imports=("groq",),
+        only_in=("meeting_prep.agent.model",),
     ),
     Rule(
         "The agent service reaches providers only through the API service, which checks approval",
@@ -149,6 +154,13 @@ def test_no_module_breaks_an_import_rule():
         ("meeting_prep.agent.loop", "from ..factories import build_implementations", False),
         ("meeting_prep.agent", "from .. import adapters", True),
         ("meeting_prep.factories", "import boto3", False),
+        ("meeting_prep.agent.loop", "from fastapi import FastAPI", False),
+        ("meeting_prep.agent.app", "from starlette.applications import Starlette", False),
+        ("meeting_prep.agent.tools", "from meeting_prep.orchestrator import Orchestrator", False),
+        ("meeting_prep.agent.loop", "from meeting_prep.fakes import FakeCalendar", False),
+        ("meeting_prep.agent.tools", "from meeting_prep.adapters import StepError", False),
+        ("meeting_prep.agent.loop", "import groq", False),
+        ("meeting_prep.orchestrator", "from groq import AsyncGroq", False),
     ],
 )
 def test_the_checker_catches_a_forbidden_import(module, source, is_package):
@@ -162,7 +174,8 @@ def test_the_checker_catches_a_forbidden_import(module, source, is_package):
         ("meeting_prep.adapters.calendar", "from calendar_contract import CalendarError"),
         ("meeting_prep.db.engine", "from sqlalchemy import create_engine"),
         ("meeting_prep.api.main", "from fastapi import FastAPI"),
-        ("meeting_prep.agent.app", "from fastapi import FastAPI"),
+        ("meeting_prep.agent.model", "from groq import AsyncGroq"),
+        ("meeting_prep.agent.loop", "from meeting_prep.agent.model import ModelClient"),
         ("meeting_prep.api.routes", "from meeting_prep.factories import build_implementations"),
     ],
 )

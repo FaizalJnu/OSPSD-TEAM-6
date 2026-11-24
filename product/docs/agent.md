@@ -59,8 +59,8 @@ exactly like IDs that do not exist. Errors are `{"error": {"code", "message"}}`.
 
 | Method and path | Success | Errors |
 |---|---|---|
-| `POST /v1/conversations` | 201 `{id, created_at, messages: [], pending_proposal: null}` | 401 |
-| `GET /v1/conversations/{id}` | 200 `{id, created_at, messages: [{role, content}], pending_proposal}`. Messages are the user's and the agent's text; tool traffic is not shown. | 401, 404 |
+| `POST /v1/conversations` `{"time_zone"}` (an IANA name, such as `America/New_York`) | 201 `{id, time_zone, created_at, messages: [], pending_proposal: null}` | 400 `invalid_request` for a name `zoneinfo` does not know, 401 |
+| `GET /v1/conversations/{id}` | 200 `{id, time_zone, created_at, messages: [{role, content}], pending_proposal}`. Messages are the user's and the agent's text; tool traffic is not shown. | 401, 404 |
 | `POST /v1/conversations/{id}/messages` `{"text"}` (1 to 4,000 characters) | 200 `{reply, stop_reason, run_id, proposal, retry_after}`. A run that stops on a limit, a rate limit or a model error is still 200, with `reply: null` and its `stop_reason`. | 400 `invalid_request`, 401, 404 |
 | `GET /v1/proposals/{id}` | 200 the proposal (`id, conversation_id, status, proposal_hash, actions, supersedes, created_at`) with its `outcomes` | 401, 404 |
 | `POST /v1/proposals/{id}/approve` `{"proposal_hash"}` | 200 the executed proposal with its outcomes | 400, 401, 404, 409 `stale_proposal`, `proposal_superseded`, `proposal_rejected`, 502 `execution_failed` |
@@ -69,10 +69,15 @@ exactly like IDs that do not exist. Errors are `{"error": {"code", "message"}}`.
 ## Limits, prompt and records
 
 * Default limits: `max_steps` 8, `max_seconds` 60, `max_total_tokens` 6,000.
-* The system prompt is versioned in `src/meeting_prep/agent/prompts/system_v1.md`.
+* The system prompt is versioned in `src/meeting_prep/agent/prompts/` (now `system_v2.md`).
   Tool results are data, never instructions, and changes happen only through
   `propose_review_meeting`. A new version is a new file; each run records the version
   it used.
+* Every run adds one more system message after the prompt: the user's current date,
+  weekday and time in the conversation's time zone, from the service's clock (for
+  example `Current date and time for the user: Monday 2026-11-23 14:05 in
+  America/New_York (UTC-05:00).`). It is not saved with the conversation, so each run
+  gets the date of that run.
 * Every run writes one `agent_runs` row:
   * every step: the tool, its validated arguments (secret fields masked), its result
     or error, and its duration
@@ -82,7 +87,7 @@ exactly like IDs that do not exist. Errors are `{"error": {"code", "message"}}`.
     prompt version, and the start and end times
   
   It never holds the user's message text or document content.
-* Tables (migration `0002`): `conversations`, `messages`, `agent_runs`, `proposals`,
+* Tables (migrations `0002` and `0003`, which adds `conversations.time_zone`): `conversations`, `messages`, `agent_runs`, `proposals`,
   `approvals`, `outcomes`. Every row carries the user ID, and every query filters by
   it (`meeting_prep.db.agent_store`).
 

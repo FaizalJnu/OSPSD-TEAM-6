@@ -37,6 +37,7 @@ from meeting_prep.db.tables.agent import (
 @dataclass(frozen=True)
 class ConversationRecord:
     id: str
+    time_zone: str
     created_at: datetime
 
 
@@ -54,11 +55,13 @@ class AgentStore:
 
     # --- Conversations and messages ---
 
-    def create_conversation(self, user: str, now: datetime) -> ConversationRecord:
-        row = Conversation(id=new_id(), user_id=user, created_at=now, updated_at=now)
+    def create_conversation(self, user: str, time_zone: str, now: datetime) -> ConversationRecord:
+        row = Conversation(
+            id=new_id(), user_id=user, time_zone=time_zone, created_at=now, updated_at=now
+        )
         with self._session() as session, session.begin():
             session.add(row)
-        return ConversationRecord(row.id, now)
+        return ConversationRecord(row.id, time_zone, now)
 
     def get_conversation(self, user: str, conversation_id: str) -> ConversationRecord | None:
         with self._session() as session:
@@ -67,7 +70,9 @@ class AgentStore:
                     Conversation.id == conversation_id, Conversation.user_id == user
                 )
             )
-            return None if row is None else ConversationRecord(row.id, _utc(row.created_at))
+            if row is None:
+                return None
+            return ConversationRecord(row.id, row.time_zone, _utc(row.created_at))
 
     def messages(self, user: str, conversation_id: str) -> list[Message]:
         with self._session() as session:

@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from meeting_prep.agent.api_client import ApiError
 from meeting_prep.agent.app import create_app, current_user
 from meeting_prep.agent.loop import Limits
-from meeting_prep.agent.model import ModelError, ScriptedModel, ScriptStep
+from meeting_prep.agent.model import Message, ModelError, ScriptedModel, ScriptStep
 from meeting_prep.agent.proposals import (
     REVIEW_MEETING,
     Action,
@@ -24,7 +24,14 @@ from meeting_prep.agent.proposals import (
     canonical_json,
     proposal_hash,
 )
-from meeting_prep.agent.service import DEFAULT_LIMITS, AgentError, AgentService, system_prompt
+from meeting_prep.agent.service import (
+    DEFAULT_LIMITS,
+    PROMPT_VERSION,
+    AgentError,
+    AgentService,
+    current_date_line,
+    system_prompt,
+)
 from meeting_prep.db import create_engine_for, upgrade
 from meeting_prep.db.agent_store import AgentStore
 from tests.fake_api import FakeApi
@@ -37,6 +44,7 @@ MEETING = {
     "agenda": ["Open bugs"],
 }
 answer, call = ScriptedModel.answer, ScriptedModel.call
+NEW_YORK = {"time_zone": "America/New_York"}
 
 
 def propose(meeting: dict[str, Any] = MEETING, id: str = "call-1") -> list[ScriptStep]:
@@ -68,7 +76,7 @@ class Agent:
         return TestClient(self.app)
 
     def conversation(self, user: str = "user-a") -> str:
-        response = self.client(user).post("/v1/conversations")
+        response = self.client(user).post("/v1/conversations", json=NEW_YORK)
         assert response.status_code == 201
         conversation_id: str = response.json()["id"]
         return conversation_id
@@ -100,11 +108,12 @@ def error_code(response: Any) -> str:
 def test_a_conversation_starts_empty(db_url, api):
     agent = Agent(db_url, [], api)
 
-    created = agent.client().post("/v1/conversations")
+    created = agent.client().post("/v1/conversations", json=NEW_YORK)
     fetched = agent.client().get(f"/v1/conversations/{created.json()['id']}")
 
     assert created.status_code == 201
     assert created.json()["messages"] == [] and created.json()["pending_proposal"] is None
+    assert created.json()["time_zone"] == "America/New_York"
     assert fetched.status_code == 200
     assert fetched.json() == {**created.json(), "created_at": fetched.json()["created_at"]}
 
@@ -119,6 +128,7 @@ def test_a_message_runs_the_loop_with_the_system_prompt_and_saves_the_exchange(d
     assert reply["stop_reason"] == "completed" and reply["proposal"] is None
     sent = agent.model.calls[0]
     assert sent.messages[0].role == "system" and sent.messages[0].content == system_prompt()
+    assert sent.messages[1] == Message("system", current_date_line(NOW, "America/New_York"))
     assert sent.max_tokens == 6_000
     assert api.calls == [("list_open_issues", "user-a", 20)]
     shown = agent.client().get(f"/v1/conversations/{conversation}").json()["messages"]
@@ -136,7 +146,8 @@ def test_the_next_message_sends_the_whole_history_back(db_url, api):
     agent.say(conversation, "Is that all?")
 
     roles = [message.role for message in agent.model.calls[2].messages]
-    assert roles == ["system", "user", "assistant", "tool", "assistant", "user"]
+    # The prompt, the date line, then the saved history and the new message.
+    assert roles == ["system", "system", "user", "assistant", "tool", "assistant", "user"]
 
 
 def test_tool_calls_a_run_stopped_before_are_answered_so_the_history_stays_valid(db_url, api):
@@ -159,6 +170,78 @@ def test_tool_calls_a_run_stopped_before_are_answered_so_the_history_stays_valid
     answered = {m.tool_call_id: m.content for m in history if m.role == "tool"}
     assert set(answered) == {"a", "b"}
     assert json.loads(str(answered["b"]))["error"]["code"] == "not_run"
+
+
+# --- The current date, in the user's time zone ---
+
+
+@pytest.mark.parametrize(
+    ("time_zone", "expected"),
+    [
+        ("America/New_York", "Wednesday 2026-11-18 16:00 in America/New_York (UTC-05:00)"),
+        ("Asia/Kolkata", "Thursday 2026-11-19 02:30 in Asia/Kolkata (UTC+05:30)"),
+        ("UTC", "Wednesday 2026-11-18 21:00 in UTC (UTC+00:00)"),
+    ],
+)
+def test_each_run_tells_the_model_the_date_from_the_clock_in_the_conversations_zone(
+    db_url, api, time_zone, expected
+):
+    agent = Agent(db_url, [answer("ok")], api)
+    created = agent.client().post("/v1/conversations", json={"time_zone": time_zone})
+
+    agent.say(created.json()["id"], "When is next Tuesday?")
+
+    (sent,) = agent.model.calls
+    assert sent.messages[1].content == f"Current date and time for the user: {expected}."
+    assert PROMPT_VERSION == "system_v2"
+
+
+def test_the_date_line_moves_with_the_clock_and_is_not_saved(db_url, api):
+    clock = [NOW]
+    agent = Agent(db_url, [answer("one"), answer("two")], api)
+    agent.service.now = lambda: clock[0]
+    conversation = agent.conversation()
+    agent.say(conversation, "first")
+    clock[0] = datetime(2026, 11, 24, 14, 0, tzinfo=UTC)  # Tuesday 09:00 in New York
+
+    agent.say(conversation, "second")
+
+    second = agent.model.calls[1].messages
+    assert second[1].content is not None and "Tuesday 2026-11-24 09:00" in second[1].content
+    assert [m.role for m in second].count("system") == 2  # the first run's line was not kept
+    shown = agent.client().get(f"/v1/conversations/{conversation}").json()
+    assert [m["role"] for m in shown["messages"]] == ["user", "assistant", "user", "assistant"]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"time_zone": "Mars/Olympus_Mons"},
+        {"time_zone": "../../etc/passwd"},
+        {"time_zone": "EST +5"},
+        {"time_zone": ""},
+        {},
+        {"time_zone": "UTC", "extra": 1},
+    ],
+    ids=["unknown zone", "path", "not a name", "empty", "missing", "extra field"],
+)
+def test_an_invalid_time_zone_is_400_and_creates_nothing(db_url, api, body):
+    agent = Agent(db_url, [], api)
+
+    response = agent.client().post("/v1/conversations", json=body)
+
+    assert response.status_code == 400 and error_code(response) == "invalid_request"
+    assert response.json()["error"]["message"].split(":")[0] in ("time_zone", "extra")
+
+
+def test_another_users_conversation_is_still_404_with_its_time_zone(db_url, api):
+    agent = Agent(db_url, [], api)
+    conversation = agent.conversation("user-a")
+
+    response = agent.client("user-b").get(f"/v1/conversations/{conversation}")
+
+    assert response.status_code == 404 and error_code(response) == "not_found"
+    assert "America/New_York" not in response.text
 
 
 # --- Proposals and approvals ---
@@ -448,7 +531,7 @@ def test_a_failed_run_is_explained_by_its_record_and_holds_no_secrets(db_url, ap
     assert record["error"] == "the model request failed (InternalServerError, 500)"
     assert (record["model"], record["prompt_version"], record["model_calls"]) == (
         "scripted",
-        "system_v1",
+        "system_v2",
         3,
     )
     assert (record["prompt_tokens"], record["completion_tokens"]) == (30, 15)
@@ -527,7 +610,7 @@ def test_tools_read_only_the_signed_in_users_data(db_url, api):
 # --- HTTP errors ---
 
 ENDPOINTS = [
-    ("post", "/v1/conversations", None),
+    ("post", "/v1/conversations", {"time_zone": "UTC"}),
     ("get", "/v1/conversations/c1", None),
     ("post", "/v1/conversations/c1/messages", {"text": "hi"}),
     ("get", "/v1/proposals/p1", None),

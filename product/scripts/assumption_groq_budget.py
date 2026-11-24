@@ -14,8 +14,10 @@ import json
 import sys
 import tempfile
 import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # for tests.fake_api
 
@@ -33,6 +35,8 @@ MESSAGE = "Prepare our sprint review for next Tuesday 3 to 3:30 pm Eastern from 
 RUNS = 5
 PAUSE_SECONDS = 60
 TOKENS_PER_MINUTE = 8_000
+TIME_ZONE = "America/New_York"
+REPLY_CHARACTERS = 600  # replies are about test data only
 
 ISSUES = [
     ("Fix login redirect loop on Safari", "6b01c2a1"),
@@ -71,7 +75,7 @@ def seeded_api() -> FakeApi:
 
 
 async def one_run(service: AgentService, api: FakeApi) -> dict[str, Any]:
-    conversation = service.create_conversation(USER)
+    conversation = service.create_conversation(USER, TIME_ZONE)
     api.calls.clear()
     started = time.monotonic()
     reply = await service.send_message(USER, conversation.id, MESSAGE)
@@ -100,7 +104,26 @@ async def one_run(service: AgentService, api: FakeApi) -> dict[str, Any]:
         "proposed_start": arguments.get("start"),
         "proposed_end": arguments.get("end"),
         "agenda_items": len(arguments.get("agenda", [])) if arguments else 0,
+        "correct_date": is_correct(arguments, datetime.now(UTC)) if arguments else False,
+        # Why a run stopped without a proposal. The reply is about the seeded test data.
+        "reply": None if arguments else (reply.text or "")[:REPLY_CHARACTERS],
     }
+
+
+def is_correct(arguments: dict[str, Any], now: datetime) -> bool:
+    """A Tuesday after today, 15:00 to 15:30 in America/New_York."""
+    zone = ZoneInfo(TIME_ZONE)
+    try:
+        start = datetime.fromisoformat(str(arguments["start"])).astimezone(zone)
+        end = datetime.fromisoformat(str(arguments["end"])).astimezone(zone)
+    except KeyError, ValueError:
+        return False
+    return (
+        start.strftime("%A") == "Tuesday"
+        and start.date() > now.astimezone(zone).date()
+        and (start.hour, start.minute) == (15, 0)
+        and end - start == timedelta(minutes=30)
+    )
 
 
 async def main() -> int:
@@ -130,6 +153,7 @@ async def main() -> int:
             "max_total_tokens": DEFAULT_LIMITS.max_total_tokens,
         },
         "successes": sum(run["success"] for run in runs),
+        "correct_dates": sum(run["correct_date"] for run in runs),
         "average_tokens": round(average),
         "max_tokens": max(totals),
         "runs_per_minute_at_average": TOKENS_PER_MINUTE // round(average) if average else None,

@@ -25,6 +25,9 @@ RUN_ID = run_id_for(REQUEST)
         ("Revue de l'équipe", "revue-de-l-quipe"),  # non-ASCII becomes "-"
         ("Café", "caf"),  # a trailing "-" is removed
         ("!!!", "review"),
+        ("!Retro", "retro"),  # a leading "-" is removed too
+        ("  -- Planning --  ", "planning"),
+        ("#" + "b" * 45, "b" * 40),  # the leading "-" does not use up the 40
         ("日本語", "review"),
         ("a" * 39 + " b", "a" * 39),  # cut to 40, then the trailing "-" removed
         ("x" * 60, "x" * 40),

@@ -137,18 +137,37 @@ class RunLocks(Protocol):
 
 
 class InProcessRunLocks:
-    """One lock per run ID. With one worker process this closes the create race (design §2.2)."""
+    """One lock per run ID. With one worker process this closes the create race (design §2.2).
+
+    A run's lock is kept only while a request holds it or waits for it, so the map
+    holds the runs in flight, not every run ever seen.
+    """
 
     def __init__(self) -> None:
         self._guard = threading.Lock()
-        self._locks: dict[str, threading.Lock] = {}
+        # Each run's lock, and how many requests hold it or wait for it.
+        self._locks: dict[str, tuple[threading.Lock, int]] = {}
+
+    def __len__(self) -> int:
+        """How many runs have a request holding or waiting for their lock."""
+        with self._guard:
+            return len(self._locks)
 
     @contextmanager
     def hold(self, run_id: str) -> Iterator[None]:
         with self._guard:
-            lock = self._locks.setdefault(run_id, threading.Lock())
-        with lock:
-            yield
+            lock, users = self._locks.get(run_id, (threading.Lock(), 0))
+            self._locks[run_id] = (lock, users + 1)
+        try:
+            with lock:
+                yield
+        finally:
+            with self._guard:
+                lock, users = self._locks[run_id]
+                if users == 1:
+                    del self._locks[run_id]  # nobody else holds it or waits for it
+                else:
+                    self._locks[run_id] = (lock, users - 1)
 
 
 def utc_now() -> datetime:

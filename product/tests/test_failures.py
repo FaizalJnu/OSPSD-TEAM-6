@@ -597,6 +597,37 @@ def test_per_run_lock_serializes():
     assert world.calls(world.calendar, "create") == 1
 
 
+def test_the_lock_map_is_empty_after_concurrent_requests_for_a_run_finish():
+    locks = SignallingLocks()
+    world = World(locks=locks)
+    in_flight: list[int] = []
+
+    def wait_for_the_second() -> None:
+        locks.second_is_waiting.wait(timeout=5)
+        in_flight.append(len(locks.inner))  # one holds the run's lock, one waits for it
+
+    world.tracker_steps.on_create = wait_for_the_second
+    threads = [threading.Thread(target=world.run) for _ in range(2)]
+
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert in_flight == [1]
+    assert len(locks.inner) == 0
+
+
+def test_a_lock_is_released_from_the_map_even_when_the_run_fails(world):
+    locks = InProcessRunLocks()
+    world.orchestrator.locks = locks
+    world.storage.failures.fail_next("create", UNAVAILABLE)
+
+    world.fails()
+
+    assert len(locks) == 0
+
+
 # --- A bug ---
 
 

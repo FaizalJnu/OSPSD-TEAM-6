@@ -15,9 +15,9 @@ _NOT_SLUG = re.compile(r"[^a-z0-9]+")
 def slug(title: str) -> str:
     """Lowercase ASCII letters and digits; anything else becomes one "-". At most 40 characters.
 
-    A trailing "-" is removed, and a title with nothing left becomes "review".
+    A leading or trailing "-" is removed, and a title with nothing left becomes "review".
     """
-    text = _NOT_SLUG.sub("-", title.lower())[:SLUG_LENGTH].rstrip("-")
+    text = _NOT_SLUG.sub("-", title.lower()).lstrip("-")[:SLUG_LENGTH].rstrip("-")
     return text or "review"
 
 

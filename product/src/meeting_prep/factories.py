@@ -122,6 +122,11 @@ def build_implementations(
     )
 
 
+def build_user_storage(env: Mapping[str, str] = os.environ) -> DocumentStorage:
+    """Build the dedicated product bucket for user-prefixed document access."""
+    return _build("USER_STORAGE_PROVIDER", "team6-s3", STORAGE_BUILDERS, env)
+
+
 def _build[T](
     variable: str, name: str, builders: Mapping[str, Builder[T]], env: Mapping[str, str]
 ) -> T:

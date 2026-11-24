@@ -204,6 +204,16 @@ def _probe(check: Callable[[], object]) -> str:
 
 
 def _fail(error: ReviewMeetingError, *, exception_type: str | None = None) -> JSONResponse:
+    log_failure(error, exception_type=exception_type)
+    headers = {}
+    if error.retry_after is not None:
+        headers["Retry-After"] = str(error.retry_after)
+    if error.code == "unauthorized":
+        headers["WWW-Authenticate"] = "Bearer"
+    return JSONResponse(error.body(), status_code=_STATUS[error.code], headers=headers)
+
+
+def log_failure(error: ReviewMeetingError, *, exception_type: str | None = None) -> None:
     run = error.run or {}
     logger.warning(
         "%s",
@@ -221,9 +231,3 @@ def _fail(error: ReviewMeetingError, *, exception_type: str | None = None) -> JS
             }
         ),
     )
-    headers = {}
-    if error.retry_after is not None:
-        headers["Retry-After"] = str(error.retry_after)
-    if error.code == "unauthorized":
-        headers["WWW-Authenticate"] = "Bearer"
-    return JSONResponse(error.body(), status_code=_STATUS[error.code], headers=headers)

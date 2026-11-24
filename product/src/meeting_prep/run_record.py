@@ -91,11 +91,11 @@ class RunRecord:
         return replace(self, state="completed", updated_at=_whole_seconds(now))
 
 
-def run_id_for(request: MeetingRequest) -> str:
-    """First 12 hex characters of SHA-256 over the request's canonical JSON (design §1.3).
+def request_token(request: MeetingRequest) -> str:
+    """The full SHA-256 (64 hex characters) of the request's canonical JSON (design §1.3).
 
     The times are already in UTC, so requests that differ only in their offset get the
-    same run ID.
+    same token. Tagged tracker recovery (design §2.3) searches for it.
     """
     canonical = json.dumps(
         {
@@ -108,7 +108,12 @@ def run_id_for(request: MeetingRequest) -> str:
         separators=(",", ":"),
         ensure_ascii=False,
     ).encode("utf-8")
-    return hashlib.sha256(canonical).hexdigest()[:RUN_ID_LENGTH]
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def run_id_for(request: MeetingRequest) -> str:
+    """The run ID: the first 12 characters of the request's token."""
+    return request_token(request)[:RUN_ID_LENGTH]
 
 
 def record_path(run_id: str) -> str:

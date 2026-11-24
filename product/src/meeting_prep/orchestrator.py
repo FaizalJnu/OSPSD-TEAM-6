@@ -8,8 +8,8 @@ Design §1.3 traces one run, §2.2 and §2.3 give the lease and the resume rules
 1. claim_run: create the run record. If it exists, read it and resume: a completed
    run is replayed, a live lease is ``run_in_progress``, and an unknown calendar
    outcome is ``outcome_unknown``.
-2. create_issue: first search for the marker if an earlier attempt may have made
-   the card.
+2. create_issue: if an earlier attempt may have made the card, look for it first:
+   by the request's token with the tagged pair, or else by the title marker.
 3. create_event: never retried once its outcome is unknown.
 4. write_agenda, then 5. finish_run, which marks the record completed.
 
@@ -52,6 +52,7 @@ from meeting_prep.run_record import (
     meeting_title,
     new_record,
     record_path,
+    request_token,
     run_id_for,
     to_bytes,
 )
@@ -61,7 +62,8 @@ AGENDA_ITEMS = 20
 AGENDA_ITEM_LENGTH = 200
 LONGEST_MEETING = timedelta(hours=8)
 FURTHEST_START = timedelta(days=365)
-# Recovery looks at the newest cards only; the test list is dedicated to this service.
+# The marker fallback looks at the newest open cards only; the test list is
+# dedicated to this service.
 ISSUE_SEARCH_LIMIT = 100
 
 _FIELDS = ("title", "start", "end", "agenda")
@@ -318,18 +320,32 @@ class _Attempt:
         self._take_lease("create_issue")
         issue_id = self._find_issue() if search else None
         if issue_id is None:
+            tracker = self.deps.tracker
+            title = meeting_title(self.request, self.run_id)  # the marker, either way
             try:
-                issue_id = self.deps.tracker.create_issue(meeting_title(self.request, self.run_id))
+                if tracker.tagged:
+                    token = request_token(self.request)
+                    issue_id = tracker.create_tagged_issue("create_issue", title, token)
+                else:
+                    issue_id = tracker.create_issue(title)
             except StepError as error:
                 self._record_partner_failure("create_issue", error)
                 raise self._failure(error) from None
         self._finish_partner_step("create_issue", issue_id, then="create_event")
 
     def _find_issue(self) -> str | None:
-        """Recovery (design §2.3): the newest cards, searched for this run's marker."""
-        wanted = marker(self.run_id)
+        """Recovery (design §2.3 step 2): find the card an earlier attempt may have made.
+
+        With the tagged pair, look up the request's full token, which also finds an
+        archived or renamed card. Without it, search the newest open cards for this
+        run's title marker, which assumes the card stays open, keeps its title and stays
+        among the newest 100 until the retry.
+        """
+        tracker = self.deps.tracker
         try:
-            issues = self.deps.tracker.list_issues(ISSUE_SEARCH_LIMIT)
+            if tracker.tagged:
+                return tracker.find_tagged_issue("create_issue", request_token(self.request))
+            issues = tracker.list_issues(ISSUE_SEARCH_LIMIT)
         except StepError as error:
             # The earlier attempt's card may still exist, so the step stays unknown.
             self._save_once(
@@ -337,6 +353,7 @@ class _Attempt:
                 self._current().with_step("create_issue", "unknown", self.deps.clock()),
             )
             raise self._failure(error, may_have_applied=True) from None
+        wanted = marker(self.run_id)
         return next((issue.id for issue in issues if wanted in issue.title), None)
 
     def _create_event(self) -> None:
@@ -564,7 +581,7 @@ def _retryable(step: Step, code: str, may_have_applied: bool, adapter_says: bool
     if step == "create_event" and may_have_applied:
         return False  # the run stops at outcome_unknown
     if step == "create_issue" and may_have_applied:
-        return True  # recovery finds the card by its marker
+        return True  # recovery finds the card by its token or its marker
     if step in _STORAGE_STEPS:
         return True  # repeating a claim, an agenda or a finish is harmless
     return adapter_says  # a refused partner write: retryable if the provider says so

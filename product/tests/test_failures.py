@@ -36,10 +36,18 @@ from meeting_prep.run_record import (
     meeting_title,
     new_record,
     record_path,
+    request_token,
     run_id_for,
     to_bytes,
 )
-from tests.fake_adapters import START, CalendarSteps, FakeClock, StorageSteps, TrackerSteps
+from tests.fake_adapters import (
+    START,
+    CalendarSteps,
+    FakeClock,
+    FakeTaggedTracker,
+    StorageSteps,
+    TrackerSteps,
+)
 
 TITLE = "Storage v0.2.0 release review"
 BODY = {
@@ -58,8 +66,9 @@ UNAVAILABLE = ProviderUnavailableError("down")
 class World:
     """The three fakes, their adapters, a clock and the orchestrator over them."""
 
-    def __init__(self, locks: object | None = None) -> None:
-        self.storage, self.tracker, self.calendar = FakeStorage(), FakeTracker(), FakeCalendar()
+    def __init__(self, locks: object | None = None, tracker: FakeTracker | None = None) -> None:
+        self.storage, self.calendar = FakeStorage(), FakeCalendar()
+        self.tracker = tracker if tracker is not None else FakeTracker()
         self.storage_steps = StorageSteps(self.storage)
         self.tracker_steps = TrackerSteps(self.tracker)
         self.clock = FakeClock(START)
@@ -269,8 +278,52 @@ def test_tracker_refuses(world, code, expected):
     assert_completed_once(world, world.run())
 
 
+TOKEN = request_token(REQUEST)
+
+
+@pytest.mark.parametrize("then", ["left alone", "archived", "renamed"])
 @pytest.mark.parametrize("card_was_made", [True, False], ids=["card made", "no card"])
-def test_tracker_lost_response_adopts_card(world, card_was_made):
+def test_tracker_lost_response_adopts_card(card_was_made, then):
+    """With the tagged pair, recovery looks up the full token: archiving or renaming the
+    card cannot cause a duplicate (design §2.3 step 2)."""
+    tracker = FakeTaggedTracker()
+    world = World(tracker=tracker)
+    assert world.tracker_steps.tagged
+    lost = ServiceError(TrackerCode.PROVIDER_ERROR, "no response", may_have_applied=True)
+    tracker.failures.fail_next("create_tagged_issue", lost, applied=card_was_made)
+
+    error = world.fails()
+
+    assert (error.code, error.step) == ("provider_error", "create_issue")
+    assert (error.retryable, error.may_have_applied) == (True, True)
+    assert error.run is not None and error.run["status"] == "partial"
+    assert world.record().step("create_issue").state == "unknown"
+    # The title carries the marker, and the token is the full 64-character hash.
+    assert tracker.calls[0].args == (meeting_title(REQUEST, RUN_ID), TOKEN)
+    assert len(TOKEN) == 64 and TOKEN.startswith(RUN_ID)
+    if card_was_made:
+        (card,) = tracker.issues
+        if then == "archived":
+            tracker.archive(card)
+        elif then == "renamed":
+            tracker.rename(card, "Sprint review")
+    tracker.calls.clear()
+
+    result = world.run()
+
+    assert result.run["status"] == "completed"
+    cards = [*tracker.issues, *tracker.archived]
+    assert len(cards) == 1 and result.run["issue"] == {"id": cards[0]}
+    assert len(world.calendar.events) == 1
+    expected = ["find_tagged_issue"] + ([] if card_was_made else ["create_tagged_issue"])
+    assert tracker.operations_called() == expected
+    assert "list_issues" not in tracker.operations_called()
+
+
+@pytest.mark.parametrize("card_was_made", [True, False], ids=["card made", "no card"])
+def test_tracker_lost_response_without_tagged_methods(world, card_was_made):
+    """Without the tagged pair, recovery searches the newest open cards for the marker."""
+    assert not world.tracker_steps.tagged
     lost = ServiceError(TrackerCode.PROVIDER_ERROR, "no response", may_have_applied=True)
     world.tracker.failures.fail_next("create_issue", lost, applied=card_was_made)
 
@@ -287,6 +340,8 @@ def test_tracker_lost_response_adopts_card(world, card_was_made):
     assert_completed_once(world, result)
     expected = ["list_issues"] if card_was_made else ["list_issues", "create_issue"]
     assert world.tracker.operations_called() == expected
+    (card,) = world.tracker.issues.values()
+    assert card.title == meeting_title(REQUEST, RUN_ID)  # the marker the search found
 
 
 def test_a_failed_search_leaves_the_issue_unknown(world):

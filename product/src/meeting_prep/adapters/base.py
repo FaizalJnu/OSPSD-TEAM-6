@@ -73,7 +73,27 @@ class StorageAdapter(Protocol):
 
 
 class TrackerAdapter(Protocol):
-    """The issue tracker. Every error names the step ``create_issue``."""
+    """The issue tracker. Every error names the step ``create_issue``.
+
+    Team 4's package also has ``create_tagged_issue(title, token)`` and
+    ``find_tagged_issue(token)``, outside the contract (design §2.3 step 2). The
+    adapter checks for both when it is built and reports the answer in ``tagged``.
+    The orchestrator calls the tagged pair only when ``tagged`` is true; otherwise
+    it falls back to ``create_issue`` and the title marker search.
+    """
+
+    @property
+    def tagged(self) -> bool:
+        """Whether the implementation has the tagged pair, decided when the adapter was built."""
+        ...
+
+    def create_tagged_issue(self, step: Step, title: str, token: str) -> str:
+        """Create an issue with this title, tagged with ``token``, and return its ID."""
+        ...
+
+    def find_tagged_issue(self, step: Step, token: str) -> str | None:
+        """The ID of the issue tagged with ``token``, archived or renamed included, or None."""
+        ...
 
     def create_issue(self, title: str) -> str:
         """Create an issue with exactly this title and return its ID."""

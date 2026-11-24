@@ -33,6 +33,7 @@ CI also runs the Postgres migration tests (see Tests).
 | `src/meeting_prep/agenda.py` | Pure: the agenda's path and Markdown bytes. The same inputs always give the same bytes | Vikram |
 | `src/meeting_prep/adapters/base.py` | `StepError` and the storage, tracker and calendar protocols the orchestrator calls. The adapters implement them | Vikram (interface); Darsh (adapters) |
 | `scripts/resolve_run.py` | Records an operator's answer for a run stopped at `outcome_unknown`: `--event-id <id>` or `--no-event` | Vikram |
+| `src/meeting_prep/agent/` | The agent: `model.py` (`ModelClient`, `GroqModel` from `GROQ_API_KEY` and `AGENT_MODEL`, and `ScriptedModel` for tests), `tools.py` (tool registry with validated pydantic arguments), `loop.py` (the loop, its limits and stop reasons). Never imports the registry, adapters, orchestrator or fakes; the model, tools and loop import no web framework | Vikram |
 | `tests/test_import_boundary.py` | Who may import what. Read it before adding a package | |
 
 Packages the import rules already expect:

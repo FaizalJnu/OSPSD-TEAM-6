@@ -1353,7 +1353,9 @@ dependencies = [
     { name = "calendar-contract" },
     { name = "cloud-storage-api" },
     { name = "fastapi" },
+    { name = "google-auth" },
     { name = "groq" },
+    { name = "httpx2" },
     { name = "issue-tracker-contract" },
     { name = "psycopg", extra = ["binary"] },
     { name = "sqlalchemy" },
@@ -1365,7 +1367,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "httpx2" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "ruff" },
@@ -1377,7 +1378,9 @@ requires-dist = [
     { name = "calendar-contract", git = "https://github.com/Airbus-A330/OSPSD-Calendar.git?rev=v0.1.0" },
     { name = "cloud-storage-api", git = "https://github.com/Dayana20/ospsd26-cloud-storage?subdirectory=src%2Fcloud_storage_api&rev=0.3.1" },
     { name = "fastapi", specifier = ">=0.165.0" },
+    { name = "google-auth", specifier = ">=2.59.1" },
     { name = "groq", specifier = ">=1.7.0" },
+    { name = "httpx2", specifier = ">=2.13.1" },
     { name = "issue-tracker-contract", git = "https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git?subdirectory=contract&rev=issue-tracker-contract-v1.1.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
     { name = "sqlalchemy", specifier = ">=2.1" },
@@ -1389,7 +1392,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "httpx2", specifier = ">=2.13.1" },
     { name = "mypy", specifier = ">=2.4.0" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "ruff", specifier = ">=0.16.10" },

@@ -5,6 +5,8 @@ It passes the contract's own conformance suite
 contract tells clients to compare instants, not strings.
 """
 
+from datetime import datetime
+
 from calendar_contract import (
     CalendarError,
     CalendarService,
@@ -20,7 +22,7 @@ from meeting_prep.fakes._failures import FakeBase
 class FakeCalendar(FakeBase, CalendarService):
     """Events in a dict keyed by ID."""
 
-    OPERATIONS = frozenset({"create", "get", "replace", "delete"})
+    OPERATIONS = frozenset({"create", "get", "replace", "delete", "list_upcoming"})
 
     def __init__(self) -> None:
         super().__init__()
@@ -42,6 +44,17 @@ class FakeCalendar(FakeBase, CalendarService):
             event = self._lookup(event_id)
             self._finish(failure)
             return event
+
+    def list_upcoming(self, start: datetime, end: datetime) -> list[Event]:
+        with self._lock:
+            failure = self._start("list_upcoming", start, end)
+            matching = [
+                event
+                for event in self.events.values()
+                if start <= datetime.fromisoformat(event.start) < end
+            ]
+            self._finish(failure)
+            return sorted(matching, key=lambda event: datetime.fromisoformat(event.start))
 
     def replace(self, event_id: str, request: ReplaceEvent) -> Event:
         with self._lock:

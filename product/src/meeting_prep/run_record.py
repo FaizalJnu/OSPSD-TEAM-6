@@ -96,7 +96,7 @@ def run_id_for(request: MeetingRequest) -> str:
     return creation_token_for(request)[:RUN_ID_LENGTH]
 
 
-def creation_token_for(request: MeetingRequest) -> str:
+def creation_token_for(request: MeetingRequest, *, user_id: str = "") -> str:
     """Full SHA-256 of the canonical request for the tracker create and lookup.
 
     The times are already in UTC, so requests that differ only in their offset get the
@@ -113,7 +113,8 @@ def creation_token_for(request: MeetingRequest) -> str:
         separators=(",", ":"),
         ensure_ascii=False,
     ).encode("utf-8")
-    return hashlib.sha256(canonical).hexdigest()
+    namespace = user_id.encode() + b"\0" if user_id else b""
+    return hashlib.sha256(namespace + canonical).hexdigest()
 
 
 def record_path(run_id: str) -> str:

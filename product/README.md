@@ -28,6 +28,11 @@ CI also runs the Postgres migration tests (see Tests).
 | `src/meeting_prep/factories.py` | The implementation registry: builds the storage, tracker and calendar that `*_PROVIDER` name. The only module that imports an implementation package | Faizal |
 | `src/meeting_prep/fakes/` | In-memory storage, tracker and calendar that follow their contracts, record calls and fail on request | Faizal |
 | `src/meeting_prep/db/` | Database engine, the table base, Alembic migrations. The only package that imports SQLAlchemy | Faizal (setup); each table's owner |
+| `src/meeting_prep/orchestrator.py` | `POST /v1/review-meetings` without the web: step 0 validation, claim, the lease and the 20 s guard, the steps in order, resume, and the response built from the run record. Raises `ReviewMeetingError` with the operation's codes | Vikram |
+| `src/meeting_prep/run_record.py` | Pure: the request's run ID, the run record's JSON (design §1.6), the step states, and the lease and resume rules | Vikram |
+| `src/meeting_prep/agenda.py` | Pure: the agenda's path and Markdown bytes. The same inputs always give the same bytes | Vikram |
+| `src/meeting_prep/adapters/base.py` | `StepError` and the storage, tracker and calendar protocols the orchestrator calls. The adapters implement them | Vikram (interface); Darsh (adapters) |
+| `scripts/resolve_run.py` | Records an operator's answer for a run stopped at `outcome_unknown`: `--event-id <id>` or `--no-event` | Vikram |
 | `tests/test_import_boundary.py` | Who may import what. Read it before adding a package | |
 
 Packages the import rules already expect:

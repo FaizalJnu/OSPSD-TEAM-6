@@ -10,6 +10,7 @@ the prompt, and its errors name only the failure's type and status.
 """
 
 import os
+import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
@@ -66,6 +67,14 @@ class Usage:
 
 
 @dataclass(frozen=True)
+class RateLimit:
+    """The provider's own count after a call: tokens left this minute, and when it resets."""
+
+    remaining_tokens: int
+    reset_seconds: float
+
+
+@dataclass(frozen=True)
 class ModelResponse:
     """Text, or tool calls (a response with tool calls is not an answer yet)."""
 
@@ -74,6 +83,7 @@ class ModelResponse:
     usage: Usage
     model: str
     finish_reason: str
+    rate_limit: RateLimit | None = None
 
 
 class ModelError(Exception):
@@ -196,8 +206,8 @@ class GroqModel:
         if tools:
             request["tools"] = [_groq_tool(tool) for tool in tools]
         try:
-            completion = await self.client.chat.completions.create(**request)
-            return _response(completion)
+            raw = await self.client.chat.completions.with_raw_response.create(**request)
+            return _response(await raw.parse(), _rate_limit(raw.headers))
         except groq.RateLimitError as error:
             raise ModelRateLimited(
                 "the model provider's rate limit was reached", _retry_after(error)
@@ -237,7 +247,32 @@ def _groq_tool(tool: ToolSpec) -> dict[str, object]:
     }
 
 
-def _response(completion: Any) -> ModelResponse:
+def _rate_limit(headers: Mapping[str, str]) -> RateLimit | None:
+    """Groq's x-ratelimit-remaining-tokens and x-ratelimit-reset-tokens, when both parse."""
+    remaining = headers.get("x-ratelimit-remaining-tokens")
+    reset = _duration_seconds(headers.get("x-ratelimit-reset-tokens"))
+    if remaining is None or reset is None or not remaining.isdigit():
+        return None
+    return RateLimit(int(remaining), reset)
+
+
+_DURATION = re.compile(
+    r"(?:(\d+(?:\.\d+)?)h)?(?:(\d+(?:\.\d+)?)m(?!s))?(?:(\d+(?:\.\d+)?)s)?(?:(\d+(?:\.\d+)?)ms)?"
+)
+
+
+def _duration_seconds(text: str | None) -> float | None:
+    """Seconds from a Groq duration such as "7.66s", "2m59.56s", "1h2m" or "120ms"."""
+    if not text:
+        return None
+    match = _DURATION.fullmatch(text.strip())
+    if match is None or not any(match.groups()):
+        return None
+    hours, minutes, seconds, millis = (float(part or 0) for part in match.groups())
+    return hours * 3600 + minutes * 60 + seconds + millis / 1000
+
+
+def _response(completion: Any, rate_limit: RateLimit | None = None) -> ModelResponse:
     choice = completion.choices[0]
     calls = tuple(
         ToolCall(call.id, call.function.name, call.function.arguments)
@@ -253,6 +288,7 @@ def _response(completion: Any) -> ModelResponse:
         ),
         model=completion.model,
         finish_reason=choice.finish_reason or "",
+        rate_limit=rate_limit,
     )
 
 

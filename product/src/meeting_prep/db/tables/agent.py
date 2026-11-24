@@ -22,6 +22,8 @@ class Conversation(Base):
 
     id: Mapped[str] = mapped_column(ID, primary_key=True)
     user_id: Mapped[str] = mapped_column(USER_ID, index=True)
+    # The user's IANA time zone, for the current date the model is told on each run.
+    time_zone: Mapped[str] = mapped_column(String(64), server_default="UTC")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 

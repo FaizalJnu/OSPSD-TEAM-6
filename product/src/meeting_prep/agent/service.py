@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from importlib.resources import files
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from meeting_prep.agent.api_client import ActionOutcome, ApiClient, ApiError
 from meeting_prep.agent.loop import AgentResult, Limits, StepRecord, run
@@ -28,12 +29,31 @@ from meeting_prep.agent.tools_meeting import meeting_tools
 from meeting_prep.db.agent_store import AgentStore, ConversationRecord, new_id
 
 DEFAULT_LIMITS = Limits(max_steps=8, max_seconds=60, max_total_tokens=6_000)
-PROMPT_VERSION = "system_v1"
+PROMPT_VERSION = "system_v2"
 MESSAGE_CHARACTERS = 4_000
 
 
 def system_prompt(version: str = PROMPT_VERSION) -> str:
     return files("meeting_prep.agent").joinpath(f"prompts/{version}.md").read_text("utf-8")
+
+
+def valid_time_zone(name: str) -> str:
+    """An IANA time zone name, or AgentError invalid_request."""
+    try:
+        ZoneInfo(name)
+    except ZoneInfoNotFoundError, ValueError:
+        raise AgentError("invalid_request", "time_zone: not an IANA time zone name") from None
+    return name
+
+
+def current_date_line(now: datetime, time_zone: str) -> str:
+    """The date, weekday and time the model is told at the start of every run."""
+    local = now.astimezone(ZoneInfo(time_zone))
+    offset = local.strftime("%z")
+    return (
+        f"Current date and time for the user: {local:%A} {local:%Y-%m-%d} {local:%H:%M} "
+        f"in {time_zone} (UTC{offset[:3]}:{offset[3:]})."
+    )
 
 
 class AgentError(Exception):
@@ -82,8 +102,9 @@ class AgentService:
 
     # --- Conversations ---
 
-    def create_conversation(self, user: str) -> ConversationRecord:
-        return self.store.create_conversation(user, self.now())
+    def create_conversation(self, user: str, time_zone: str) -> ConversationRecord:
+        """A new conversation in the user's IANA time zone, such as America/New_York."""
+        return self.store.create_conversation(user, valid_time_zone(time_zone), self.now())
 
     def conversation(
         self, user: str, conversation_id: str
@@ -94,7 +115,7 @@ class AgentService:
 
     async def send_message(self, user: str, conversation_id: str, text: str) -> Reply:
         """Run the loop on the conversation plus ``text``, and save both and the run."""
-        self._conversation(user, conversation_id)
+        conversation = self._conversation(user, conversation_id)
         async with self._lock(f"conversation:{conversation_id}"):
             history = self.store.messages(user, conversation_id)
             said = Message("user", text)
@@ -108,7 +129,8 @@ class AgentService:
                 made.append(proposal)
                 return proposal
 
-            prompt = [Message("system", self.prompt), *history, said]
+            today = current_date_line(self.now(), conversation.time_zone)
+            prompt = [Message("system", self.prompt), Message("system", today), *history, said]
             registry = meeting_tools(self.api, user, propose, self.now)
             result = await run(prompt, self.model, registry, self.limits, clock=self.clock)
 

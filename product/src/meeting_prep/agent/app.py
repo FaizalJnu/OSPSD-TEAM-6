@@ -4,7 +4,7 @@ Every endpoint acts for the user ``current_user`` returns. Sign-in provides it; 
 it is wired, it fails closed with 401. Another user's IDs return 404, exactly like IDs
 that do not exist. Errors use our body: ``{"error": {"code", "message"}}``.
 
-    POST /v1/conversations
+    POST /v1/conversations                   {"time_zone": "America/New_York"}
     GET  /v1/conversations/{id}
     POST /v1/conversations/{id}/messages     {"text": ...}
     GET  /v1/proposals/{id}
@@ -54,6 +54,10 @@ class _Body(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class NewConversation(_Body):
+    time_zone: str = Field(min_length=1, max_length=64, description="IANA, e.g. America/New_York")
+
+
 class NewMessage(_Body):
     text: str = Field(min_length=1, max_length=MESSAGE_CHARACTERS)
 
@@ -66,10 +70,11 @@ def create_app(service: AgentService) -> FastAPI:
     app = FastAPI(title="Meeting prep agent")
 
     @app.post("/v1/conversations", status_code=201)
-    def create_conversation(user: CurrentUser) -> dict[str, object]:
-        record = service.create_conversation(user)
+    def create_conversation(body: NewConversation, user: CurrentUser) -> dict[str, object]:
+        record = service.create_conversation(user, body.time_zone)
         return {
             "id": record.id,
+            "time_zone": record.time_zone,
             "created_at": record.created_at.isoformat(),
             "messages": [],
             "pending_proposal": None,
@@ -80,6 +85,7 @@ def create_app(service: AgentService) -> FastAPI:
         record, messages, pending = service.conversation(user, conversation_id)
         return {
             "id": record.id,
+            "time_zone": record.time_zone,
             "created_at": record.created_at.isoformat(),
             "messages": _visible(messages),
             "pending_proposal": None if pending is None else proposal_view(pending),

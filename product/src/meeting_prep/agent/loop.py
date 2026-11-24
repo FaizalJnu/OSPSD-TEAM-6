@@ -98,6 +98,8 @@ class AgentResult:
     model_calls: int
     duration_seconds: float
     retry_after: float | None = None
+    # Why a model_error or rate_limited run stopped. It names the failure's type only.
+    error: str | None = None
     # The conversation as the loop left it, to continue or save. Kept out of repr.
     messages: tuple[Message, ...] = field(default=(), repr=False)
 
@@ -150,6 +152,7 @@ class _Run:
         self.model_id: str | None = None
         self.model_calls = 0
         self.retry_after: float | None = None
+        self.error: str | None = None
 
     async def loop(self) -> AgentResult:
         tools = self.registry.specs()
@@ -168,9 +171,10 @@ class _Run:
             except TimeoutError:
                 return self.result("timeout")
             except ModelRateLimited as error:
-                self.retry_after = error.retry_after
+                self.retry_after, self.error = error.retry_after, str(error)
                 return self.result("rate_limited")
-            except ModelError:
+            except ModelError as error:
+                self.error = str(error)
                 return self.result("model_error")
 
             self.model_calls += 1
@@ -253,6 +257,7 @@ class _Run:
             model_calls=self.model_calls,
             duration_seconds=self.clock() - self.started,
             retry_after=self.retry_after,
+            error=self.error,
             messages=tuple(self.messages),
         )
 

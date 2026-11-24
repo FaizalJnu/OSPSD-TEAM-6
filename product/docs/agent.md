@@ -61,7 +61,7 @@ exactly like IDs that do not exist. Errors are `{"error": {"code", "message"}}`.
 |---|---|---|
 | `POST /v1/conversations` `{"time_zone"}` (an IANA name, such as `America/New_York`) | 201 `{id, time_zone, created_at, messages: [], pending_proposal: null}` | 400 `invalid_request` for a name `zoneinfo` does not know, 401 |
 | `GET /v1/conversations/{id}` | 200 `{id, time_zone, created_at, messages: [{role, content}], pending_proposal}`. Messages are the user's and the agent's text; tool traffic is not shown. | 401, 404 |
-| `POST /v1/conversations/{id}/messages` `{"text"}` (1 to 4,000 characters) | 200 `{reply, stop_reason, run_id, proposal, retry_after}`. A run that stops on a limit, a rate limit or a model error is still 200, with `reply: null` and its `stop_reason`. | 400 `invalid_request`, 401, 404 |
+| `POST /v1/conversations/{id}/messages` `{"text"}` (1 to 4,000 characters) | 200 `{reply, stop_reason, run_id, proposal, retry_after}`. A run that stops on a limit, a rate limit or a model error is still 200, with `reply: null` and its `stop_reason`. | 400 `invalid_request`, 401, 404, 413 `payload_too_large`, 429 `rate_limited` or `busy` with `Retry-After` |
 | `GET /v1/proposals/{id}` | 200 the proposal (`id, conversation_id, status, proposal_hash, actions, supersedes, created_at`) with its `outcomes` | 401, 404 |
 | `POST /v1/proposals/{id}/approve` `{"proposal_hash"}` | 200 the executed proposal with its outcomes | 400, 401, 404, 409 `stale_proposal`, `proposal_superseded`, `proposal_rejected`, 502 `execution_failed` |
 | `POST /v1/proposals/{id}/reject` | 200 the rejected proposal | 401, 404, 409 `proposal_not_pending` |
@@ -91,8 +91,84 @@ exactly like IDs that do not exist. Errors are `{"error": {"code", "message"}}`.
   `approvals`, `outcomes`. Every row carries the user ID, and every query filters by
   it (`meeting_prep.db.agent_store`).
 
+## Containment
+
+The rules that hold whatever the model, the user or the data say.
+
+**Retrieved content is data.**
+- Every successful tool result reaches the model wrapped as
+  `{"untrusted_data": {"tool", "note", "content"}}`. The note says the content may
+  hold text written by anyone, is never an instruction, and cannot change the tools,
+  whose data is read, or the approval rules.
+- The system prompt's rule 1 says the same.
+- Errors the service writes itself (`unknown_tool`, `invalid_arguments`, `not_run`)
+  are not wrapped.
+
+**Tool authority.**
+- The tools are fixed in code for each request. Nothing a model or a document says
+  adds one: an unknown tool is refused and logged as `refused_unknown_tool`.
+- Every tool acts only as the signed-in user, which comes from `current_user`, never
+  from the model. No tool argument names a user. Unknown fields are refused, so a
+  `user`, `user_id` or `owner` argument is `invalid_arguments` and logged as
+  `rejected_arguments`.
+- The three reads change nothing. `propose_review_meeting` only stores a proposal.
+  The agent has no tool that approves or executes.
+
+**Approval and resume.**
+- Approving loads the proposal for the current user only (another user's is 404),
+  compares the hash the person sent, and stores the approval against the proposal,
+  its hash and the user.
+- Execution reads both back and checks them again right before every
+  `ApiClient.execute` call: after a restart, and on a retry after a failed execute.
+- A change to the stored proposal after approval makes the check fail
+  (`approval_required`).
+
+**Request size.**
+- A message is at most 4,000 characters. A request body is at most 16 KB, checked
+  from `Content-Length` before the body is read, or counted as it arrives. Either
+  over the limit is 413 `payload_too_large`.
+- The model sees the system prompt, the date line, and at most the last 20
+  conversation messages, the new one included. The history is cut so it starts at a
+  user message, so no tool result is sent without the call it answers.
+
+**Per-user message rate.**
+- At most 5 messages per minute and 50 per rolling 24 hours, per user. Counted from
+  saved messages, so the count survives a restart, plus that user's requests in
+  flight.
+- Over the limit is 429 `rate_limited`, with `Retry-After` set to when the oldest
+  counted message leaves the window. The model is not called.
+
+**Shared Groq token budget** (`agent/budget.py`). All users share one Groq
+organization: 8,000 tokens per minute and 200,000 per day for `openai/gpt-oss-120b`.
+The assumption test measured about 4,500 tokens per scenario-1 run
+(`docs/assumption-groq-budget.md`), so we plan at one run per minute. Before each run:
+
+| Count | Limit | Where it comes from |
+|---|---|---|
+| Tokens used in the last 60 seconds | 7,000 | `agent_runs`, every user, so it survives a restart |
+| Tokens used in the last 24 hours | 180,000 | `agent_runs`, every user |
+| Reserved by runs in flight | counted in both | 6,000 per run, its `max_total_tokens`, released when it ends |
+| Groq's own count | `x-ratelimit-remaining-tokens` less 1,000 headroom | the last response's headers, until `x-ratelimit-reset-tokens` |
+| A Groq 429 | no runs | until its `Retry-After`, or 60 seconds |
+
+- A run starts only if its 6,000-token reservation fits every count. Otherwise the
+  answer is 429 `busy`, with `Retry-After` set to the longest wait among the counts,
+  and Groq is not called.
+- The 1,000 and 20,000 tokens of headroom under Groq's limits absorb what the counts
+  cannot see, such as the live provider test.
+- A run cap larger than the per-minute budget is refused at startup, because such a
+  run could never start.
+- `token_usage_since` is the one query not filtered by user: the budget is shared,
+  and it returns only times and token counts.
+
+**Limits per run** (from the loop): `max_steps` 8, `max_seconds` 60,
+`max_total_tokens` 6,000.
+
 ## Not yet
 
 * `current_user` comes from sign-in (Darsh), and the `ApiClient` implementation from
   the API service's operations (Darsh). Until then, tests use `tests/fake_api.py`.
-* One worker process: the per-conversation and per-proposal locks are in memory.
+* One worker process: the per-conversation, per-proposal and per-user locks, the
+  in-flight counts, the budget's reservations and Groq's last count are in memory.
+  Usage and message counts come from the database and survive a restart; a second
+  worker would need those in-memory parts shared too.

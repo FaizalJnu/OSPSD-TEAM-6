@@ -10,6 +10,10 @@ that do not exist. Errors use our body: ``{"error": {"code", "message"}}``.
     GET  /v1/proposals/{id}
     POST /v1/proposals/{id}/approve          {"proposal_hash": ...}
     POST /v1/proposals/{id}/reject
+
+A request body over 16 KB, or a message over 4,000 characters, is 413. A user over
+their message limit is 429 ``rate_limited``, and a run that does not fit the shared
+token budget is 429 ``busy``; both set Retry-After and never call the model.
 """
 
 from typing import Annotated
@@ -19,9 +23,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.exceptions import HTTPException
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from meeting_prep.agent.api_client import ActionOutcome
-from meeting_prep.agent.model import Message
+from meeting_prep.agent.model import Message as ChatMessage
 from meeting_prep.agent.proposals import Proposal, proposal_view
 from meeting_prep.agent.service import MESSAGE_CHARACTERS, AgentError, AgentService
 
@@ -29,6 +34,9 @@ STATUS = {
     "invalid_request": 400,
     "unauthorized": 401,
     "not_found": 404,
+    "payload_too_large": 413,
+    "rate_limited": 429,
+    "busy": 429,
     "stale_proposal": 409,
     "proposal_superseded": 409,
     "proposal_rejected": 409,
@@ -36,6 +44,9 @@ STATUS = {
     "approval_required": 409,
     "execution_failed": 502,
 }
+
+
+BODY_BYTES = 16 * 1024
 
 
 class Unauthorized(Exception):
@@ -68,6 +79,7 @@ class Approve(_Body):
 
 def create_app(service: AgentService) -> FastAPI:
     app = FastAPI(title="Meeting prep agent")
+    app.add_middleware(BodyLimit, limit=BODY_BYTES)
 
     @app.post("/v1/conversations", status_code=201)
     def create_conversation(body: NewConversation, user: CurrentUser) -> dict[str, object]:
@@ -119,7 +131,8 @@ def create_app(service: AgentService) -> FastAPI:
     @app.exception_handler(AgentError)
     def agent_error(request: Request, error: Exception) -> JSONResponse:
         assert isinstance(error, AgentError)
-        return _error(STATUS.get(error.code, 500), error.code, error.message)
+        headers = None if error.retry_after is None else {"Retry-After": str(error.retry_after)}
+        return _error(STATUS.get(error.code, 500), error.code, error.message, headers)
 
     @app.exception_handler(Unauthorized)
     def unauthorized(request: Request, error: Exception) -> JSONResponse:
@@ -129,6 +142,8 @@ def create_app(service: AgentService) -> FastAPI:
     def invalid(request: Request, error: Exception) -> JSONResponse:
         assert isinstance(error, RequestValidationError)
         problem = error.errors()[0]
+        if problem["type"] == "string_too_long" and problem["loc"][-1] == "text":
+            return _too_large(f"text: at most {MESSAGE_CHARACTERS} characters")
         field = "body" if problem["type"] == "json_invalid" else problem["loc"][-1]
         return _error(400, "invalid_request", f"{field}: {problem['msg']}")
 
@@ -144,11 +159,61 @@ def create_app(service: AgentService) -> FastAPI:
     return app
 
 
-def _error(status: int, code: str, message: str) -> JSONResponse:
-    return JSONResponse(status_code=status, content={"error": {"code": code, "message": message}})
+def _error(
+    status: int, code: str, message: str, headers: dict[str, str] | None = None
+) -> JSONResponse:
+    content = {"error": {"code": code, "message": message}}
+    return JSONResponse(status_code=status, content=content, headers=headers)
 
 
-def _visible(messages: list[Message]) -> list[dict[str, object]]:
+def _too_large(message: str) -> JSONResponse:
+    return _error(413, "payload_too_large", message)
+
+
+class _BodyTooLarge(Exception):
+    pass
+
+
+class BodyLimit:
+    """Refuse a request body over ``limit`` bytes with 413, before anything reads it all.
+
+    A declared Content-Length is checked first; a body without one is counted as it
+    arrives.
+    """
+
+    def __init__(self, app: ASGIApp, limit: int) -> None:
+        self.app = app
+        self.limit = limit
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        declared = dict(scope["headers"]).get(b"content-length")
+        if declared is not None and declared.isdigit() and int(declared) > self.limit:
+            await self._refuse(scope, receive, send)
+            return
+        received = 0
+
+        async def counted() -> Message:
+            nonlocal received
+            message = await receive()
+            received += len(message.get("body", b""))
+            if received > self.limit:
+                raise _BodyTooLarge
+            return message
+
+        try:
+            await self.app(scope, counted, send)
+        except _BodyTooLarge:
+            await self._refuse(scope, receive, send)
+
+    async def _refuse(self, scope: Scope, receive: Receive, send: Send) -> None:
+        response = _too_large(f"the request body is over {self.limit} bytes")
+        await response(scope, receive, send)
+
+
+def _visible(messages: list[ChatMessage]) -> list[dict[str, object]]:
     """What a person sees of the conversation: their messages and the agent's answers."""
     return [
         {"role": message.role, "content": message.content}

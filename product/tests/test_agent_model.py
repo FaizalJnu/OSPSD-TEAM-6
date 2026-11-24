@@ -20,6 +20,7 @@ from meeting_prep.agent.model import (
     Message,
     ModelError,
     ModelRateLimited,
+    RateLimit,
     ToolCall,
     ToolSpec,
 )
@@ -49,26 +50,41 @@ def completion(message: dict[str, Any], finish: str = "stop", usage: bool = True
     )
 
 
-class StubCompletions:
-    def __init__(self, outcome: ChatCompletion | Exception) -> None:
-        self.outcome = outcome
-        self.requests: list[dict[str, Any]] = []
+class StubRaw:
+    """What ``with_raw_response.create`` returns: the headers, and an async ``parse()``."""
 
-    async def create(self, **request: Any) -> ChatCompletion:
+    def __init__(self, completion: ChatCompletion, headers: dict[str, str]) -> None:
+        self.headers = httpx.Headers(headers)
+        self.completion = completion
+
+    async def parse(self) -> ChatCompletion:  # async, as in the SDK's AsyncAPIResponse
+        return self.completion
+
+
+class StubCompletions:
+    def __init__(self, outcome: ChatCompletion | Exception, headers: dict[str, str]) -> None:
+        self.outcome = outcome
+        self.headers = headers
+        self.requests: list[dict[str, Any]] = []
+        self.with_raw_response = self
+
+    async def create(self, **request: Any) -> StubRaw:
         self.requests.append(request)
         if isinstance(self.outcome, Exception):
             raise self.outcome
-        return self.outcome
+        return StubRaw(self.outcome, self.headers)
 
 
 class StubClient:
-    def __init__(self, outcome: ChatCompletion | Exception) -> None:
-        self.completions = StubCompletions(outcome)
+    def __init__(self, outcome: ChatCompletion | Exception, headers: dict[str, str]) -> None:
+        self.completions = StubCompletions(outcome, headers)
         self.chat = self
 
 
-def model_over(outcome: ChatCompletion | Exception) -> tuple[GroqModel, StubCompletions]:
-    stub = StubClient(outcome)
+def model_over(
+    outcome: ChatCompletion | Exception, headers: dict[str, str] | None = None
+) -> tuple[GroqModel, StubCompletions]:
+    stub = StubClient(outcome, headers or {})
     return GroqModel("openai/gpt-oss-120b", cast(Any, stub)), stub.completions
 
 
@@ -154,6 +170,38 @@ def test_an_earlier_tool_call_and_its_result_are_sent_back_in_the_sdk_shape():
         },
         {"role": "tool", "tool_call_id": "call_1", "content": '{"result": {}}'},
     ]
+
+
+@pytest.mark.parametrize(
+    ("headers", "expected"),
+    [
+        (
+            {"x-ratelimit-remaining-tokens": "3512", "x-ratelimit-reset-tokens": "7.66s"},
+            RateLimit(3512, 7.66),
+        ),
+        (
+            {"x-ratelimit-remaining-tokens": "0", "x-ratelimit-reset-tokens": "2m59.5s"},
+            RateLimit(0, 179.5),
+        ),
+        (
+            {"x-ratelimit-remaining-tokens": "10", "x-ratelimit-reset-tokens": "120ms"},
+            RateLimit(10, 0.12),
+        ),
+        ({"x-ratelimit-remaining-tokens": "10", "x-ratelimit-reset-tokens": "soon"}, None),
+        ({"x-ratelimit-remaining-tokens": "-1", "x-ratelimit-reset-tokens": "1s"}, None),
+        ({}, None),
+    ],
+)
+def test_groqs_token_count_is_read_from_the_response_headers(headers, expected):
+    model, _ = model_over(completion({"role": "assistant", "content": "ok"}), headers)
+
+    rate_limit = complete(model).rate_limit
+
+    if expected is None:
+        assert rate_limit is None
+    else:
+        assert rate_limit.remaining_tokens == expected.remaining_tokens
+        assert rate_limit.reset_seconds == pytest.approx(expected.reset_seconds)
 
 
 def test_missing_usage_counts_as_zero():

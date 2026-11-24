@@ -22,6 +22,13 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from meeting_prep.agent.api_client import ActionOutcome, ApiClient, ApiError
+from meeting_prep.agent.budget import (
+    DAY,
+    BudgetLimits,
+    MessageLimits,
+    TokenBudget,
+    message_retry_after,
+)
 from meeting_prep.agent.loop import AgentResult, Limits, StepRecord, run
 from meeting_prep.agent.model import Message, ModelClient
 from meeting_prep.agent.proposals import Action, Proposal, approval_matches
@@ -31,6 +38,8 @@ from meeting_prep.db.agent_store import AgentStore, ConversationRecord, new_id
 DEFAULT_LIMITS = Limits(max_steps=8, max_seconds=60, max_total_tokens=6_000)
 PROMPT_VERSION = "system_v2"
 MESSAGE_CHARACTERS = 4_000
+# The model sees at most this many conversation messages, the new one included.
+HISTORY_MESSAGES = 20
 
 
 def system_prompt(version: str = PROMPT_VERSION) -> str:
@@ -59,10 +68,11 @@ def current_date_line(now: datetime, time_zone: str) -> str:
 class AgentError(Exception):
     """A refused or failed request. ``code`` is stable; ``message`` is safe to show."""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, *, retry_after: int | None = None) -> None:
         super().__init__(f"{code}: {message}")
         self.code = code
         self.message = message
+        self.retry_after = retry_after
 
 
 @dataclass(frozen=True)
@@ -88,9 +98,16 @@ class AgentService:
         limits: Limits = DEFAULT_LIMITS,
         now: Callable[[], datetime] = utc_now,
         clock: Callable[[], float] = time.monotonic,
+        message_limits: MessageLimits | None = None,
+        budget: TokenBudget | None = None,
     ) -> None:
         self.store = store
         self.model = model
+        self.message_limits = message_limits or MessageLimits()
+        self.budget = budget or TokenBudget(BudgetLimits(tokens_per_run=limits.max_total_tokens))
+        if self.budget.limits.tokens_per_run > self.budget.limits.tokens_per_minute:
+            raise ValueError("a run's token cap must fit in the per-minute token budget")
+        self._in_flight: dict[str, int] = {}
         self.api = api
         self.limits = limits
         self.now = now
@@ -116,10 +133,41 @@ class AgentService:
     async def send_message(self, user: str, conversation_id: str, text: str) -> Reply:
         """Run the loop on the conversation plus ``text``, and save both and the run."""
         conversation = self._conversation(user, conversation_id)
+        run_id = new_id()
+        await self._admit(user, run_id)
+        try:
+            return await self._send(user, conversation_id, conversation.time_zone, text, run_id)
+        finally:
+            self.budget.release(run_id)
+            self._in_flight[user] -= 1
+            if not self._in_flight[user]:
+                del self._in_flight[user]
+
+    async def _admit(self, user: str, run_id: str) -> None:
+        """The user's message limit, then the shared token budget. Neither calls the model."""
+        async with self._lock(f"user:{user}"):
+            now = self.now()
+            sent = self.store.user_message_times(user, now - DAY)
+            wait = message_retry_after(now, sent, self._in_flight.get(user, 0), self.message_limits)
+            if wait is not None:
+                raise AgentError(
+                    "rate_limited", "too many messages; try again later", retry_after=wait
+                )
+            wait = self.budget.retry_after(now, self.store.token_usage_since(now - DAY))
+            if wait is not None:
+                raise AgentError(
+                    "busy", "the assistant is busy for everyone; try again later", retry_after=wait
+                )
+            self.budget.reserve(run_id)
+            self._in_flight[user] = self._in_flight.get(user, 0) + 1
+
+    async def _send(
+        self, user: str, conversation_id: str, time_zone: str, text: str, run_id: str
+    ) -> Reply:
         async with self._lock(f"conversation:{conversation_id}"):
-            history = self.store.messages(user, conversation_id)
+            history = _recent(self.store.messages(user, conversation_id), HISTORY_MESSAGES - 1)
             said = Message("user", text)
-            run_id, started_at = new_id(), self.now()
+            started_at = self.now()
             made: list[Proposal] = []
 
             def propose(actions: tuple[Action, ...]) -> Proposal:
@@ -129,11 +177,14 @@ class AgentService:
                 made.append(proposal)
                 return proposal
 
-            today = current_date_line(self.now(), conversation.time_zone)
+            today = current_date_line(self.now(), time_zone)
             prompt = [Message("system", self.prompt), Message("system", today), *history, said]
             registry = meeting_tools(self.api, user, propose, self.now)
             result = await run(prompt, self.model, registry, self.limits, clock=self.clock)
 
+            self.budget.observe(self.now(), result.rate_limit)
+            if result.stop_reason == "rate_limited":
+                self.budget.block(self.now(), result.retry_after)
             added = _answer_open_tool_calls(list(result.messages[len(prompt) :]))
             self.store.append_messages(user, conversation_id, [said, *added], self.now())
             self.store.save_run(
@@ -241,6 +292,18 @@ class AgentService:
             lock = self._locks[key] = asyncio.Lock()
         async with lock:
             yield
+
+
+def _recent(history: list[Message], count: int) -> list[Message]:
+    """The last ``count`` messages, starting at a user message.
+
+    Cutting elsewhere could leave a tool result without the call it answers, which the
+    model's API refuses.
+    """
+    recent = history[-count:] if count > 0 else []
+    while recent and recent[0].role != "user":
+        recent.pop(0)
+    return recent
 
 
 def _answer_open_tool_calls(messages: list[Message]) -> list[Message]:

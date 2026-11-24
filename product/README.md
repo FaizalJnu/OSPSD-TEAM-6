@@ -28,7 +28,7 @@ CI also runs the Postgres migration tests (see Tests).
 | `src/meeting_prep/factories.py` | The implementation registry: builds the storage, tracker and calendar that `*_PROVIDER` name. The only module that imports an implementation package | Faizal |
 | `src/meeting_prep/fakes/` | In-memory storage, tracker and calendar that follow their contracts, record calls and fail on request | Faizal |
 | `src/meeting_prep/db/` | Database engine, the table base, Alembic migrations. The only package that imports SQLAlchemy | Faizal (setup); each table's owner |
-| `src/meeting_prep/agent/` | The agent: `model.py` (`ModelClient`, `GroqModel` from `GROQ_API_KEY` and `AGENT_MODEL`, and `ScriptedModel` for tests), `tools.py` (tool registry with validated pydantic arguments), `loop.py` (the loop, its limits and stop reasons). No web framework, registry, adapters, orchestrator or fakes | Vikram |
+| `src/meeting_prep/agent/` | The agent: `model.py` (`ModelClient`, `GroqModel` from `GROQ_API_KEY` and `AGENT_MODEL`, and `ScriptedModel` for tests), `tools.py` (tool registry with validated pydantic arguments), `loop.py` (the loop, its limits and stop reasons). Never imports the registry, adapters, orchestrator or fakes; the model, tools and loop import no web framework | Vikram |
 | `tests/test_import_boundary.py` | Who may import what. Read it before adding a package | |
 
 Packages the import rules already expect:

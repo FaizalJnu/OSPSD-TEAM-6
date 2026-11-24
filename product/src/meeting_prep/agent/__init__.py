@@ -8,6 +8,7 @@
   answer or on a limit, a cancellation or a model failure.
 
 The agent reaches providers only through the API service, which checks approval, so
-this package never imports the registry, the adapters, the orchestrator or the fakes,
-and runs without a web framework (tests/test_import_boundary.py).
+this package never imports the registry, the adapters, the orchestrator or the fakes.
+The model, tools and loop also import no web framework; only the agent service's web
+entry point, in this package, may (tests/test_import_boundary.py).
 """

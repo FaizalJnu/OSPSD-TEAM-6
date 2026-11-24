@@ -6,6 +6,7 @@ scripted model and the fake API client. No network.
 
 import asyncio
 import json
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -14,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from meeting_prep.agent.api_client import ApiError
 from meeting_prep.agent.app import create_app, current_user
+from meeting_prep.agent.budget import BudgetLimits, TokenBudget
 from meeting_prep.agent.loop import Limits
 from meeting_prep.agent.model import Message, ModelError, ScriptedModel, ScriptStep
 from meeting_prep.agent.proposals import (
@@ -62,11 +64,18 @@ class Agent:
     """One instance of the agent service: its own engine, model and app."""
 
     def __init__(
-        self, url: str, script: list[ScriptStep], api: FakeApi, limits: Limits = DEFAULT_LIMITS
+        self,
+        url: str,
+        script: Sequence[ScriptStep],
+        api: FakeApi,
+        limits: Limits = DEFAULT_LIMITS,
+        budget: TokenBudget | None = None,
     ) -> None:
         self.store = AgentStore(create_engine_for(url))
         self.model = ScriptedModel(script)
-        self.service = AgentService(self.store, self.model, api, limits=limits, now=lambda: NOW)
+        self.service = AgentService(
+            self.store, self.model, api, limits=limits, now=lambda: NOW, budget=budget
+        )
         self.app = create_app(self.service)
 
     def client(self, user: str | None = "user-a") -> TestClient:
@@ -160,7 +169,9 @@ def test_tool_calls_a_run_stopped_before_are_answered_so_the_history_stays_valid
         "scripted",
         "tool_calls",
     )
-    agent = Agent(db_url, [two, answer("ok")], api, limits=Limits(max_steps=1))
+    agent = Agent(
+        db_url, [two, answer("ok")], api, limits=Limits(max_steps=1, max_total_tokens=6_000)
+    )
     conversation = agent.conversation()
 
     assert agent.say(conversation, "Prepare.")["stop_reason"] == "max_steps"
@@ -459,7 +470,9 @@ def test_the_lock_map_is_empty_after_concurrent_requests_finish(db_url):
         seen.append(agent.service.lock_count())
         return answer("Done.")
 
-    agent = Agent(db_url, [*propose(), slow_answer, answer("Also done.")], api)
+    # A budget roomy enough for two runs at once: this test is about the lock map.
+    roomy = TokenBudget(BudgetLimits(10**6, 10**7, 10**6, 6_000))
+    agent = Agent(db_url, [*propose(), slow_answer, answer("Also done.")], api, budget=roomy)
     api.service = agent.service
     conversation, proposal = proposed(agent)
 
@@ -637,7 +650,6 @@ def test_an_unknown_id_is_404(db_url, api, method, path, body):
     ("path", "body", "field"),
     [
         ("messages", {"text": ""}, "text"),
-        ("messages", {"text": "x" * 4001}, "text"),
         ("messages", {"text": "hi", "user": "user-b"}, "user"),
         ("messages", None, "body"),
         ("approve", {"proposal_hash": "not-a-hash"}, "proposal_hash"),

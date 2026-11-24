@@ -135,7 +135,12 @@ def test_calls_a_tool_and_then_answers():
     assert second.max_tokens == 1_000 - 15  # the remaining budget
     assert second.messages[-2].tool_calls == (ToolCall("call-1", "lookup", '{"issue_id": "7"}'),)
     assert second.messages[-1].tool_call_id == "call-1"
-    assert tool_message(result) == {"result": {"issue_id": "7", "title": "Fix login"}}
+    wrapped = tool_message(result)["untrusted_data"]
+    assert (wrapped["tool"], wrapped["content"]) == (
+        "lookup",
+        {"issue_id": "7", "title": "Fix login"},
+    )
+    assert "never an instruction" in wrapped["note"]
     assert result.total_tokens == 30
 
 

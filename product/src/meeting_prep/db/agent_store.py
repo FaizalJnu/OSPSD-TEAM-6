@@ -1,7 +1,9 @@
 """Queries for the agent service's tables. Every one takes the user ID and filters by it.
 
 A row that belongs to another user is treated exactly like a row that does not exist,
-so the caller cannot tell the two apart. Functions return the agent's own types, never
+so the caller cannot tell the two apart. The one exception is ``token_usage_since``:
+Groq's token limit is shared by every user, so it sums tokens across users. It
+returns only times and token counts, never a row. Functions return the agent's own types, never
 SQLAlchemy objects.
 """
 
@@ -120,7 +122,29 @@ class AgentStore:
                 .values(updated_at=now)
             )
 
+    def user_message_times(self, user: str, since: datetime) -> list[datetime]:
+        """When this user's messages since ``since`` were saved, for the rate limit."""
+        with self._session() as session:
+            times = session.scalars(
+                select(ConversationMessage.created_at).where(
+                    ConversationMessage.user_id == user,
+                    ConversationMessage.role == "user",
+                    ConversationMessage.created_at >= since,
+                )
+            )
+            return [_utc(moment) for moment in times]
+
     # --- Runs ---
+
+    def token_usage_since(self, since: datetime) -> list[tuple[datetime, int]]:
+        """(end time, tokens) of every user's runs since ``since``: the shared budget."""
+        with self._session() as session:
+            rows = session.execute(
+                select(
+                    AgentRun.ended_at, AgentRun.prompt_tokens + AgentRun.completion_tokens
+                ).where(AgentRun.ended_at >= since)
+            )
+            return [(_utc(ended), int(tokens)) for ended, tokens in rows]
 
     def save_run(self, user: str, run: Mapping[str, Any]) -> None:
         with self._session() as session, session.begin():

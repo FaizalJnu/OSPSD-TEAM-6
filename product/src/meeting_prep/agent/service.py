@@ -208,6 +208,10 @@ class AgentService:
             raise AgentError("not_found", "no such proposal")
         return proposal
 
+    def lock_count(self) -> int:
+        """How many conversations and proposals have a request holding or waiting for a lock."""
+        return len(self._locks)
+
     @asynccontextmanager
     async def _lock(self, key: str) -> AsyncIterator[None]:
         lock = self._locks.get(key)

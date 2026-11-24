@@ -349,6 +349,62 @@ def test_a_failed_execute_keeps_the_approval_and_approving_again_retries(db_url,
     assert len(api.executed()) == 2  # the failed call, then the retry
 
 
+# --- Locks ---
+
+
+class SlowApi(FakeApi):
+    """Execute waits, so a second approval arrives while the first holds the lock."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.locks_seen: list[int] = []
+        self.service: AgentService | None = None
+
+    async def execute(self, user, proposal, approval):
+        assert self.service is not None
+        await asyncio.sleep(0.05)
+        self.locks_seen.append(self.service.lock_count())
+        return await super().execute(user, proposal, approval)
+
+
+def test_the_lock_map_is_empty_after_concurrent_requests_finish(db_url):
+    api = SlowApi()
+    seen: list[int] = []
+
+    async def slow_answer(sent: Any) -> Any:
+        await asyncio.sleep(0.05)  # the second message waits for the conversation's lock
+        seen.append(agent.service.lock_count())
+        return answer("Done.")
+
+    agent = Agent(db_url, [*propose(), slow_answer, answer("Also done.")], api)
+    api.service = agent.service
+    conversation, proposal = proposed(agent)
+
+    async def two_messages() -> Any:
+        return await asyncio.gather(
+            agent.service.send_message("user-a", conversation, "one"),
+            agent.service.send_message("user-a", conversation, "two"),
+        )
+
+    async def two_approvals() -> Any:
+        return await asyncio.gather(
+            agent.service.approve("user-a", proposal["id"], proposal["proposal_hash"]),
+            agent.service.approve("user-a", proposal["id"], proposal["proposal_hash"]),
+        )
+
+    replies = asyncio.run(two_messages())
+    after_messages = agent.service.lock_count()
+    approvals = asyncio.run(two_approvals())
+
+    assert [r.text for r in replies] == ["Done.", "Also done."]
+    assert approvals[0] == approvals[1]  # the second returned the stored outcome
+    assert len(api.executed()) == 1
+    # While each pair ran, holder and waiter shared one lock; then it was gone.
+    assert seen == [1] and api.locks_seen == [1]
+    assert after_messages == 0
+    assert agent.service.lock_count() == 0
+
+
 # --- Restart ---
 
 

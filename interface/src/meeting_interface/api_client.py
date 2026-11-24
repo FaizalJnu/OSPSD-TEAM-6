@@ -2,14 +2,15 @@
 
 The interface never talks to a provider, another team's service, or the
 database. Every failure, including an API that cannot be reached, arrives as
-ApiError so pages handle one error type.
+ApiError so pages handle one error type. The API key stays on the server; it
+never reaches a page.
 """
 
 from typing import Any, Protocol
 
 import httpx2 as httpx
 
-from meeting_interface.models import RunRequest, RunResult, StepOutcome
+from meeting_interface.models import Run, RunRequest, RunResult
 
 # Codes the interface itself produces when the API gives no documented error.
 API_UNREACHABLE = "api_unreachable"
@@ -23,38 +24,43 @@ class ApiError(Exception):
         message: str,
         *,
         step: str | None = None,
-        steps: list[StepOutcome] | None = None,
+        retryable: bool = False,
+        may_have_applied: bool = False,
+        run: Run | None = None,
+        retry_after: int | None = None,
     ) -> None:
         super().__init__(f"{code}: {message}")
         self.code = code
         self.message = message
         self.step = step
-        self.steps = steps or []
+        self.retryable = retryable
+        self.may_have_applied = may_have_applied
+        self.run = run
+        self.retry_after = retry_after
 
 
 class ApiClient(Protocol):
     def run_review_meeting(self, request: RunRequest) -> RunResult: ...
 
-    def get_run(self, run_id: str) -> RunResult: ...
-
 
 class HttpApiClient:
-    def __init__(self, http: httpx.Client) -> None:
+    def __init__(self, http: httpx.Client, api_key: str) -> None:
         self._http = http
+        self._api_key = api_key
 
     @classmethod
-    def for_url(cls, base_url: str, timeout_seconds: float = 60.0) -> "HttpApiClient":
-        return cls(httpx.Client(base_url=base_url, timeout=timeout_seconds))
+    def for_url(
+        cls, base_url: str, api_key: str, timeout_seconds: float = 120.0
+    ) -> "HttpApiClient":
+        return cls(httpx.Client(base_url=base_url, timeout=timeout_seconds), api_key)
 
     def run_review_meeting(self, request: RunRequest) -> RunResult:
-        return RunResult.from_json(self._call("POST", "/v1/review-meetings", request.to_json()))
-
-    def get_run(self, run_id: str) -> RunResult:
-        return RunResult.from_json(self._call("GET", f"/v1/runs/{run_id}"))
-
-    def _call(self, method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
         try:
-            response = self._http.request(method, path, json=body)
+            response = self._http.post(
+                "/v1/review-meetings",
+                json=request.to_json(),
+                headers={"Authorization": f"Bearer {self._api_key}"},
+            )
         except httpx.HTTPError as error:
             raise ApiError(API_UNREACHABLE, "the service could not be reached") from error
         try:
@@ -62,22 +68,36 @@ class HttpApiClient:
         except ValueError:
             payload = None
         if not isinstance(payload, dict):
-            raise ApiError(
-                BAD_RESPONSE, f"the service sent an unexpected reply ({response.status_code})"
-            )
-        if response.is_success:
-            return payload
-        raise _error_from(payload, response.status_code)
+            raise _bad_response(response.status_code)
+        try:
+            if response.is_success:
+                return RunResult.from_json(payload)
+            failure = _error_from(payload, response)
+        except (KeyError, TypeError) as broken:
+            raise _bad_response(response.status_code) from broken
+        raise failure
 
 
-def _error_from(payload: dict[str, Any], status: int) -> ApiError:
+def _error_from(payload: dict[str, Any], response: httpx.Response) -> ApiError:
     error = payload.get("error")
     if not isinstance(error, dict) or "code" not in error:
-        return ApiError(BAD_RESPONSE, f"the service sent an unexpected reply ({status})")
+        return _bad_response(response.status_code)
+    run = payload.get("run")
     step = error.get("step")
     return ApiError(
         str(error["code"]),
         str(error.get("message", "")),
         step=None if step is None else str(step),
-        steps=[StepOutcome.from_json(s) for s in error.get("steps", [])],
+        retryable=error.get("retryable") is True,
+        may_have_applied=error.get("may_have_applied") is True,
+        run=Run.from_json(run) if isinstance(run, dict) else None,
+        retry_after=_seconds(response.headers.get("retry-after")),
     )
+
+
+def _seconds(value: str | None) -> int | None:
+    return int(value) if value is not None and value.isdigit() else None
+
+
+def _bad_response(status: int) -> ApiError:
+    return ApiError(BAD_RESPONSE, f"the service sent an unexpected reply ({status})")

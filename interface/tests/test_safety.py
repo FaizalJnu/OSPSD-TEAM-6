@@ -1,25 +1,21 @@
-"""Text from providers and the model is shown, never run."""
+"""Text from the API, the providers and the model is shown, never run."""
 
 from meeting_interface.api_client import ApiError
-from meeting_interface.fake_api import FakeApiClient
-from meeting_interface.models import RunResult, StepOutcome, StepStatus
+from meeting_interface.fake_api import OK, run_with
 from tests.conftest import FORM
 
 
-def run_with(fake_api: FakeApiClient, **step: str) -> None:
-    fake_api.next_result = RunResult(
-        "run-x", "succeeded", [StepOutcome("read_issues", StepStatus.SUCCEEDED, **step)]
+def test_markup_in_ids_from_the_api_is_escaped(client, fake_api):
+    fake_api.next_error = ApiError(
+        "provider_error",
+        "x",
+        run=run_with(OK, OK, status="partial", issue_id='<img src=x onerror="alert(1)">'),
     )
-
-
-def test_markup_in_provider_text_is_escaped(client, fake_api):
-    run_with(fake_api, detail='<script>alert(1)</script><img src=x onerror="alert(2)">')
 
     page = client.post("/runs", data=FORM).text
 
-    assert "<script>alert(1)" not in page
     assert "<img src=x" not in page
-    assert "&lt;script&gt;" in page
+    assert "&lt;img" in page
 
 
 def test_markup_in_error_message_is_escaped(client, fake_api):
@@ -29,23 +25,6 @@ def test_markup_in_error_message_is_escaped(client, fake_api):
 
     assert "<b>bold</b>" not in page
     assert "&lt;b&gt;bold&lt;/b&gt;" in page
-
-
-def test_javascript_link_is_not_clickable(client, fake_api):
-    run_with(fake_api, link="javascript:alert(1)")
-
-    page = client.post("/runs", data=FORM).text
-
-    assert "javascript:" not in page
-
-
-def test_https_link_opens_without_sharing_the_page(client, fake_api):
-    run_with(fake_api, link="https://trello.test/c/1")
-
-    page = client.post("/runs", data=FORM).text
-
-    assert 'href="https://trello.test/c/1"' in page
-    assert 'rel="noopener noreferrer"' in page
 
 
 def test_pages_send_a_content_security_policy(client):

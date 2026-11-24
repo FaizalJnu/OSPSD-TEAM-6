@@ -1,7 +1,8 @@
 """Words the person sees: step names and what to do after each error.
 
 This module only translates. It holds no product rules: whether a step ran,
-failed, or may have happened always comes from the API service.
+failed, or may have happened, and whether a retry is safe, always come from the
+API service.
 """
 
 from dataclasses import dataclass
@@ -9,21 +10,20 @@ from dataclasses import dataclass
 from meeting_interface.api_client import API_UNREACHABLE, BAD_RESPONSE
 from meeting_interface.models import StepStatus
 
+# design §1.3: the five steps, in order.
 STEP_LABELS = {
-    "read_issues": "Read open issues",
-    "find_event": "Find the review event",
-    "book_event": "Book the review event",
-    "save_agenda": "Save the agenda",
-    "link_agenda": "Link the agenda on the event and issue",
+    "claim_run": "Start the run",
+    "create_issue": "Open the tracker issue",
+    "create_event": "Book the calendar event",
+    "write_agenda": "Save the agenda",
+    "finish_run": "Finish",
 }
 
 STATUS_LABELS = {
-    StepStatus.PENDING: "Waiting",
-    StepStatus.RUNNING: "Working",
-    StepStatus.SUCCEEDED: "Done",
+    StepStatus.OK: "Done",
     StepStatus.FAILED: "Failed",
-    StepStatus.UNCERTAIN: "Not sure",
-    StepStatus.SKIPPED: "Not run",
+    StepStatus.UNKNOWN: "Not sure",
+    StepStatus.PENDING: "Not run",
 }
 
 
@@ -33,36 +33,41 @@ class ErrorHelp:
     next_step: str
 
 
-# One entry per code in the API's error model (docs/API.md), plus the two the
-# interface raises itself. tests/test_errors.py fails if a code is missing.
+# One entry per code in design §1.4, plus the two the interface raises itself.
+# tests/test_errors.py fails if a code is missing.
 ERROR_HELP = {
     "invalid_request": ErrorHelp(
         "Something in the form is not valid.",
-        "Check the fields named below, fix them, and run it again.",
+        "Fix the field named below and send it again.",
+    ),
+    "unauthorized": ErrorHelp(
+        "This page is not allowed to use the service.",
+        "Tell the team: the interface's API key is missing or wrong.",
     ),
     "permission_denied": ErrorHelp(
         "A connected service refused access.",
-        "Reconnect that service from your connections page, then run it again.",
+        "Tell the team which step failed. They need to fix that service's access first.",
     ),
-    "not_found": ErrorHelp(
-        "Something the run needs does not exist.",
-        "Check the project and meeting date, then run it again.",
+    "run_in_progress": ErrorHelp(
+        "Another request is already working on this meeting.",
+        "Wait, then press Try again. Nothing will be created twice.",
     ),
-    "conflict": ErrorHelp(
-        "Part of this already exists.",
-        "Open the existing item from the links above instead of creating it again.",
+    "outcome_unknown": ErrorHelp(
+        "We could not tell whether the calendar event was created.",
+        "A team member must check the calendar before this meeting can continue. "
+        "Tell the team the run ID below.",
     ),
-    "file_too_large": ErrorHelp(
-        "The agenda is too large to save.",
-        "Shorten the agenda, then run it again.",
+    "run_record_invalid": ErrorHelp(
+        "This meeting's saved progress cannot be read.",
+        "Tell the team the run ID below.",
     ),
     "provider_error": ErrorHelp(
-        "A connected service refused the request.",
-        "Try again later. If it keeps failing, tell the team which step failed.",
+        "A connected service failed.",
+        "Follow the advice below. If it keeps failing, tell the team which step failed.",
     ),
     "provider_unavailable": ErrorHelp(
         "A connected service could not be reached.",
-        "Wait a minute and run it again. Steps marked Done will not be repeated.",
+        "Follow the advice below. Steps marked Done will not be repeated.",
     ),
     "route_not_found": ErrorHelp(
         "This page asked the service for something it does not offer.",
@@ -74,26 +79,26 @@ ERROR_HELP = {
     ),
     "internal_error": ErrorHelp(
         "The service failed unexpectedly.",
-        "Check the links above before retrying: a step may have finished.",
+        "Check the steps below before trying again: a step may have finished.",
     ),
     API_UNREACHABLE: ErrorHelp(
         "The service could not be reached.",
-        "Check your connection and run it again in a minute.",
+        "Check your connection and try again in a minute.",
     ),
     BAD_RESPONSE: ErrorHelp(
         "The service sent a reply this page does not understand.",
-        "Run it again. If it keeps happening, tell the team.",
+        "Try again. If it keeps happening, tell the team.",
     ),
 }
 
 UNKNOWN_ERROR = ErrorHelp(
     "Something went wrong.",
-    "Run it again. If it keeps happening, tell the team which step failed.",
+    "Try again. If it keeps happening, tell the team which step failed.",
 )
 
 
-def step_label(step: str) -> str:
-    return STEP_LABELS.get(step, step.replace("_", " ").capitalize())
+def step_label(name: str) -> str:
+    return STEP_LABELS.get(name, name.replace("_", " ").capitalize())
 
 
 def status_label(status: StepStatus) -> str:

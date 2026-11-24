@@ -14,8 +14,14 @@ button { cursor: pointer; }
 .steps li { margin: 0.5rem 0; }
 .status { font-weight: 600; margin-left: 0.5rem; }
 .detail { display: block; color: var(--muted); }
-[data-status="succeeded"] .status { color: var(--ok); }
+
 [data-status="failed"] .status { color: var(--bad); }
-[data-status="uncertain"] .status { color: var(--warn); }
-[data-status="skipped"] .status, [data-status="pending"] .status { color: var(--muted); }
+
+[data-status="pending"] .status { color: var(--muted); }
 .error { border-left: 4px solid var(--bad); padding: 0.25rem 1rem; }
+.times { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+select, textarea { font: inherit; padding: 0.5rem; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
+.ids { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; }
+.ids dd { margin: 0; overflow-wrap: anywhere; }
+[data-status="ok"] .status { color: var(--ok); }
+[data-status="unknown"] .status { color: var(--warn); }

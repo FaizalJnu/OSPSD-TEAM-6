@@ -9,7 +9,6 @@ it returned. Run them with:
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Annotated
-from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Form, Request, Response
 from fastapi.responses import HTMLResponse
@@ -19,8 +18,9 @@ from fastapi.templating import Jinja2Templates
 from meeting_interface.api_client import ApiClient, ApiError, HttpApiClient
 from meeting_interface.config import load_settings
 from meeting_interface.fake_api import FakeApiClient
+from meeting_interface.form import DEFAULT_TIME_ZONE, TIME_ZONES, FormProblem, MeetingForm
 from meeting_interface.messages import error_help, status_label, step_label
-from meeting_interface.models import RunRequest, StepOutcome, StepStatus
+from meeting_interface.models import Step, StepStatus
 
 HERE = Path(__file__).parent
 
@@ -34,20 +34,11 @@ SECURITY_HEADERS = {
 }
 
 
-def safe_link(url: str | None) -> str | None:
-    """Only http and https links become clickable; anything else is dropped."""
-    if url is None or urlsplit(url).scheme not in ("http", "https"):
-        return None
-    return url
-
-
 def create_app(api: ApiClient) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     templates = Jinja2Templates(directory=HERE / "templates")
-    templates.env.globals.update(
-        step_label=step_label, status_label=status_label, safe_link=safe_link
-    )
+    templates.env.globals.update(step_label=step_label, status_label=status_label)
 
     @app.middleware("http")
     async def security_headers(
@@ -59,47 +50,68 @@ def create_app(api: ApiClient) -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     def start(request: Request) -> HTMLResponse:
-        return templates.TemplateResponse(request, "index.html")
+        return templates.TemplateResponse(
+            request, "index.html", {"time_zones": TIME_ZONES, "default_zone": DEFAULT_TIME_ZONE}
+        )
 
     @app.post("/runs", response_class=HTMLResponse)
     def run(
         request: Request,
-        project: Annotated[str, Form()],
-        meeting_date: Annotated[str, Form()],
         title: Annotated[str, Form()],
+        day: Annotated[str, Form()],
+        start_time: Annotated[str, Form()],
+        end_time: Annotated[str, Form()],
+        time_zone: Annotated[str, Form()],
+        agenda: Annotated[str, Form()] = "",
     ) -> HTMLResponse:
-        run_request = RunRequest(project=project, meeting_date=meeting_date, title=title)
+        form = MeetingForm(title, day, start_time, end_time, time_zone, agenda)
+        try:
+            run_request = form.to_request()
+        except FormProblem as problem:
+            return _render(templates, request, form_problem=str(problem))
         try:
             result = api.run_review_meeting(run_request)
         except ApiError as error:
-            return templates.TemplateResponse(
+            return _render(
+                templates,
                 request,
-                "partials/run.html",
-                {
-                    "steps": _with_failed_step(error),
-                    "error": error,
-                    "help": error_help(error.code),
-                },
+                steps=_steps_after(error),
+                run=error.run,
+                error=error,
+                help=error_help(error.code),
             )
-        return templates.TemplateResponse(
-            request,
-            "partials/run.html",
-            {"steps": result.steps, "status": result.status, "error": None},
+        return _render(
+            templates, request, steps=result.run.steps, run=result.run, replayed=result.replayed
         )
 
     return app
 
 
-def _with_failed_step(error: ApiError) -> list[StepOutcome]:
-    """Name the failed step even when the API listed only the completed ones."""
-    steps = list(error.steps)
-    if error.step is not None and all(s.step != error.step for s in steps):
-        steps.append(StepOutcome(error.step, StepStatus.FAILED))
-    return steps
+def _render(templates: Jinja2Templates, request: Request, **context: object) -> HTMLResponse:
+    defaults: dict[str, object] = {
+        "steps": [],
+        "run": None,
+        "replayed": False,
+        "error": None,
+        "help": None,
+        "form_problem": None,
+    }
+    return templates.TemplateResponse(request, "partials/run.html", {**defaults, **context})
+
+
+def _steps_after(error: ApiError) -> list[Step]:
+    """The run's steps, or just the failed step when the API sent no run."""
+    if error.run is not None:
+        return error.run.steps
+    if error.step is not None:
+        return [Step(error.step, StepStatus.FAILED)]
+    return []
 
 
 def app_from_env() -> FastAPI:
     settings = load_settings()
     if settings.fake_api:
         return create_app(FakeApiClient())
-    return create_app(HttpApiClient.for_url(settings.api_base_url, settings.api_timeout_seconds))
+    return create_app(
+        HttpApiClient.for_url(settings.api_base_url, settings.api_key, settings.api_timeout_seconds)
+    )

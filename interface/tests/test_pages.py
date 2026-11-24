@@ -1,28 +1,19 @@
 """A person can run the review-meeting scenario by hand and see every step."""
 
 from meeting_interface.api_client import ApiError
-from meeting_interface.models import RunRequest, RunResult, StepOutcome, StepStatus
+from meeting_interface.fake_api import COMPLETED
+from meeting_interface.models import RunRequest, RunResult
 from tests.conftest import FORM
 
-ALL_DONE = RunResult(
-    run_id="run-1",
-    status="succeeded",
-    steps=[
-        StepOutcome("read_issues", StepStatus.SUCCEEDED, "4 open issues"),
-        StepOutcome("book_event", StepStatus.SUCCEEDED, None, "https://calendar.test/e/1"),
-        StepOutcome("save_agenda", StepStatus.SUCCEEDED, None, "https://storage.test/agenda"),
-        StepOutcome("link_agenda", StepStatus.SUCCEEDED),
-    ],
-)
 
-
-def test_start_page_shows_the_scenario_form(client):
+def test_start_page_shows_the_form(client):
     page = client.get("/")
 
     assert page.status_code == 200
-    for name in ("project", "meeting_date", "title"):
+    for name in ("title", "day", "start_time", "end_time", "time_zone", "agenda"):
         assert f'name="{name}"' in page.text
     assert 'hx-post="/runs"' in page.text
+    assert '<option value="America/New_York" selected>' in page.text
     assert "/static/htmx.min.js" in page.text
 
 
@@ -40,49 +31,58 @@ def test_htmx_is_served_locally(client):
     assert "htmx" in script.text
 
 
-def test_submitting_the_form_sends_exactly_what_the_person_typed(client, fake_api):
-    fake_api.next_result = ALL_DONE
-
+def test_the_api_receives_the_design_body(client, fake_api):
     client.post("/runs", data=FORM)
 
     assert fake_api.requests == [
-        RunRequest(project="Team 6 sprint", meeting_date="2026-11-27", title="Sprint review")
+        RunRequest(
+            title="Sprint review",
+            start="2026-11-27T15:00:00-05:00",
+            end="2026-11-27T15:30:00-05:00",
+            agenda=["Open bugs", "Release go or no-go"],
+        )
     ]
 
 
-def test_success_shows_every_step_in_user_terms_with_links(client, fake_api):
-    fake_api.next_result = ALL_DONE
+def test_completed_run_shows_every_step_and_what_was_made(client, fake_api):
+    fake_api.next_result = RunResult(replayed=False, run=COMPLETED)
 
-    page = client.post("/runs", data=FORM)
+    page = client.post("/runs", data=FORM).text
 
-    assert page.status_code == 200
+    assert "Your review meeting is ready" in page
     for label in (
-        "Read open issues",
-        "Book the review event",
+        "Start the run",
+        "Open the tracker issue",
+        "Book the calendar event",
         "Save the agenda",
-        "Link the agenda on the event and issue",
+        "Finish",
     ):
-        assert label in page.text
-    assert page.text.count("Done") == 4
-    assert 'href="https://calendar.test/e/1"' in page.text
-    assert 'href="https://storage.test/agenda"' in page.text
-    assert "4 open issues" in page.text
+        assert label in page
+    assert page.count(">Done<") == 5
+    for shown in ("3f9a1c0d7b2e", "6b01c2", "evt-81", "/reviews/2026-11-27-sprint-review"):
+        assert shown in page
 
 
-def test_unknown_step_name_is_still_shown(client, fake_api):
-    fake_api.next_result = RunResult(
-        "run-2", "succeeded", [StepOutcome("notify_team", StepStatus.SUCCEEDED)]
-    )
+def test_replay_says_it_was_already_prepared(client, fake_api):
+    fake_api.next_result = RunResult(replayed=True, run=COMPLETED)
 
-    page = client.post("/runs", data=FORM)
+    page = client.post("/runs", data=FORM).text
 
-    assert "Notify team" in page.text
+    assert "already prepared" in page
+    assert "Your review meeting is ready" not in page
 
 
-def test_error_with_no_completed_steps_still_renders(client, fake_api):
-    fake_api.next_error = ApiError("invalid_request", "meeting_date must be a date")
+def test_unreadable_form_field_is_named_and_the_api_is_not_called(client, fake_api):
+    page = client.post("/runs", data={**FORM, "start_time": "soon"}).text
+
+    assert "Enter the start time." in page
+    assert fake_api.requests == []
+
+
+def test_error_before_any_step_shows_its_message(client, fake_api):
+    fake_api.next_error = ApiError("invalid_request", "end must be after start")
 
     page = client.post("/runs", data=FORM)
 
     assert page.status_code == 200
-    assert "meeting_date must be a date" in page.text
+    assert "end must be after start" in page.text

@@ -1,4 +1,4 @@
-"""HttpApiClient turns API responses into interface types, and every failure into ApiError."""
+"""HttpApiClient speaks design §1.4: Bearer key, run body, error body with the run."""
 
 import json
 
@@ -8,72 +8,120 @@ import pytest
 from meeting_interface.api_client import ApiError, HttpApiClient
 from meeting_interface.models import RunRequest, StepStatus
 
-REQUEST = RunRequest(project="Team 6 sprint", meeting_date="2026-11-27", title="Sprint review")
+REQUEST = RunRequest(
+    title="Sprint review",
+    start="2026-11-27T15:00:00-05:00",
+    end="2026-11-27T15:30:00-05:00",
+    agenda=["Open bugs"],
+)
+RUN = {
+    "run_id": "3f9a1c0d7b2e",
+    "status": "completed",
+    "steps": [
+        {"name": "claim_run", "status": "ok"},
+        {"name": "create_issue", "status": "ok"},
+        {"name": "create_event", "status": "ok"},
+    ],
+    "issue": {"id": "6b01c2"},
+    "event": {"id": "evt-81", "start": "2026-11-27T20:00:00Z", "end": "2026-11-27T20:30:00Z"},
+    "agenda": {"path": "/reviews/a.md"},
+    "record": {"path": "/review-runs/3f9a1c0d7b2e.json"},
+}
 
 
-def client_for(handler: httpx.MockTransport) -> HttpApiClient:
-    return HttpApiClient(httpx.Client(base_url="https://api.test", transport=handler))
+def client_for(handler) -> HttpApiClient:
+    http = httpx.Client(base_url="https://api.test", transport=httpx.MockTransport(handler))
+    return HttpApiClient(http, api_key="key-123")
 
 
-def test_success_body_becomes_run_result():
+def respond(status: int, body: object, headers: dict[str, str] | None = None):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, json=body, headers=headers)
+
+    return handler
+
+
+def test_posts_the_design_body_with_the_bearer_key():
     seen: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request)
-        return httpx.Response(
-            200,
-            json={
-                "run_id": "run-1",
-                "status": "succeeded",
-                "steps": [
-                    {"step": "read_issues", "status": "succeeded", "detail": "4 open issues"},
-                    {
-                        "step": "save_agenda",
-                        "status": "succeeded",
-                        "detail": None,
-                        "link": "https://storage.test/agenda",
-                    },
-                ],
-            },
-        )
+        return httpx.Response(201, json={**RUN, "replayed": False})
 
-    result = client_for(httpx.MockTransport(handler)).run_review_meeting(REQUEST)
+    client_for(handler).run_review_meeting(REQUEST)
 
     assert seen[0].method == "POST"
     assert seen[0].url.path == "/v1/review-meetings"
+    assert seen[0].headers["authorization"] == "Bearer key-123"
     assert json.loads(seen[0].content) == {
-        "project": "Team 6 sprint",
-        "meeting_date": "2026-11-27",
         "title": "Sprint review",
+        "start": "2026-11-27T15:00:00-05:00",
+        "end": "2026-11-27T15:30:00-05:00",
+        "agenda": ["Open bugs"],
     }
-    assert result.run_id == "run-1"
-    assert [s.step for s in result.steps] == ["read_issues", "save_agenda"]
-    assert result.steps[0].status is StepStatus.SUCCEEDED
-    assert result.steps[1].link == "https://storage.test/agenda"
 
 
-def test_error_body_becomes_api_error_with_failed_step_and_completed_steps():
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            503,
-            json={
-                "error": {
-                    "code": "provider_unavailable",
-                    "message": "the calendar could not be reached",
-                    "step": "book_event",
-                    "steps": [{"step": "read_issues", "status": "succeeded"}],
-                }
-            },
-        )
+def test_success_body_becomes_a_run():
+    result = client_for(respond(201, {**RUN, "replayed": False})).run_review_meeting(REQUEST)
+
+    assert result.replayed is False
+    assert result.run.status == "completed"
+    assert [s.name for s in result.run.steps] == ["claim_run", "create_issue", "create_event"]
+    assert result.run.steps[0].status is StepStatus.OK
+    assert result.run.issue_id == "6b01c2"
+    assert result.run.event_id == "evt-81"
+    assert result.run.event_start == "2026-11-27T20:00:00Z"
+    assert result.run.agenda_path == "/reviews/a.md"
+
+
+def test_replay_is_read():
+    result = client_for(respond(200, {**RUN, "replayed": True})).run_review_meeting(REQUEST)
+
+    assert result.replayed is True
+
+
+def test_error_body_keeps_step_advice_and_the_run():
+    body = {
+        "error": {
+            "code": "provider_error",
+            "message": "The calendar did not confirm the event.",
+            "step": "create_event",
+            "retryable": False,
+            "may_have_applied": True,
+        },
+        "run": {**RUN, "status": "partial", "event": None, "agenda": None},
+    }
 
     with pytest.raises(ApiError) as caught:
-        client_for(httpx.MockTransport(handler)).run_review_meeting(REQUEST)
+        client_for(respond(502, body)).run_review_meeting(REQUEST)
 
     error = caught.value
-    assert error.code == "provider_unavailable"
-    assert error.message == "the calendar could not be reached"
-    assert error.step == "book_event"
-    assert [s.step for s in error.steps] == ["read_issues"]
+    assert error.code == "provider_error"
+    assert error.step == "create_event"
+    assert error.retryable is False
+    assert error.may_have_applied is True
+    assert error.run is not None
+    assert error.run.status == "partial"
+    assert error.run.event_id is None
+
+
+def test_error_before_any_step_has_no_run():
+    body = {"error": {"code": "invalid_request", "message": "end must be after start"}, "run": None}
+
+    with pytest.raises(ApiError) as caught:
+        client_for(respond(400, body)).run_review_meeting(REQUEST)
+
+    assert caught.value.run is None
+    assert caught.value.retryable is False
+
+
+def test_run_in_progress_reads_retry_after():
+    body = {"error": {"code": "run_in_progress", "message": "busy"}, "run": None}
+
+    with pytest.raises(ApiError) as caught:
+        client_for(respond(409, body, {"Retry-After": "87"})).run_review_meeting(REQUEST)
+
+    assert caught.value.retry_after == 87
 
 
 def test_api_that_cannot_be_reached_is_api_unreachable():
@@ -81,37 +129,32 @@ def test_api_that_cannot_be_reached_is_api_unreachable():
         raise httpx.ConnectTimeout("timed out", request=request)
 
     with pytest.raises(ApiError) as caught:
-        client_for(httpx.MockTransport(handler)).run_review_meeting(REQUEST)
+        client_for(handler).run_review_meeting(REQUEST)
 
     assert caught.value.code == "api_unreachable"
 
 
-def test_response_that_is_not_the_documented_shape_is_bad_response():
+@pytest.mark.parametrize(
+    "body",
+    [None, {"run_id": "x"}, {"error": "flat string"}],
+    ids=["not-json", "run-missing-fields", "error-not-object"],
+)
+def test_reply_that_is_not_the_documented_shape_is_bad_response(body):
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(502, text="<html>Bad gateway</html>")
+        if body is None:
+            return httpx.Response(502, text="<html>Bad gateway</html>")
+        return httpx.Response(200 if "run_id" in body else 500, json=body)
 
     with pytest.raises(ApiError) as caught:
-        client_for(httpx.MockTransport(handler)).run_review_meeting(REQUEST)
+        client_for(handler).run_review_meeting(REQUEST)
 
     assert caught.value.code == "bad_response"
     assert "html" not in caught.value.message.lower()
 
 
-def test_get_run_reads_the_run_record():
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/v1/runs/run-1"
-        return httpx.Response(200, json={"run_id": "run-1", "status": "running", "steps": []})
+def test_unknown_step_status_is_unknown_never_ok():
+    run = {**RUN, "steps": [{"name": "create_event", "status": "maybe"}]}
 
-    result = client_for(httpx.MockTransport(handler)).get_run("run-1")
+    result = client_for(respond(201, {**run, "replayed": False})).run_review_meeting(REQUEST)
 
-    assert result.status == "running"
-
-
-def test_unknown_step_status_is_uncertain_never_succeeded():
-    def handler(request: httpx.Request) -> httpx.Response:
-        body = {"run_id": "r", "status": "partial", "steps": [{"step": "x", "status": "maybe"}]}
-        return httpx.Response(200, json=body)
-
-    result = client_for(httpx.MockTransport(handler)).run_review_meeting(REQUEST)
-
-    assert result.steps[0].status is StepStatus.UNCERTAIN
+    assert result.run.steps[0].status is StepStatus.UNKNOWN

@@ -1,19 +1,21 @@
 """Every documented error code reaches the person with a next step."""
 
 import pytest
+from markupsafe import escape
 
 from meeting_interface.api_client import API_UNREACHABLE, BAD_RESPONSE, ApiError
 from meeting_interface.messages import ERROR_HELP, UNKNOWN_ERROR
 from tests.conftest import FORM
 
-# The API service's error model (docs/API.md, "Error types"), plus the codes the
+# The operation's codes (design §1.4, "Codes"), plus the codes the
 # interface raises itself. Add a code here when the API documents a new one.
 DOCUMENTED_CODES = [
     "invalid_request",
+    "unauthorized",
     "permission_denied",
-    "not_found",
-    "conflict",
-    "file_too_large",
+    "run_in_progress",
+    "outcome_unknown",
+    "run_record_invalid",
     "provider_error",
     "provider_unavailable",
     "route_not_found",
@@ -36,8 +38,8 @@ def test_each_code_shows_its_title_message_and_next_step(client, fake_api, code)
 
     page = client.post("/runs", data=FORM).text
 
-    assert ERROR_HELP[code].title in page
-    assert ERROR_HELP[code].next_step in page
+    assert escape(ERROR_HELP[code].title) in page
+    assert escape(ERROR_HELP[code].next_step) in page
     assert f"message for {code}" in page
     assert 'role="alert"' in page
 
@@ -47,5 +49,5 @@ def test_unknown_code_falls_back_without_showing_the_code(client, fake_api):
 
     page = client.post("/runs", data=FORM).text
 
-    assert UNKNOWN_ERROR.next_step in page
+    assert escape(UNKNOWN_ERROR.next_step) in page
     assert "db_pool_exhausted" not in page

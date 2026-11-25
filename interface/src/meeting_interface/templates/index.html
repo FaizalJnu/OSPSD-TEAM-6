@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Prepare a review meeting</h1>
+<p>Opens a tracker issue, books the calendar event, and saves the agenda that links them.</p>
+
+<form id="run-form" hx-post="/runs" hx-target="#result" hx-indicator="#working" hx-disabled-elt="find button">
+  <label>Meeting title <input name="title" required maxlength="120"></label>
+  <label>Date <input name="day" type="date" required></label>
+  <div class="times">
+    <label>Starts <input name="start_time" type="time" required></label>
+    <label>Ends <input name="end_time" type="time" required></label>
+  </div>
+  <label>Time zone
+    <select name="time_zone">
+      {% for zone in time_zones %}
+      <option value="{{ zone }}"{% if zone == default_zone %} selected{% endif %}>{{ zone }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Agenda items, one per line <textarea name="agenda" rows="4"></textarea></label>
+  <button type="submit">Prepare meeting</button>
+</form>
+
+<p id="working" class="htmx-indicator" role="status">
+  Working: talking to the issue tracker, calendar, and storage. This can take a minute or two.
+</p>
+
+<section id="result" aria-live="polite"></section>
+{% endblock %}

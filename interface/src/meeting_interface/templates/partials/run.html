@@ -1,0 +1,45 @@
+{% if form_problem %}
+<div class="error" role="alert">
+  <h2>Check the form.</h2>
+  <p>{{ form_problem }}</p>
+</div>
+{% elif error %}
+<div class="error" role="alert">
+  <h2>{{ help.title }}</h2>
+  <p>{{ error.message }}</p>
+  <p><strong>What to do:</strong> {{ help.next_step }}</p>
+  {% if error.code == "run_in_progress" and error.retry_after %}
+  <p>Try again in about {{ error.retry_after }} seconds.</p>
+  {% endif %}
+  {% if error.retryable or error.code == "run_in_progress" %}
+  <button hx-post="/runs" hx-include="#run-form" hx-target="#result" hx-indicator="#working">Try again</button>
+  {% endif %}
+</div>
+{% elif run and run.status == "completed" %}
+<h2>{% if replayed %}This meeting was already prepared{% else %}Your review meeting is ready{% endif %}</h2>
+{% else %}
+<div class="error" role="alert">
+  <h2>Not every step finished.</h2>
+  <p><strong>What to do:</strong> Check the steps below. A step marked Not sure may have happened.</p>
+</div>
+{% endif %}
+
+{% if steps %}
+<ol class="steps">
+  {% for s in steps %}
+  <li data-step="{{ s.name }}" data-status="{{ s.status.value }}">
+    <span class="label">{{ step_label(s.name) }}</span>
+    <span class="status">{{ status_label(s.status) }}</span>
+  </li>
+  {% endfor %}
+</ol>
+{% endif %}
+
+{% if run %}
+<dl class="ids">
+  <dt>Run</dt><dd>{{ run.run_id }}</dd>
+  {% if run.issue_id %}<dt>Tracker issue</dt><dd>{{ run.issue_id }}</dd>{% endif %}
+  {% if run.event_id %}<dt>Calendar event</dt><dd>{{ run.event_id }}{% if run.event_start %} ({{ run.event_start }} to {{ run.event_end }}){% endif %}</dd>{% endif %}
+  {% if run.agenda_path %}<dt>Agenda</dt><dd>{{ run.agenda_path }}</dd>{% endif %}
+</dl>
+{% endif %}

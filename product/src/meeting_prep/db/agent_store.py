@@ -281,9 +281,21 @@ class AgentStore:
 
     def record_outcomes(
         self, user: str, proposal_id: str, outcomes: Sequence[ActionOutcome], now: datetime
-    ) -> None:
+    ) -> bool:
         """Store every action's outcome and mark the proposal executed, in one transaction."""
         with self._session() as session, session.begin():
+            updated = session.scalar(
+                update(ProposalRow)
+                .where(
+                    ProposalRow.id == proposal_id,
+                    ProposalRow.user_id == user,
+                    ProposalRow.status == "approved",
+                )
+                .values(status="executed", updated_at=now)
+                .returning(ProposalRow.id)
+            )
+            if updated is None:
+                return False
             for outcome in outcomes:
                 session.add(
                     OutcomeRow(
@@ -296,11 +308,7 @@ class AgentStore:
                         recorded_at=now,
                     )
                 )
-            session.execute(
-                update(ProposalRow)
-                .where(ProposalRow.id == proposal_id, ProposalRow.user_id == user)
-                .values(status="executed", updated_at=now)
-            )
+            return True
 
     def outcomes(self, user: str, proposal_id: str) -> list[ActionOutcome]:
         with self._session() as session:

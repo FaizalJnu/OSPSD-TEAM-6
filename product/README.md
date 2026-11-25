@@ -37,6 +37,37 @@ STORAGE_PROVIDER=fake TRACKER_PROVIDER=fake CALENDAR_PROVIDER=fake \
 run returns `201`; sending the same request again returns `200` with
 `replayed: true`. The fake providers lose their contents when the process stops.
 
+## Signed-in API and agent
+
+Both services use the same `DATABASE_URL` and `PUBLIC_ORIGIN`. Register
+`PUBLIC_ORIGIN/v1/auth/callback` in the Google Web OAuth client and set
+`GOOGLE_SIGNIN_CLIENT_ID` and `GOOGLE_SIGNIN_CLIENT_SECRET` on the API. Set
+`MEETING_API_URL` and the Groq settings on the agent. Apply migrations before
+starting either service. Run each service with one worker. Route browser
+requests to both services under `PUBLIC_ORIGIN` so the browser can send the
+host-only session cookie. Keep callback query strings out of proxy access logs.
+
+```bash
+uv run --env-file .env python -m meeting_prep.db upgrade
+uv run --env-file .env uvicorn meeting_prep.api.user_api:create_user_app --factory --no-access-log
+uv run --env-file .env uvicorn meeting_prep.agent.app:create_live_app --factory --port 8001
+```
+
+Use `USER_PROVIDERS=fake` for an in-memory test. The default `disconnected` mode
+can use a dedicated product bucket with `USER_STORAGE_PROVIDER=team6-s3` and the
+existing `S3_*` settings. A per-user connection resolver supplies Trello and
+Calendar clients. The pinned Calendar package lacks an upcoming-events read,
+and an absent connection returns `503`.
+
+| Endpoint | Request and result |
+| --- | --- |
+| `GET /v1/auth/sign-in`, `GET /v1/auth/callback` | Google redirect and one-use code exchange. The callback sets the session cookie. |
+| `GET /v1/auth/session`, `POST /v1/auth/sign-out` | Read the current identity or revoke the session and return `204`. |
+| `GET /v1/issues/open?limit=10` | Returns `issues` containing `id` and `title`. |
+| `GET /v1/calendar/upcoming?days=14` | Returns `events` containing `id`, `title`, `start`, and `end`. |
+| `GET /v1/documents?path=/reviews/agenda.md` | Returns the logical `path` and UTF-8 `content`, capped at 32 KiB. |
+| `POST /v1/proposals/{id}/execute` | Send `approval_id` and `proposal_hash`. Returns `outcomes` with the action index, kind, status, and detail. Terminal outcomes are saved for replay. A resumable provider failure leaves the proposal approved for retry. |
+
 ## Code map
 
 | Path | What it does | Owner |

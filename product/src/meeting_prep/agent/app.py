@@ -16,19 +16,29 @@ their message limit is 429 ``rate_limited``, and a run that does not fit the sha
 token budget is 429 ``busy``; both set Retry-After and never call the model.
 """
 
+import os
+from collections.abc import AsyncIterator
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from meeting_prep.agent.api_client import ActionOutcome
+from meeting_prep.agent.http_api import HttpApiClient
+from meeting_prep.agent.model import GroqModel
 from meeting_prep.agent.model import Message as ChatMessage
 from meeting_prep.agent.proposals import Proposal, proposal_view
 from meeting_prep.agent.service import MESSAGE_CHARACTERS, AgentError, AgentService
+from meeting_prep.api.sign_in import AuthError, SessionAuth, agent_principal, validate_origin
+from meeting_prep.config import require
+from meeting_prep.db import create_engine_for
+from meeting_prep.db.agent_store import AgentStore
+from meeting_prep.db.identity_store import IdentityStore
 
 STATUS = {
     "invalid_request": 400,
@@ -77,9 +87,37 @@ class Approve(_Body):
     proposal_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
-def create_app(service: AgentService) -> FastAPI:
+def create_live_app() -> FastAPI:
+    engine = create_engine_for(require(os.environ, "DATABASE_URL"))
+    auth = SessionAuth(IdentityStore(engine), require(os.environ, "PUBLIC_ORIGIN"))
+    api_url = validate_origin(require(os.environ, "MEETING_API_URL"), "MEETING_API_URL")
+
+    def session_for(user: str) -> str | None:
+        principal = agent_principal.get()
+        return principal.token if principal is not None and principal.user.id == user else None
+
+    service = AgentService(
+        AgentStore(engine), GroqModel.from_env(), HttpApiClient(api_url, session_for)
+    )
+    return create_app(service, auth=auth)
+
+
+def create_app(service: AgentService, *, auth: SessionAuth | None = None) -> FastAPI:
     app = FastAPI(title="Meeting prep agent")
     app.add_middleware(BodyLimit, limit=BODY_BYTES)
+
+    if auth is not None:
+        session_auth = auth
+
+        async def signed_in(request: Request) -> AsyncIterator[str]:
+            principal = await run_in_threadpool(session_auth.require, request)
+            context = agent_principal.set(principal)
+            try:
+                yield principal.user.id
+            finally:
+                agent_principal.reset(context)
+
+        app.dependency_overrides[current_user] = signed_in
 
     @app.post("/v1/conversations", status_code=201)
     def create_conversation(body: NewConversation, user: CurrentUser) -> dict[str, object]:
@@ -137,6 +175,12 @@ def create_app(service: AgentService) -> FastAPI:
     @app.exception_handler(Unauthorized)
     def unauthorized(request: Request, error: Exception) -> JSONResponse:
         return _error(401, "unauthorized", "sign in to use the agent")
+
+    @app.exception_handler(AuthError)
+    def auth_error(request: Request, error: AuthError) -> JSONResponse:
+        return _error(
+            error.status, error.code, "A valid session from the signed-in site is required."
+        )
 
     @app.exception_handler(RequestValidationError)
     def invalid(request: Request, error: Exception) -> JSONResponse:

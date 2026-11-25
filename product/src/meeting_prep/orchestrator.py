@@ -38,6 +38,7 @@ from meeting_prep.agenda import agenda_path, render
 from meeting_prep.run_record import (
     GUARD,
     RECORDED_STEPS,
+    RUN_ID_LENGTH,
     InvalidRecord,
     MeetingRequest,
     RecordedStep,
@@ -53,7 +54,6 @@ from meeting_prep.run_record import (
     new_record,
     record_path,
     request_token,
-    run_id_for,
     to_bytes,
 )
 
@@ -227,28 +227,34 @@ class Orchestrator:
         *,
         clock: Clock = utc_now,
         locks: RunLocks | None = None,
+        user_id: str = "",
     ) -> None:
         self.storage = storage
         self.tracker = tracker
         self.calendar = calendar
         self.clock = clock
         self.locks = locks if locks is not None else InProcessRunLocks()
+        self.user_id = user_id
 
     def run(self, body: Mapping[str, object]) -> RunResult:
         """Run or resume the request's run. Raises ReviewMeetingError."""
         request = validate(body, self.clock())
-        run_id = run_id_for(request)
+        token = request_token(request, user_id=self.user_id)
+        run_id = token[:RUN_ID_LENGTH]
         with self.locks.hold(run_id):
-            return _Attempt(self, request, run_id).execute()
+            return _Attempt(self, request, run_id, token).execute()
 
 
 class _Attempt:
     """One request's pass over a run. ``record`` is what this request knows to be true."""
 
-    def __init__(self, deps: Orchestrator, request: MeetingRequest, run_id: str) -> None:
+    def __init__(
+        self, deps: Orchestrator, request: MeetingRequest, run_id: str, creation_token: str
+    ) -> None:
         self.deps = deps
         self.request = request
         self.run_id = run_id
+        self.creation_token = creation_token
         self.path = record_path(run_id)
         self.record: RunRecord | None = None
         # The partner step whose lease this request wrote, and when (for the 20 s guard).
@@ -326,8 +332,9 @@ class _Attempt:
             title = meeting_title(self.request, self.run_id)  # the marker, either way
             try:
                 if tracker.tagged:
-                    token = request_token(self.request)
-                    issue_id = tracker.create_tagged_issue("create_issue", title, token)
+                    issue_id = tracker.create_tagged_issue(
+                        "create_issue", title, self.creation_token
+                    )
                 else:
                     issue_id = tracker.create_issue(title)
             except StepError as error:
@@ -346,7 +353,7 @@ class _Attempt:
         tracker = self.deps.tracker
         try:
             if tracker.tagged:
-                return tracker.find_tagged_issue("create_issue", request_token(self.request))
+                return tracker.find_tagged_issue("create_issue", self.creation_token)
             issues = tracker.list_issues(ISSUE_SEARCH_LIMIT)
         except StepError as error:
             # The earlier attempt's card may still exist, so the step stays unknown.

@@ -1,5 +1,7 @@
 # Meeting prep interface
 
+Using the product? Start with [GETTING_STARTED.md](GETTING_STARTED.md).
+
 The web interface for the meeting prep product. A person runs the review-meeting
 scenario by hand and sees each step's outcome. It calls only our API service. It
 never calls Trello, Google Calendar, cloud storage, another team's service, or the

@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 
 def test_upload_without_file_field_returns_400_and_stores_nothing(client: TestClient) -> None:
-    response = client.post("/files/notes.txt")
+    response = client.post("/files", data={"path": "notes.txt"})
 
     assert response.status_code == 400
     body = response.json()

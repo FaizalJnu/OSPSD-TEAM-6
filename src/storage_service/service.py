@@ -94,6 +94,14 @@ class FileService:
         with _storage_call("put"):
             return self._storage.put(key, stream, guess_content_type(key))
 
+    def create_at(self, path: str, stream: BinaryIO, size: int) -> CommonFileInfo:
+        """Create, for a file named by its path. Returns the shared file info."""
+        return common_file_info(self.create(path_to_key(normalize_path(path)), stream, size))
+
+    def replace_at(self, path: str, stream: BinaryIO, size: int) -> CommonFileInfo:
+        """Replace, for a file named by its path. Returns the shared file info."""
+        return common_file_info(self.replace(path_to_key(normalize_path(path)), stream, size))
+
     def download(self, path: str) -> FileDownload:
         key = path_to_key(normalize_path(path))
         with _storage_call("get"):

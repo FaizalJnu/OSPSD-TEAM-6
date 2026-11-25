@@ -74,9 +74,9 @@ def test_metadata_missing_file_returns_the_public_error(client):
 
 def test_metadata_accepts_a_unicode_key_at_the_utf8_byte_limit(client):
     key = "é" * 510 + ".tx"  # 1024 bytes including the canonical leading slash.
-    path = quote(key, safe="/")
-    assert send_file(client, "POST", path, b"hello").status_code == 201
-    response = client.get(f"/files/metadata?path={path}")
+    # A form field is sent as is; only the query string is percent-encoded.
+    assert send_file(client, "POST", key, b"hello").status_code == 201
+    response = client.get(f"/files/metadata?path={quote(key, safe='/')}")
     assert response.status_code == 200
     assert response.json()["path"] == "/" + key
 

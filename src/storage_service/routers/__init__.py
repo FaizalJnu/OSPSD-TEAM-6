@@ -3,9 +3,11 @@
 Routes stay thin. Each one unpacks the HTTP request, calls one FileService
 method, and shapes the response. All decisions live in the service.
 
-    GET    /files              list files (query: prefix, limit, cursor)
-    POST   /files/{key}        create a file (multipart form field named "file")
-    PUT    /files/{key}        replace an existing file (same form field)
+    GET    /files              list a folder (query: path)
+    POST   /files              create a file (multipart form fields "path" and "file")
+    PUT    /files              replace an existing file (same form fields)
+    POST   /files/{key}        deprecated create, by key (form field "file")
+    PUT    /files/{key}        deprecated replace, by key (form field "file")
     GET    /files/download     download a file (query: path)
     DELETE /files              delete a file (query: path)
     GET    /files/metadata     a file's info as JSON (query: path)

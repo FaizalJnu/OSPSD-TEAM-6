@@ -1,4 +1,7 @@
-"""Create and replace: POST and PUT /files/{key}. Owner: Debasmith Mandal."""
+"""Create and replace: POST and PUT /files, and the deprecated /files/{key}.
+
+Owner: Debasmith Mandal.
+"""
 
 import io
 import os
@@ -8,7 +11,7 @@ import pytest
 from botocore.stub import ANY
 
 from storage_service.errors import AccessDenied, ProviderUnavailable
-from tests.conftest import MAX_UPLOAD_BYTES, send_file
+from tests.conftest import MAX_UPLOAD_BYTES, send_file, send_file_by_key
 
 
 def test_upload_then_download_returns_identical_bytes(client):
@@ -47,7 +50,7 @@ def test_upload_over_the_limit_is_413(client):
     assert client.get("/files/download", params={"path": "big.bin"}).status_code == 404
 
 
-def test_invalid_key_is_400(client):
+def test_invalid_path_is_400(client):
     response = send_file(client, "POST", "a//b.txt", b"data")
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "invalid_request"
@@ -57,23 +60,86 @@ def test_invalid_key_is_400(client):
 # --- Level 1: the full contract over HTTP (in-memory storage) ---
 
 
-def test_create_returns_every_field_and_metadata_agrees(client):
+def test_create_returns_the_shared_file_info_and_metadata_agrees(client):
     data = b"hello, storage"
     created = send_file(client, "POST", "photos/2026/cat.png", data)
 
     assert created.status_code == 201
     info = created.json()
-    assert set(info) == {"key", "size", "content_type", "etag", "last_modified"}
-    assert info["key"] == "photos/2026/cat.png"
-    assert isinstance(info["size"], int)
+    assert set(info) == {
+        "id",
+        "name",
+        "path",
+        "size",
+        "content_type",
+        "etag",
+        "modified_at",
+        "type",
+    }
+    assert info["path"] == "/photos/2026/cat.png"
+    assert info["name"] == "cat.png"
+    assert info["id"] is None
+    assert type(info["size"]) is int
     assert info["size"] == len(data)
     assert info["content_type"] == "image/png"
     assert info["etag"]
     assert '"' not in info["etag"]
-    assert info["last_modified"].endswith("Z")
-    assert datetime.fromisoformat(info["last_modified"]).utcoffset() == timedelta(0)
+    assert info["modified_at"].endswith("Z")
+    assert datetime.fromisoformat(info["modified_at"]).utcoffset() == timedelta(0)
     # A follow-up read sees exactly what the write reported.
-    assert client.get("/files/metadata?path=photos/2026/cat.png").json()["etag"] == info["etag"]
+    assert client.get("/files/metadata?path=photos/2026/cat.png").json() == info
+
+
+def test_a_path_with_or_without_its_leading_slash_names_the_same_file(client):
+    created = send_file(client, "POST", "docs/notes.txt", b"first")
+    assert created.status_code == 201
+    assert created.json()["path"] == "/docs/notes.txt"
+
+    again = send_file(client, "POST", "/docs/notes.txt", b"second")
+    assert again.status_code == 409
+    assert again.json()["error"]["code"] == "conflict"
+
+    replaced = send_file(client, "PUT", "/docs/notes.txt", b"second")
+    assert replaced.status_code == 200
+    assert replaced.json()["path"] == "/docs/notes.txt"
+
+
+def test_the_path_reaches_storage_as_its_key(fake, fake_client):
+    assert send_file(fake_client, "POST", "/docs/notes.txt", b"data").status_code == 201
+    assert ("put", "docs/notes.txt") in fake.calls
+
+
+@pytest.mark.parametrize("method", ["POST", "PUT"])
+@pytest.mark.parametrize(
+    ("form", "message"),
+    [
+        ({"files": {"file": ("upload", b"x")}}, "path: Field required"),
+        # FastAPI reads an empty form field as a missing one.
+        ({"data": {"path": ""}, "files": {"file": ("upload", b"x")}}, "path: Field required"),
+        ({"data": {"path": "notes.txt"}}, "file: Field required"),
+    ],
+)
+def test_both_form_fields_are_required(fake, fake_client, method, form, message):
+    response = fake_client.request(method, "/files", **form)
+
+    assert response.status_code == 400
+    assert response.json() == {"error": {"code": "invalid_request", "message": message}}
+    assert fake.calls == []
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/", "docs/", "docs//a.txt", "docs/./a.txt", "docs/../a.txt", "a\x00.txt", "é" * 512],
+)
+@pytest.mark.parametrize("method", ["POST", "PUT"])
+def test_a_path_that_breaks_a_path_rule_is_400_before_any_storage_call(
+    fake, fake_client, method, path
+):
+    response = send_file(fake_client, method, path, b"data")
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_request"
+    assert fake.calls == []
 
 
 def test_upload_of_exactly_the_limit_is_accepted(client):
@@ -102,7 +168,9 @@ def test_replace_over_the_limit_keeps_the_old_contents(client):
 
 def test_client_content_type_is_ignored(client):
     response = client.post(
-        "/files/a.png", files={"file": ("a.png", b"not really a png", "text/html")}
+        "/files",
+        data={"path": "a.png"},
+        files={"file": ("a.png", b"not really a png", "text/html")},
     )
     assert response.status_code == 201
     assert response.json()["content_type"] == "image/png"
@@ -137,6 +205,46 @@ def test_create_that_stores_the_file_then_fails_returns_503_and_a_retry_is_409(f
     # The 503 did not mean nothing changed: the file was stored.
     assert fake_client.get("/files/metadata?path=notes.txt").status_code == 200
     assert send_file(fake_client, "POST", "notes.txt", b"data").status_code == 409
+
+
+# --- The deprecated /files/{key} routes, kept for existing callers ---
+
+
+def test_the_key_routes_still_create_and_replace_and_return_the_legacy_file_info(client):
+    created = send_file_by_key(client, "POST", "photos/2026/cat.png", b"hello, storage")
+
+    assert created.status_code == 201
+    info = created.json()
+    assert set(info) == {"key", "size", "content_type", "etag", "last_modified"}
+    assert info["key"] == "photos/2026/cat.png"
+    assert info["size"] == len(b"hello, storage")
+    assert info["content_type"] == "image/png"
+    assert info["last_modified"].endswith("Z")
+    assert datetime.fromisoformat(info["last_modified"]).utcoffset() == timedelta(0)
+
+    replaced = send_file_by_key(client, "PUT", "photos/2026/cat.png", b"more")
+    assert replaced.status_code == 200
+    assert replaced.json()["size"] == len(b"more")
+    # The same file as the shared routes see it.
+    assert send_file(client, "POST", "/photos/2026/cat.png", b"x").status_code == 409
+    assert (
+        client.get("/files/metadata?path=/photos/2026/cat.png").json()["etag"]
+        == (replaced.json()["etag"])
+    )
+
+
+def test_the_key_routes_still_follow_the_key_rules(client):
+    # A key, unlike a path, cannot start with "/".
+    response = send_file_by_key(client, "POST", "/notes.txt", b"data")
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_request"
+
+
+def test_openapi_marks_only_the_key_routes_deprecated(client):
+    paths = client.get("/openapi.json").json()["paths"]
+    for method in ("post", "put"):
+        assert paths["/files/{key}"][method]["deprecated"] is True
+        assert "deprecated" not in paths["/files"][method]
 
 
 # --- Level 3: how S3Storage.put translates provider replies (no network) ---

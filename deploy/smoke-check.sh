@@ -35,9 +35,9 @@ code=$(status "$base/health/provider")
 [ "$code" = 200 ] || fail "GET /health/provider returned $code: $(cat "$work/body")"
 echo "ok   GET /health/provider"
 
-code=$(status -X POST -F "file=@$work/upload.txt;type=text/plain" "$base/files/$key")
-[ "$code" = 201 ] || fail "POST /files/$key returned $code: $(cat "$work/body")"
-echo "ok   POST /files/$key"
+code=$(status -X POST --form-string "path=$key" -F "file=@$work/upload.txt;type=text/plain" "$base/files")
+[ "$code" = 201 ] || fail "POST /files returned $code: $(cat "$work/body")"
+echo "ok   POST /files ($key)"
 
 code=$(status "$base/files/download?path=$key")
 [ "$code" = 200 ] || fail "GET /files/download returned $code: $(cat "$work/body")"

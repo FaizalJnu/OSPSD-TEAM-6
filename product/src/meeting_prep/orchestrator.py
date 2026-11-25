@@ -93,6 +93,7 @@ class ReviewMeetingError(Exception):
         run: dict[str, object] | None = None,
         retry_after: int | None = None,
         provider_code: str | None = None,
+        provider_cause: str | None = None,
     ) -> None:
         super().__init__(f"{code}: {message}")
         self.code = code
@@ -103,6 +104,7 @@ class ReviewMeetingError(Exception):
         self.run = run
         self.retry_after = retry_after
         self.provider_code = provider_code
+        self.provider_cause = provider_cause
 
     def body(self) -> dict[str, object]:
         """The error body: the HW1 envelope plus step, retryable and may_have_applied."""
@@ -463,6 +465,7 @@ class _Attempt:
             may_have_applied=may_have_applied,
             run=run,
             provider_code=error.provider_code,
+            provider_cause=error.provider_cause,
         )
 
     def _outcome_unknown(self) -> ReviewMeetingError:
@@ -593,6 +596,8 @@ def _message(step: Step, code: str, may_have_applied: bool, retryable: bool) -> 
         text += " It may have been applied."
     if retryable:
         text += " Send the same request again to resume the run."
+    elif step == "create_issue" and code == "provider_error":
+        text += " Check the tracker settings or wait for a rate limit to clear before resending."
     else:
         text += " An operator must act before the run can continue."
     return text

@@ -25,6 +25,7 @@ dependencies = [
     "sqlalchemy>=2.1",
     "groq>=1.7.0",
     "fastapi>=0.165.0",
+    "uvicorn>=0.54.0",
 ]
 
 [build-system]
@@ -45,6 +46,7 @@ team5-calendar = { git = "https://github.com/juno-junhyuk-lee/OSPSD-Team-5.git",
 
 [dependency-groups]
 dev = [
+    "httpx2>=2.13.1",
     "mypy>=2.4.0",
     "pytest>=9.1.1",
     "ruff>=0.16.10",

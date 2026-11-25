@@ -1,0 +1,204 @@
+Team 3: 
+Author: Zesan Rahman    Implementation contact: Jing Qian    Last updated: 10/24/26
+Repo / contract links: https://github.com/Shreyas191/OSPSD-Team-3/
+
+1. Operations we propose for the common core
+List each operation with one line on what it does.
+- POST /files/upload: upload a file with option to overwrite or not
+- GET /files/metadata?path={PATH}: retrieve metadata for a file or folder
+- GET /files/download?path={PATH}: download a file
+- POST /files/move: move or rename a file or folder into a new path
+- DELETE /files?path={PATH}: delete file at path
+- GET /folders/list?path={PATH} - list the files and folders within a folder
+
+2. One current request and result
+Method, path, sanitized request body, sanitized response.
+
+Method
+Path
+Sanitized Request Body
+Sanitized Response
+POST
+/files/upload
+file: report.pdf
+remote_path: /Docs/report.pdf
+overwrite: false
+200 OK
+{
+  "id": "sanitized-file-id",
+  "name": "report.pdf",
+  "path": "/Docs/report.pdf",
+  "is_folder": false,
+  "size": 1234,
+  "modified": "2026-10-23T12:00:00"
+}
+GET
+/files/metadata?path={PATH}
+path: /Docs/report.pdf
+200 OK
+{
+  "id": "sanitized-id",
+  "name": "report.pdf",
+  "path": "/Docs/report.pdf",
+  "is_folder": false,
+  "size": 12345,
+  "modified": "2026-01-15T12:00:00"
+}
+
+
+GET
+/files/download?path={PATH}
+path: /Docs/report.pdf
+200 OK 
+{raw file bytes}
+POST
+/files/move
+from_path: /Docs/report.pdf
+to_path: /Archive/report.pdf
+200 OK
+{
+  "id": "sanitized-file-id",
+  "name": "report.pdf",
+  "path": "/Archive/report.pdf",
+  "is_folder": false,
+  "size": 1234,
+  "modified": "2026-10-23T12:00:00"
+}
+
+
+DELETE
+/files?path={PATH}
+path: /Docs/report.pdf
+204 No Content
+No body
+GET
+/folders/list?path={PATH}
+path: /Docs
+200 OK
+[
+  {
+    "id": "sanitized-file-id",
+    "name": "report.pdf",
+    "path": "/Docs/report.pdf",
+    "is_folder": false,
+    "size": 1234,
+    "modified": "2026-10-23T12:00:00"
+  }
+]
+
+
+
+3. One failure that affects the contract
+Request that fails, the HTTP status and body we return, and the
+provider error behind it.
+Scenario: upload when destination already exists and overwrite is disabled
+Request body:
+file: report.pdf
+remote_path: /Docs/report.pdf
+overwrite: false
+ HTTP Status: 409 Conflict
+Response body:
+{
+  "error": {
+    "code": "conflict",
+    "message": "An item already exists at ‘/Docs/report.pdf’"
+  }
+}
+Provider error: Dropbox reports a path conflict, which the client translates to a FileExistsError. Service maps it to a 409 conflict with the appropriate body.
+
+4. Differences others should know about
+
+Area
+Our service
+Why it matters to a consumer
+Operation names
+GET /files/metadata
+GET /files/download
+GET /folders/list
+
+POST /files/upload
+POST /files/move
+
+DELETE /files
+Call appropriate endpoint for each operation, no generic endpoint
+Inputs / required fields
+metadata, download, and delete: required path param
+
+list folders: optional path param, defaults to root 
+
+upload file: required multipart forms file and remote_path, optional overwrite
+
+move: required valid from_path and to_path
+Send required inputs for each operation. Missing required inputs are rejected with a 422 error
+Return values
+metadata, upload and move return a file object with the following attributes:
+id, name, path, is_folder, size, modified
+
+list returns an array of file objects
+
+download returns raw bytes with application/octet-stream content type
+
+Successful GET and POST operations return 200, DELETE returns 204. 
+Handle downloads as bytes and not expecting JSON, list and search are arrays of file objects, and file objects have the attributes listed
+Side effects
+Metadata, download, list read storage data
+
+Upload writes a file
+
+Rename and move change an existing entry
+
+Delete removes an entry
+Rename, move, upload, and delete modify cloud storage.
+
+ Metadata, download, and list are read operations
+Error meanings
+Errors use {"error":{"code":"...","message":"..."}}.
+422 invalid_input: invalid request or path.
+404 not_found: source or requested entry does not exist.
+409 conflict: destination already exists.
+403 permission_denied: provider denied the operation.
+503 provider_unavailable: provider is unreachable or busy.
+502 provider_failure: other provider OSError.
+503 service_busy: service concurrency limit reached; includes Retry-After: 1.
+Consumer does not see provider details while still getting enough information from the error codes to decide on future action
+Identifiers (format, scope)
+File responses include an id string from Dropbox
+Don’t construct ids, just use the id given as a unique identifier.
+
+
+
+5. Provider constraints
+State each constraint, then the evidence: a docs link or a small
+experiment you ran (what you did, what happened).
+Mark anything you have NOT verified as "unverified."
+
+
+Constraint
+Evidence
+Paths must be absolute, with no trailing slash or empty segment (except GET /folders/list, which also accepts "" and / for the root).
+Rejected with 422 before Dropbox is called (AbsolutePath); tested in test_path_validation.py with a fake client.
+Upload doesn’t overwrite by default (identical bytes too); overwriting keeps the file’s id.
+Verified against real Dropbox: test_create_integration.py (409 on a taken path, 409 on identical bytes, same id after overwrite).
+A single upload is limited to 150 MB.
+Unverified: from the Dropbox API docs only.
+Move never overwrites; paths are case-insensitive; a folder can’t be moved into itself.
+Verified against real Dropbox: test_update_integration.py (404 missing, 409 taken or case-only rename, 422 folder into itself).
+Delete removes a file or a folder with its contents; deleting again returns 404.
+Verified against real Dropbox: test_delete_integration.py. That similarly prefixed siblings stay untouched is unverified (fake storage only).
+Download needs a file; listing needs a folder.
+Verified against real Dropbox: test_read_integration.py (422 for a folder or file, 404 for a missing path).
+
+
+
+6. What we would need to change
+- Code/tests/config that changes:
+Need to agree on endpoints and behaviors among the teams
+E.g. Need to agree on upload endpoint: team 1 does not allow overwrites at all while we (team 3) give an option for overwrite
+Add/update tests according to agreed endpoints
+Update READMEs/contracts based on new agreed behavior
+- Estimated effort (label as estimate):1-2 days
+- Work that depends on another team:
+Finalizing API
+
+7. Decisions we need from the group
+Names of the different types of requests (POST vs PATCH)

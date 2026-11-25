@@ -1,0 +1,105 @@
+Team 6: Document Storage pre-read
+Author: Faizal Rahman  Implementation contact: Debasmith Mandal
+Repo / contract links (all at commit bb59c59 on dev):
+HW1 repo: https://github.com/FaizalJnu/OSPSD-TEAM-6 (last release tag v0.1.0)
+HTTP contract: docs/API.md
+Python storage interface: storage/base.py, models.py, errors.py
+Provider records: TESTING.md, docs/PROVIDERS.md
+
+The service is a FastAPI app over one S3-compatible bucket, reached with boto3. We verify on OCI Object Storage (us-ashburn-1). The same adapter is configured for AWS S3 and Google Cloud Storage (see section 5 for how far those are verified).
+1. Operations we propose for the common core
+We propose all six of our current operations. Each one is a single file addressed by its key.
+Create (POST /files/{key}): stores a new file and fails if the key is already taken.
+Replace (PUT /files/{key}): overwrites an existing file and fails if there is no file under the key.
+Download (GET /files/{key}): streams the file's exact bytes back.
+Metadata (GET /metadata/{key}): returns the file's info without its contents.
+Delete (DELETE /files/{key}): removes one file and fails if it does not exist.
+List (GET /files?prefix=&limit=&cursor=): returns one page of files whose keys start with a prefix, sorted by key, with an opaque cursor to the next page.
+
+Workflow a consumer should be able to run unchanged against any of the three services: create a file, read its metadata, download it and compare bytes, list its prefix until next_cursor is null, replace it, delete it, and confirm Metadata now returns not-found.
+2. One current request and result
+This is List against OCI Object Storage, recorded on 2026-10-14 at commit b95bf89. It returns the first page, two per page, of a prefix holding three files. The cursor is shortened. The full exchange is in API.md › List › Example.
+curl -s -G $B/files --data-urlencode "prefix=examples/list-demo/" --data-urlencode "limit=2"
+{
+  "files": [
+    {"key": "examples/list-demo/a.txt", "size": 1, "content_type": null,
+     "etag": "9dd4e461268c8034f5c8564e155c67a6", "last_modified": "2026-10-14T20:31:34Z"},
+    {"key": "examples/list-demo/b.txt", "size": 1, "content_type": null,
+     "etag": "9dd4e461268c8034f5c8564e155c67a6", "last_modified": "2026-10-14T20:31:34Z"}
+  ],
+  "next_cursor": "1:OsT0j2SY..."
+}
+Create, Replace and Metadata return the same five-field object for one file. Create returns 201 and Replace returns 200.
+3. One failure that affects the contract
+The configured bucket does not exist, and a caller asks for a file's metadata.
+curl -i $B/metadata/missing.txt
+HTTP/1.1 502
+{"error": "ProviderError", "detail": "the configured bucket does not exist or is not accessible"}
+This was observed on OCI by Faizal Rahman on 2026-10-21 at commit cb623aa. Delete and Replace give the same 502 and nothing is written. A missing key in a bucket that does exist still returns 404 FileNotFound.
+The provider error behind it. S3 HeadObject responses have no body. OCI answers a missing key and a missing bucket with the same bare 404 / NotFound. Before our fix (FIX-2), we passed that along as 404 FileNotFound, so a misconfigured deployment told callers their file was gone. Now, after an ambiguous HEAD 404, we call HeadBucket. If the bucket is accessible, the caller gets 404. If the bucket is missing, the caller gets 502. If access is denied, the caller gets 403. The provider's own code (NoSuchBucket, etc.) goes to our log only.
+Why it matters for the shared contract. "File not found" and "storage is misconfigured" need different responses from a consumer. If one implementation reports both as not-found, a consumer that recreates missing files would silently write into the void, or would report data loss that never happened. The contract has to say which error means what. Doing this costs an extra provider call on every ambiguous miss, and it needs bucket-read permission.
+4. Differences others should know about
+Area
+Our service
+Why it matters to a consumer
+Operation names
+HTTP: POST/PUT/GET/DELETE /files/{key}, GET /metadata/{key}, GET /files. Python: create, replace, download, stat, list_files, delete.
+Create and Replace are two separate verbs. A consumer written against a single "upload" call would have to choose one, or handle 409 and 404 itself.
+Inputs / required fields
+The key is the URL path, slashes included (/files/photos/2026/cat.jpg). Uploads are multipart/form-data with one required field, file. The request never names a bucket: one deployment serves one bucket, set by S3_BUCKET. The client's filename and content type are ignored. List takes optional prefix (plain text, not a folder), limit (1–1000, default 100) and cursor.
+If another service takes a bucket or container in the request, or a raw request body, or a JSON body, then the request structure differs, not only the base URL.
+Return values
+File info has five fields: key, size (bytes), content_type (string or null), etag (unquoted, opaque), last_modified (ISO 8601 UTC ending in Z, with a variable number of fraction digits). List returns {files, next_cursor}, and only a null cursor means the end. Delete returns 204 with no body. Download sends Content-Type, Content-Length, a quoted ETag, and Content-Disposition: attachment.
+content_type is always null in listings because S3 List doesn't return it. A page can be short or even empty and still have a cursor. A consumer that stops on a short page will miss files. ETags differ in quoting between JSON and the header.
+Side effects
+Create refuses to overwrite (409). Replace refuses a missing file (404). Delete of a missing file returns 404, not 204. The server sets the content type from the key's extension. Create, Replace and Delete first check whether the file exists and then write, using two separate provider calls.
+Delete is not idempotent here, so a retried delete that already succeeded returns 404. Two concurrent creates can both succeed, and the last write wins. If another service lets the client set the content type, downloads will carry different types.
+Error meanings
+Every error body is {"error": <type>, "detail": <text>}. Programs check error. The types are: InvalidInput 400, AccessDenied 403 (the service's credentials, not the caller's), FileNotFound 404, FileAlreadyExists 409, FileTooLarge 413 (default limit 1 GiB), ProviderError 502, ProviderUnavailable 503, plus RouteNotFound, MethodNotAllowed and InternalError. A 502 or 503 after a write means the outcome is unknown, so check with Metadata before retrying.
+Consumers branch on these names and statuses. If services disagree on the type or status for the same outcome (for example 404 versus 502 for a missing bucket, or 500 versus 503 for a timeout), the consumer needs per-service code.
+Identifiers (format, scope)
+A key is non-empty, at most 1024 UTF-8 bytes, has no control characters, doesn't start or end with /, and has no //, . or .. segments. It is percent-encoded in the URL. Keys are scoped to the one configured bucket. Cursors are opaque, belong to a single prefix, and can change between requests for the same page on OCI.
+A key that is valid on one service and rejected (400) on another breaks portability. If another service uses provider-generated IDs instead of caller-chosen keys, the consumer has to store a mapping.
+
+
+5. Provider constraints
+Unless a constraint is marked otherwise, it was verified on OCI Object Storage (us-ashburn-1) through its S3 compatibility API. The run records are in TESTING.md.
+HEAD cannot tell a missing key from a missing bucket. Both come back as a bare 404. Evidence: the FIX-2 experiment. With the bucket name changed in memory to one that was never created, Metadata, Delete and Replace all returned 404 FileNotFound before the fix and 502 ProviderError after it. Verified by Darsh Shani (2026-10-14, 2026-10-20) and Faizal Rahman (2026-10-21).
+S3 DeleteObject succeeds for a missing key. Our 404 is our own rule, enforced by a HeadObject call before the delete. Evidence: AWS DeleteObject docs. The behaviour of our 404 rule on OCI is covered by the Delete provider tests (Prateek Saxena, 2026-10-21, 560ee5d).
+List does not return content types, and returns at most 1000 keys per call. This is why content_type is null in listings and limit is capped at 1000. Evidence: AWS ListObjectsV2 docs and our observed OCI List output (section 2).
+OCI rejects boto3's default upload checksums. It responds with NotImplemented because it doesn't support aws-chunked encoding, so every upload returned 502 until FIX-1. We now send checksums only when an operation requires them. Evidence: reproduced and fixed in #31.
+ETags are not always MD5. A 12 MiB upload, which boto3 sends as a multipart upload in 8 MB parts, came back as <hash>-2. A single-part upload's ETag is the MD5 of the content. Evidence: Create provider runs (Debasmith Mandal, b95bf89).
+last_modified has one-second precision on OCI. A Create and a Replace in the same second reported the same timestamp, so a change should be detected by etag. Evidence: same runs as 5.
+List cursors on OCI. A malformed cursor is rejected with InvalidArgument, which we map to 400 (FIX-3). Two requests for the same page return different cursor strings, and both work. A cursor sent with a different prefix returned 200 with an empty page, not an error. Evidence: List provider runs (Faizal Rahman 2026-10-14, Prateek Saxena 2026-10-21).
+AWS: without s3:ListBucket permission, a missing key returns 403, not 404. We would then report AccessDenied instead of FileNotFound. Evidence: AWS HeadObject docs. Unverified by us.
+AWS S3 and Google Cloud Storage (XML API, HMAC keys). PROVIDERS.md records the provider suite as passing on both, but the record has no runner, date or commit. Treat as unverified until we rerun it and record it properly.
+Atomic create-if-absent. S3 conditional writes (If-None-Match: *) could remove our check-then-write race. Unverified on OCI and on GCS's XML API. We haven't tried it.
+Not yet run live: the 409 and 413 error cases on OCI, files near the 1 GiB limit, and how long a cursor stays valid.
+
+6. What we would need to change
+Code/tests/config that changes:
+storage/base.py, models.py and errors.py would be replaced by imports from the shared contract package, or by thin adapters to it. storage/s3.py and storage/memory.py would implement the shared interface. service.py would keep our rules unless the group changes them.
+routers/ and routers/error_handlers.py would change if the shared HTTP contract renames routes, fields or error types. In that case we keep compatibility routes or document a migration in API.md.
+Tests: we add the shared conformance checks and run them against the in-memory backend, against stubbed S3 (fast suite, no network), and against a real bucket (-m provider). tests/test_storage_contract.py already runs one suite against every backend, so this is the pattern we'd extend.
+Docs: API.md, ARCHITECTURE.md, and a new DESIGN.md that links the memo.
+Config: no change expected. If requests start carrying a bucket or container, the S3_BUCKET setting becomes a default or an allow-list.
+Estimated effort (estimate, not measured): about 2–3 person-days if the shared contract stays close to ours (key-addressed, five-field file info, opaque cursor, similar error set). About 5–7 person-days if it adds a container per request, merges Create and Replace, or changes the error statuses, because each of those touches routes, service rules, tests and docs.
+Work that depends on another team:
+A published, tagged shared contract package (owner to be decided).
+The shared conformance checks.
+The other two storage services running, for the cross-implementation consumer test.
+Consumer review from at least one team outside our vertical.
+
+7. Decisions we need from the group
+Create and Replace. Should the core keep two verbs (create fails if the key exists, replace fails if it's missing), or use a single upsert? We keep two verbs today so a caller can't overwrite a file by accident.
+Delete of a missing file. Should it return 404 (our behaviour, which makes typos visible) or 204 (idempotent, S3's native behaviour, and safer to retry)?
+Bucket or container in the request? Is it per-request, or per-deployment configuration (ours)? This decides whether "switch services by changing only the base URL" holds.
+Upload format. Multipart form field file (ours), a raw request body, or both? And in the Python contract, do operations take streams (ours) or local file paths?
+File info fields and formats. Which fields are required? Is content_type allowed to be null in listings? Should etag be opaque and unquoted, and last_modified ISO 8601 UTC?
+Listing. Opaque cursor plus limit (1–1000), with prefix as plain text (ours), or folder-style delimiters? And may short or empty pages carry a cursor?
+Error vocabulary. One body shape, one set of type names, and one status per outcome, including a missing bucket (we use 502) and a write whose outcome is unknown (we use 502/503 and tell the caller to check before retrying).
+Key rules and size limit. One common key-validation rule set, and a minimum upload size every implementation must accept.
+Contract ownership. Who owns the shared package repo, how versions are tagged, and who must approve a breaking change.
+
+
+

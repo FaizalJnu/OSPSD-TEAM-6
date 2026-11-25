@@ -1,0 +1,185 @@
+Team 1: Dayana Alejandro, Shini Agarwal, Annie Jain, Laya Mangalagiri, Yashwanth Kasanneni
+Author: Dayana Alejandro    
+Implementation contact:
+Last updated: 10/23
+Repo / contract links: HW1 Milestone 3
+
+1. Operations we propose for the common core
+List each operation with one line on what it does.
+GET /health — health check
+POST /files — upload a file
+GET /files/metadata?path={PATH} — read file metadata
+GET /files/download?path={PATH} — download file contents
+PATCH /files?path={PATH} — move or rename a file; provide new_path in the JSON body
+DELETE /files?path={PATH} — delete a file
+
+
+2. One current request and result
+Method
+Path
+Sanitized Request Body
+Sanitized Response
+GET
+/health
+None
+200 OK
+{"status": "ok"}
+POST
+/files
+Multipart form data:
+path: /docs/report.pdf
+file: report.pdf
+201 Created
+{
+  "id": "sanitized-file-id",
+  "name": "report.pdf",
+  "path": "/docs/report.pdf",
+  "size": 1234,
+  "modified_at": "2026-10-23T12:00:00Z"
+}
+GET
+/files/metadata?path=/docs/report.pdf
+None
+200 OK
+{
+  "id": "sanitized-file-id",
+  "name": "report.pdf",
+  "path": "/docs/report.pdf",
+  "size": 1234,
+  "modified_at": "2026-10-23T12:00:00Z"
+}
+GET
+/files/download?path=/docs/report.pdf
+None
+200 OK
+Content-Type: application/octet-stream
+Content-Disposition: attachment; filename="report.pdf";filename*=UTF-8''report.pdf
+Body: File Bytes
+PATCH
+/files?path=/docs/report.pdf
+{"new_path": "/archive/report.pdf"}
+200 OK
+{
+  "id": "sanitized-file-id",
+  "name": "report.pdf",
+  "path": "/archive/report.pdf",
+  "size": 1234,
+  "modified_at": "2026-10-23T12:05:00Z"
+}
+DELETE
+/files?path=/archive/report.pdf
+None
+204 No Content
+
+
+
+3. One failure that affects the contract
+Request that fails, the HTTP status and body we return, and the provider error behind it.
+Request: GET /files/download?path=/docs/report.pdf
+Request body: None
+Scenario: Dropbox times out while retrieving the file.
+HTTP status: 502 Bad Gateway
+Response body:
+{
+  "error": {
+    "code": "provider_error",
+    "message": "Dropbox could not download: /docs/report.pdf"
+  }
+}
+Underlying provider/transport error: requests.exceptions.ReadTimeout
+The download adapter translates that timeout into a ProviderError in storage.py, and the app’s exception handler returns the 502 response in main.py. The response does not expose the internal exception details.
+
+
+
+4. Differences others should know about
+
+Area
+Our service
+Why it matters to a consumer
+Operation names
+POST /files uploads; 
+GET /files/metadata reads metadata; 
+GET /files/download reads file bytes; 
+PATCH /files moves or renames; 
+DELETE /files deletes; 
+GET /health checks service availability.
+Call the appropriate endpoint for the desired operation. There is no generic GET /files endpoint.
+Inputs / required fields
+File operations use absolute paths such as /docs/report.pdf. 
+Paths are required, must start with /, must not end with /, and cannot contain empty, . or .. segments. 
+Upload uses multipart form fields file and path
+Move uses the source path query parameter and new_path in a JSON body.
+Clients need to use the service’s path format and send each field in the expected location and content type. Uploads larger than 150 MiB are rejected.
+Return values
+Upload and metadata return FileResource JSON (id, name, path, size, modified_at). Move returns the same shape with the new path. Download returns the original bytes with application/octet-stream and an attachment filename. Delete returns 204 No Content; health returns {"status":"ok"}.
+Don’t expect a JSON file resource from download or delete. Preserve the download body as bytes. modified_at may be null.
+Side effects
+Upload creates a new file and never overwrites or auto-renames. 
+Move changes the path but preserves file ID and content; it does not overwrite a destination. 
+Delete removes a file. Metadata, download, and health are read-only.
+Upload/move conflicts require the caller to choose another path. Retrying a successful move or delete may return not found because the original path is gone.
+Error meanings
+Errors use a JSON envelope: {"error":{"code":"...","message":"..."}}. 
+400 invalid_request means invalid input or a folder used where a file is required. 
+403 permission_denied means insufficient Dropbox access.
+404 not_found means the file/path is missing.
+409 conflict means an upload or move destination already exists.
+502 provider_error means Dropbox or its transport failed.
+503 provider_not_configured means Dropbox credentials are missing or incomplete.
+Handle errors by status/code; don’t rely on provider-specific error text. For ambiguous 502 responses during mutations, check the resulting file state before retrying.
+Identifiers (format, scope)
+id is an opaque Dropbox file identifier. The service returns it as a string; moving a file preserves it. Paths are app-folder paths supplied by the caller and are returned in metadata.
+Treat id as opaque, not as a path or a value to parse. Use paths for endpoint inputs; use the stable ID to recognize the same file across a move.
+
+
+
+
+
+
+
+
+
+
+
+
+5. Provider constraints
+Constraint
+Evidence
+Paths must be absolute file paths. They must start with /, must not end with /, and cannot contain empty, . or .. segments. Invalid paths return 400 invalid_request before storage is called.
+The README’s “Paths” section describes these rules. The test_validation.py tests check valid and invalid examples and verify invalid paths are rejected before storage is called.
+Uploads are limited to 150 MiB. The route checks the reported size before reading. If the size is unknown, it reads at most the limit plus one byte to detect oversized content.
+The README’s “Upload a file” section documents the limit. The test_upload.py tests check that known oversized uploads are rejected before reading and unknown-size uploads are read with a bounded limit.
+Uploads do not overwrite or auto-rename. Uploading to an existing path returns 409 conflict; the existing file remains unchanged.
+The README’s “Upload a file” section documents this behavior. The duplicate-upload test in test_upload.py verifies the conflict and confirms the original contents remain.
+Moves do not overwrite an existing destination. The request returns 409 conflict, and neither file is changed.
+The README’s “Update (rename or move) a file” section documents this behavior. The move-conflict test in test_update.py verifies the conflict and confirms both files’ contents remain unchanged.
+Dropbox paths are case-insensitive for move behavior. A move that changes only letter case, such as /a.pdf to /A.pdf, is rejected with 400 invalid_request.
+The move_file route in app/api/routes/update.py compares the source and destination paths without regard to case. The case-only rename test in test_update.py verifies the rejection.
+File operations reject folders. Metadata, download, move, and delete do not return or recursively operate on folder contents.
+Mocked Dropbox adapter tests in test_dropbox_download.py, test_dropbox_update.py, and test_dropbox_delete.py verify folder rejection. These tests use a mocked Dropbox client, not a live Dropbox account.
+A successful move preserves the file ID and contents. The path changes, but the file identity and bytes remain the same.
+The README’s “Update (rename or move) a file” section documents this. Move behavior tests in test_update.py verify the file remains available with its contents after the move.
+Delete is not idempotent. The first delete returns 204; deleting the same path again returns 404 not_found because the file no longer exists.
+The README’s “Delete a file” section documents this behavior. The repeated-delete test in test_delete.py verifies it.
+Download returns file bytes, not metadata. The response uses application/octet-stream and includes an attachment filename.
+The README’s “Download file” section documents the response. Tests in test_download.py check the headers and verify that the response body bytes are unchanged.
+
+
+
+6. What we would need to change
+- Code/tests/config that changes:
+- Estimated effort (label as estimate):
+- Work that depends on another team:
+Code/tests/config that changes:
+Agree on the shared API contract first: endpoint names, request/response schemas, error format, authentication, and versioning.
+Add or update route tests for the agreed contract, including success, validation, authorization, and downstream-service failure cases.
+Update configuration for any new service URLs, credentials, or timeouts. 
+Update the README/API examples and any API schema documentation.
+Estimated effort (estimate):
+Contract changes: estimate 1–2 days
+Work that depends on another team:
+Each team must provide its proposed endpoints, schemas, error responses, authentication requirements, and service ownership.
+Confirm identifier and path conventions, compatibility/versioning expectations, and how splitting future changes will be coordinated.
+
+7. Decisions we need from the group
+API Contract

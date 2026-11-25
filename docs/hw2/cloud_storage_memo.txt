@@ -1,0 +1,277 @@
+﻿TO        Prof. Nikolai · OSPSD Spring '26
+FROM        Team 2, Team 6, and Team 10 representing the Cloud Storage Vertical
+DATE        April 11, 2026
+RE        Shared Cloud Storage Interface: Agreed Contract, Design Rationale, and Plan of Action
+  
+  
+
+One Shared Interface To Rule Them All
+Technical Memo.
+
+THE PROBLEM WE ARE SOLVING
+
+
+Over the past two sprints, three separate engineering teams independently built cloud storage clients: Team 2 (AWS S3), Team 6 (GCP Cloud Storage), and Team 10 (also AWS S3), each had working codebases that did roughly the same thing: upload a file, download a file, list objects, delete an object, etc. Each codebase had its own method names, different return types, and different error semantics surrounding their own cloud provider. This led to a blocker for any external team to move between clients without rewriting their entire storage integration layer, i.e. moving from AWS to GCP for latency reasons in a specific region or vice versa. 
+
+
+Thus, there was a need for a shared abstraction to write against where other verticals can integrate into our systems. That dependency is only safe if they depend on a contract, not an implementation. We needed a shared abstract base class that any downstream team could write against, knowing it works regardless of whether the underlying bucket is on AWS or GCP. This memo documents what we decided and why.
+
+
+  
+
+
+
+
+
+
+
+THE DECISION 
+
+
+Effective April 11, the Storage Platform team owns and publishes a shared abstract contract: cloud_storage_api that all three storage client implementations now implement. The shared interface lives at github.com/2SpaceMasterRace/ospsd-cloud-storage, tagged as v1.0.0. 
+
+It is intentionally minimal: one abstract base class (CloudStorageClient), two data models (ObjectInfo and DeleteResult), one exception hierarchy. It contains no provider SDKs, transport types, DI framework, infrastructure code, and business logic.It is purely a typed interface that any downstream service can write against without knowing or caring which cloud provider is underneath. The package ships py.typed so downstream consumers get full mypy support. All three teams install it as a pinned uv git dependency:
+
+
+  
+
+
+
+
+
+The contract is versioned and pinned. A branch pin would silently absorb any future changes to the interface, which could break a consumer who hasn't updated their implementation. A tag is immutable. Any modification to the interface requires a version bump, a 30-day deprecation notice to dependent teams, and sign-off from at least two dependent service owners. This is not optional. The value of a shared contract evaporates the moment it becomes unstable. We cut v1.0.0 on April 8 and that is the stable contract all three teams implement against.
+
+
+
+
+THE INTERFACE AND WHAT THE CONTRACT GUARANTEES
+
+Any service that types its storage dependency as CloudStorageClient can inject any of the three implementations at runtime.The class exposes six methods listed below:
+
+
+  
+Method
+	Returns
+	Contract guarantees
+	upload_file(container, local_path, remote_path)
+
+
+	ObjectInfo
+	Raises LocalFileAccessError if source path is unreadable
+	upload_obj(container, file_obj, remote_path)
+
+
+	ObjectInfo
+	Raises InvalidFileObjectError for non-binary or non-readable objects
+	download_file(container, object_name, file_name)
+
+
+	ObjectInfo
+	Raises LocalFileAccessError if destination path cannot be written
+	list_files(container, prefix)
+
+
+	list[ObjectInfo]
+	Results sorted ascending by object_name. prefix="" lists entire container.
+	delete_file(container, object_name)
+
+
+	DeleteResult
+	Returns normalized delete metadata, never raw provider response
+	get_file_info(container, object_name)
+
+
+	ObjectInfo
+	Metadata-only fetch with no content download
+	
+
+
+
+THE DATA MODELS 
+
+
+We deliberately choose having rich return types over primitives so as to not leak implementation details through the abstraction boundary. Thus, the new contract ensures every method that touches a stored object returns an ObjectInfo, a structured type carrying the object's metadata. Every delete returns a DeleteResult.  
+
+We studied AWS raw S3 response dict syntax or a GCP blob object reference, and put together an ObjectInfo that shared common fields from both AWS and GCP. We understand it’s more of a ballpark and wouldn’t really fit in with other existing cloud providers 100% but for the most part it should get the job done. The alternative is continuing to export partial data that forces callers to build their own metadata layers, which really is ineffective. 
+
+
+ObjectInfo field
+	Type
+	Meaning
+	object_name
+	str
+	Provider object key or path (the only required field)
+	version_id
+	str | None
+	Provider version identifier (S3 VersionId, GCS generation)
+	data_type
+	str | None
+	MIME type or provider-reported content type
+	integrity
+	str | None
+	ETag, checksum, or MD5 hash
+	encryption
+	str | None
+	Encryption mode applied to the object
+	storage_tier
+	str | None
+	Storage class (e.g. STANDARD, NEARLINE)
+	size_bytes
+	int | None
+	Object size, required for "largest files" or "storage usage" queries
+	updated_at
+	datetime | None
+	Last-modified timestamp,  required for "recent uploads" queries
+	metadata
+	Mapping[str, str] | None
+	Custom provider metadata normalized to string pairs
+	
+
+
+
+DeleteResult field
+	Type
+	Meaning
+	deleted
+	bool
+	Canonical delete outcome,   provider-neutral
+	version_id
+	str | None
+	Deleted object version, when versioning is enabled
+	request_charged
+	bool | None
+	Whether a requester-pays charge was applied (S3-specific, optional on GCP)
+	
+
+
+
+EXCEPTIONS
+
+
+Eight typed exceptions cover some common failure modes. A caller that catches ObjectNotFoundError does not need to know whether the underlying provider raised a boto3 NoSuchKey or a GCP NotFound. 
+
+
+Exception
+	When raised
+	AuthenticationError
+	Provider rejected credentials or denied access
+	ContainerNotFoundError
+	Well-formed bucket/container name that does not exist
+	InvalidContainerError
+	Bucket/container name is structurally invalid
+	InvalidObjectNameError
+	Object key or path is structurally invalid
+	InvalidFileObjectError
+	Provided file object is not binary-readable
+	LocalFileAccessError
+	Local filesystem path cannot be read from or written to
+	ObjectNotFoundError
+	Requested remote object does not exist
+	StorageBackendError
+	Provider failed unexpectedly, catch-all for SDK errors
+	
+
+
+
+
+
+NEW ADDITIONS
+
+
+Two additions shaped the interface in ways that are worth explaining, because they required each team to pay a real implementation cost.
+
+
+1. A new get_file_info method. 
+We added it because an AI assistant layer built on top of our vertical needs to answer "which of these files is largest?" or "when was this object last modified?”. This is a new surface area for all three implementations: Team 2 and Team 10 maps it to S3's head_object, and Team 6 to GCP's blob metadata fetch.
+
+2. Deterministic ordering on list_files. 
+AWS S3's list_objects_v2 returns results in ascending UTF-8 byte order by key. GCP's equivalent does the same. We made this a documented contract requirement: implementations must return results sorted ascending by object_name  so any caller that builds UI or runs comparisons over lists gets predictable behavior regardless of provider.
+  
+  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+WHAT WE ARE NOT DOING
+
+
+We are also not mandating a single cloud provider. The contract exists precisely so teams can choose the right provider for their latency, cost, and compliance requirements without forcing that choice on everyone who depends on them. Regional routing, cost optimization, and compliance-driven data residency decisions remain the responsibility of the teams operating each implementation.
+
+
+
+
+HOW EACH TEAM ADAPTS
+
+
+The adaptation work differs by team based on how far their HW2 code diverges from the new contract.
+   1. Team 2 (Nimbus / AWS S3):
+   1. Remove local cloud_storage_client_api workspace package 
+   2. Install cloud_storage_api via uv git dependency 
+   3. Update S3Client to inherit from shared ABC 
+   4. Refactor implementation/adapter layers to return ObjectInfo (replacing bool)
+   5. Implement get_file_info using S3 head_object 
+   6. Map S3 metadata (Key, ContentType, ETag, StorageClass, VersionId) to normalized fields 
+   7. Remove factory DI pattern in __init__.py and rewire locally.
+
+
+   2. Team 6 (GCP Cloud Storage):
+   1. Align method signatures to the positional contract (container, local_path, remote_path)
+   2. Map GCP metadata fields to ObjectInfo (name → object_name, generation → version_id, etag → integrity, storageClass → storage_tier)
+   3. Align exceptions to the shared hierarchy
+   3. Team 10 (S3):
+   1. Replace object | None returns with ObjectInfo
+   2. Add get_file_info implementation
+   3. Map the deletion response to DeleteResult
+
+
+
+
+
+
+INFO FOR OTHER VERTICALS
+
+
+   1. Teams for Chat, Calendar, or Issue Tracker verticals integrating our systems need only one piece of information: import CloudStorageClient from cloud_storage_api. 
+   2. Type-hint your dependencies against CloudStorageClient and inject your chosen provider at runtime. The contract strictly guarantees the six methods and two data models detailed above. Downstream consumers can rely on a normalized exception hierarchy: missing objects trigger ObjectNotFoundError, non-existent buckets raise ContainerNotFoundError, and credential failures result in AuthenticationError. 
+   3. All types and exception types are exportable from the base cloud_storage_api package.
+
+
+  
+
+
+
+OPEN QUESTIONS
+Two things are not settled. 
+   1. First, credential management: each implementation currently handles authentication differently, and we have not standardized how credentials are injected. This is an operational risk as a misconfiguration in one team's secret rotation could silently affect a service that assumed a different credential flow.
+   2. Second, the list_files pagination impl is incomplete. The current contract returns a full list, which is fine for small prefixes but will cause memory pressure at scale. We will address this in v1.1 before any team in the content pipeline migrates.
+
+
+THE ASK
+If something here conflicts with how your team has planned to use storage, raise it now. The contract is stable but not immovable. Disagreement surfaced before your team builds against it is a design conversation. Disagreement surfaced after an incident.
+________________
+
+
+
+
+Authored and Shared by Hari Varsha V from Team 2 (AWS), cloud storage vertical representative.
+
+
+Teams 6 and 10 reviewed and approved this interface on April 9, 2026. The shared repo has one contributor on record (2SpaceMasterRace / Hari Varsha) as package author; all three teams are collaborators. This memo reflects the agreed-upon v1.0.0 contract only and any future breaking changes require a new version tag and vertical consensus. 
+
+
+This document supersedes the informal API agreements documented in the March sprint retrospective.

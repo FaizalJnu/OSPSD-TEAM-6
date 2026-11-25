@@ -53,11 +53,22 @@ uv run --env-file .env uvicorn meeting_prep.api.user_api:create_user_app --facto
 uv run --env-file .env uvicorn meeting_prep.agent.app:create_live_app --factory --port 8001
 ```
 
-Use `USER_PROVIDERS=fake` for an in-memory test. The default `disconnected` mode
-can use a dedicated product bucket with `USER_STORAGE_PROVIDER=team6-s3` and the
-existing `S3_*` settings. A per-user connection resolver supplies Trello and
-Calendar clients. The pinned Calendar package lacks an upcoming-events read,
-and an absent connection returns `503`.
+`USER_PROVIDERS` says where each signed-in user's providers come from:
+
+* `connections`: from the user's own provider connections, stored in the
+  `provider_connections` table (migration `0005`). Tokens are encrypted with
+  `CONNECTION_TOKEN_KEY`, which stays out of the database. Trello is built from
+  `TRELLO_APP_KEY` and the user's own token and chosen list. Calendar stays
+  unavailable until Team 5's package takes credentials (it also lacks an
+  upcoming-events read). A Google access token is renewed shortly before it
+  expires, and the replacement is saved first.
+* `disconnected` (default): documents only.
+* `fake`: in-memory providers for tests, separate for each user.
+
+Documents use a dedicated product bucket with `USER_STORAGE_PROVIDER=team6-s3`
+and the existing `S3_*` settings, under the user's own prefix. No mode falls
+back to the demo's Trello or Calendar test account. A provider the user has not
+connected, or that needs reconnecting, returns `503`.
 
 | Endpoint | Request and result |
 | --- | --- |
@@ -84,6 +95,9 @@ and an absent connection returns `503`.
 | `src/meeting_prep/agent/` | The agent: `model.py` (`ModelClient`, `GroqModel` from `GROQ_API_KEY` and `AGENT_MODEL`, and `ScriptedModel` for tests), `tools.py` (tool registry with validated pydantic arguments), `loop.py` (the loop, its limits and stop reasons). Never imports the registry, adapters, orchestrator or fakes; the model, tools and loop import no web framework | Vikram |
 | `src/meeting_prep/agent/app.py`, `service.py`, `tools_meeting.py`, `proposals.py`, `api_client.py` | The agent service: its HTTP API, conversations, the meeting tools, proposals and approvals, and the `ApiClient` it reads and executes through. See `docs/agent.md` | Vikram |
 | `src/meeting_prep/db/tables/agent.py`, `db/agent_store.py` | The agent's tables (migration `0002`) and their user-scoped queries | Vikram |
+| `src/meeting_prep/db/tables/connections.py`, `db/connection_store.py` | Provider connections and their one-use authorization challenges (migration `0005`): tokens sealed before writing, queries scoped to one user, refresh one at a time | Faizal |
+| `src/meeting_prep/token_cipher.py` | Encrypts provider tokens with `CONNECTION_TOKEN_KEY`; a token copied to another user's row does not open | Faizal |
+| `src/meeting_prep/api/providers.py`, `api/provider_tokens.py` | Builds each signed-in user's providers from their own connections, and renews Google access tokens | Faizal |
 | `tests/test_import_boundary.py` | Who may import what. Read it before adding a package | |
 
 Packages the import rules already expect:
@@ -128,7 +142,7 @@ variable. Nothing falls back to another implementation or to a fake.
 because Team 5's Calendar call has none of its own.
 
 Partner packages are pinned to release tags in `pyproject.toml`: Team 4's Trello
-provider (`team-4-issue-tracker-trello-v1.0.0`) and Team 5's Google Calendar
+provider (`team-4-issue-tracker-trello-v1.1.0`) and Team 5's Google Calendar
 (`team5-calendar-v0.1.0`). Adding an implementation means a pinned dependency
 (`uv add`, commit `uv.lock`) and a builder in `factories.py`.
 

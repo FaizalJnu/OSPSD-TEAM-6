@@ -18,7 +18,7 @@ from meeting_prep.agent.api_client import ActionOutcome, Document, OutcomeStatus
 from meeting_prep.agent.app import BodyLimit
 from meeting_prep.agent.proposals import REVIEW_MEETING, approval_matches
 from meeting_prep.api.main import log_failure
-from meeting_prep.api.providers import UserProviders, build_user_providers
+from meeting_prep.api.providers import UserProviders, build_user_providers, user_providers_mode
 from meeting_prep.api.sign_in import (
     AuthError,
     GoogleIdentity,
@@ -29,8 +29,10 @@ from meeting_prep.api.sign_in import (
 from meeting_prep.config import require
 from meeting_prep.db import create_engine_for
 from meeting_prep.db.agent_store import AgentStore
+from meeting_prep.db.connection_store import ConnectionStore
 from meeting_prep.db.identity_store import IdentityStore
 from meeting_prep.orchestrator import InProcessRunLocks, Orchestrator, ReviewMeetingError
+from meeting_prep.token_cipher import TokenCipher
 
 
 class ExecuteRequest(BaseModel):
@@ -68,11 +70,16 @@ def create_user_app() -> FastAPI:
         require(os.environ, "GOOGLE_SIGNIN_CLIENT_SECRET"),
         auth.origin + "/v1/auth/callback",
     )
+    connections = (
+        ConnectionStore(engine, TokenCipher.from_env(os.environ))
+        if user_providers_mode(os.environ) == "connections"
+        else None
+    )
     return build_user_app(
         auth,
         google,
         AgentStore(engine),
-        build_user_providers(),
+        build_user_providers(os.environ, connections),
         release=os.environ.get("RELEASE", "unknown"),
     )
 

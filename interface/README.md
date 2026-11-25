@@ -55,6 +55,8 @@ The chat at http://127.0.0.1:8080/chat talks to the agent service. With
 | `API_BASE_URL` | `http://127.0.0.1:8000` | Where the API service runs |
 | `PRODUCT_API_KEY` | none, required unless `FAKE_API=1` | The API's key, sent as a Bearer token. It stays on the server and never reaches a page |
 | `AGENT_BASE_URL` | `http://127.0.0.1:8001` | Where the agent service runs |
+| `PUBLIC_ORIGIN` | none | The origin the browser uses, the same as the API's `PUBLIC_ORIGIN`. Sign-out refuses a POST from any other origin |
+| `SESSION_COOKIE` | `__Host-meeting_session` | The API's session cookie. On a loopback HTTP origin the API names it `meeting_session` |
 | `API_TIMEOUT_SECONDS` | `180` | How long to wait for one run: it makes several provider calls in a row |
 | `FAKE_API` | unset | `1` uses the built-in fake instead of the API |
 
@@ -95,6 +97,23 @@ approves or executes anything itself. An outcome other than `succeeded` or `fail
 is shown as Not sure, never as Done. Sign-in is not wired yet: until it is, the
 agent service answers 401 and the chat says to sign in.
 
+## Sign-in and sign-out
+
+The API runs Google sign-in (`/v1/auth/sign-in`, `/callback`) and sets the session
+cookie on the origin the interface and the API share. The interface:
+
+* reads that cookie and asks `GET /v1/auth/session` whom it belongs to, once per
+  request, so the page shows "Signed in as ..." or "Sign in with Google";
+* forwards it as `Authorization: Bearer <session>` to the agent service, so every
+  chat, approval and rejection acts for that person;
+* signs out with `POST /sign-out`: it refuses a request whose `Origin` is not
+  `PUBLIC_ORIGIN`, revokes the session through `POST /v1/auth/sign-out`, and clears
+  the cookie.
+
+A signed-out person sees no message box, and nothing is sent to the agent. The
+token never appears in a page or a log line. With `FAKE_API=1`, Sign in goes to
+`/dev/sign-in`, which signs in as `demo@example.com` without Google.
+
 ## Layout
 
 ```
@@ -105,6 +124,8 @@ src/meeting_interface/
   form.py        Form fields to the API body: RFC 3339 times with the zone's offset
   messages.py    Step names, next-step text for each error code, and stop reasons
   chat.py        Chat, approve and reject routes; meeting_time formatting
+  session.py     Who is signed in (middleware), sign-out, WebSettings
+  auth_client.py, fake_auth.py   The API's /v1/auth routes, and a fake
   agent_client.py, agent_models.py, fake_agent.py   The agent service's client, shapes and fake
   fake_api.py    Scripted API for tests and FAKE_API=1
   config.py      Environment settings

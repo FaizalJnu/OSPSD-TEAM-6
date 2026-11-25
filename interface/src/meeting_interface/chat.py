@@ -17,6 +17,7 @@ from meeting_interface.agent_client import AgentClient, AgentError
 from meeting_interface.agent_models import Proposal
 from meeting_interface.form import DEFAULT_TIME_ZONE, TIME_ZONES
 from meeting_interface.messages import agent_help, stop_reason_text
+from meeting_interface.session import session_token
 
 
 def meeting_time(start: object, end: object) -> str:
@@ -53,13 +54,17 @@ def add_chat_routes(app: FastAPI, templates: Jinja2Templates, agent: AgentClient
         conversation_id: Annotated[str, Form()] = "",
         time_zone: Annotated[str, Form()] = DEFAULT_TIME_ZONE,
     ) -> HTMLResponse:
+        token = session_token(request)
+        if token is None:
+            return fragment(request, "exchange", signed_out=True)
         if not text.strip():
             return fragment(request, "exchange", problem="Type a message first.")
+        agent_as_user = agent.as_user(token)
         try:
             if not conversation_id:
                 zone = time_zone if time_zone in TIME_ZONES else DEFAULT_TIME_ZONE
-                conversation_id = agent.start_conversation(zone).id
-            reply = agent.send_message(conversation_id, text)
+                conversation_id = agent_as_user.start_conversation(zone).id
+            reply = agent_as_user.send_message(conversation_id, text)
         except AgentError as error:
             return fragment(
                 request,
@@ -78,18 +83,24 @@ def add_chat_routes(app: FastAPI, templates: Jinja2Templates, agent: AgentClient
         request: Request, proposal_id: str, proposal_hash: Annotated[str, Form()]
     ) -> HTMLResponse:
         return decide(
-            request, proposal_id, proposal_hash, lambda: agent.approve(proposal_id, proposal_hash)
+            request, proposal_id, proposal_hash, lambda a: a.approve(proposal_id, proposal_hash)
         )
 
     @app.post("/proposals/{proposal_id}/reject", response_class=HTMLResponse)
     def reject(request: Request, proposal_id: str) -> HTMLResponse:
-        return decide(request, proposal_id, "", lambda: agent.reject(proposal_id))
+        return decide(request, proposal_id, "", lambda a: a.reject(proposal_id))
 
     def decide(
-        request: Request, proposal_id: str, proposal_hash: str, call: Callable[[], Proposal]
+        request: Request,
+        proposal_id: str,
+        proposal_hash: str,
+        call: Callable[[AgentClient], Proposal],
     ) -> HTMLResponse:
+        token = session_token(request)
+        if token is None:
+            return fragment(request, "exchange", signed_out=True)
         try:
-            proposal = call()
+            proposal = call(agent.as_user(token))
         except AgentError as error:
             return fragment(
                 request,

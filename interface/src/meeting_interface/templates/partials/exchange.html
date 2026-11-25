@@ -1,4 +1,6 @@
-{% if problem %}
+{% if signed_out %}
+<p class="error" role="alert">Your session has ended. <a href="{{ sign_in_url }}">Sign in with Google</a> and send it again.</p>
+{% elif problem %}
 <p class="error" role="alert">{{ problem }}</p>
 {% else %}
 <input type="hidden" id="conversation-id" name="conversation_id" value="{{ conversation_id }}" hx-swap-oob="true">

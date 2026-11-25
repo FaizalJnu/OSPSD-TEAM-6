@@ -47,6 +47,11 @@ class FakeAgentClient:
         self.next_error: AgentError | None = None
         self.next_proposal: Proposal | None = None
         self._proposals: dict[str, Proposal] = {}
+        self.tokens: list[str] = []
+
+    def as_user(self, token: str) -> "FakeAgentClient":
+        self.tokens.append(token)
+        return self
 
     def start_conversation(self, time_zone: str) -> Conversation:
         self.started.append(time_zone)

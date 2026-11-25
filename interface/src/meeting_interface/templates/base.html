@@ -10,7 +10,18 @@
   <script src="/static/htmx.min.js" defer></script>
 </head>
 <body>
-  <nav><a href="/chat">Ask the agent</a> <a href="/">Prepare by hand</a></nav>
+  <nav>
+    <a href="/chat">Ask the agent</a>
+    <a href="/">Prepare by hand</a>
+    <span class="account">
+      {% if request.state.user %}
+      <span>Signed in as {{ request.state.user.email }}</span>
+      <form action="/sign-out" method="post"><button type="submit">Sign out</button></form>
+      {% else %}
+      <a href="{{ sign_in_url }}">Sign in with Google</a>
+      {% endif %}
+    </span>
+  </nav>
   <main>
     {% block content %}{% endblock %}
   </main>

@@ -42,3 +42,6 @@ nav a { color: var(--fg); }
 [data-outcome="succeeded"] .status { color: var(--ok); font-weight: 600; }
 [data-outcome="failed"] .status { color: var(--bad); font-weight: 600; }
 [data-outcome="uncertain"] .status { color: var(--warn); font-weight: 600; }
+.account { margin-left: auto; display: flex; gap: 0.5rem; align-items: center; }
+.account form { margin: 0; }
+.account button { padding: 0.25rem 0.5rem; }

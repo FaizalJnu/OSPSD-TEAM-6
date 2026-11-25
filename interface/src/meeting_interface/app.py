@@ -11,19 +11,24 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import FastAPI, Form, Request, Response
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from meeting_interface.agent_client import AgentClient, HttpAgentClient
 from meeting_interface.api_client import ApiClient, ApiError, HttpApiClient
+from meeting_interface.auth_client import AuthClient, HttpAuthClient
 from meeting_interface.chat import add_chat_routes
 from meeting_interface.config import load_settings
 from meeting_interface.fake_agent import FakeAgentClient
 from meeting_interface.fake_api import FakeApiClient
+from meeting_interface.fake_auth import FakeAuthClient
 from meeting_interface.form import DEFAULT_TIME_ZONE, TIME_ZONES, FormProblem, MeetingForm
 from meeting_interface.messages import error_help, status_label, step_label
 from meeting_interface.models import Step, StepStatus
+from meeting_interface.session import WebSettings, add_session
+
+__all__ = ["WebSettings", "app_from_env", "create_app"]
 
 HERE = Path(__file__).parent
 
@@ -37,11 +42,16 @@ SECURITY_HEADERS = {
 }
 
 
-def create_app(api: ApiClient, agent: AgentClient) -> FastAPI:
+def create_app(
+    api: ApiClient, agent: AgentClient, auth: AuthClient, web: WebSettings | None = None
+) -> FastAPI:
+    web = web or WebSettings()
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     templates = Jinja2Templates(directory=HERE / "templates")
-    templates.env.globals.update(step_label=step_label, status_label=status_label)
+    templates.env.globals.update(
+        step_label=step_label, status_label=status_label, sign_in_url=web.sign_in_url
+    )
 
     @app.middleware("http")
     async def security_headers(
@@ -51,6 +61,7 @@ def create_app(api: ApiClient, agent: AgentClient) -> FastAPI:
         response.headers.update(SECURITY_HEADERS)
         return response
 
+    add_session(app, auth, web)
     add_chat_routes(app, templates, agent)
 
     @app.get("/", response_class=HTMLResponse)
@@ -113,13 +124,38 @@ def _steps_after(error: ApiError) -> list[Step]:
     return []
 
 
+DEMO_TOKEN = "demo" * 10 + "ses"  # 43 characters, like a real session token
+
+
 def app_from_env() -> FastAPI:
     settings = load_settings()
     if settings.fake_api:
-        return create_app(FakeApiClient(), FakeAgentClient())
+        web = WebSettings(
+            session_cookie="meeting_session",
+            public_origin=settings.public_origin or "http://127.0.0.1:8080",
+            sign_in_url="/dev/sign-in",
+        )
+        app = create_app(
+            FakeApiClient(),
+            FakeAgentClient(),
+            FakeAuthClient({DEMO_TOKEN: "demo@example.com"}),
+            web,
+        )
+
+        @app.get("/dev/sign-in")
+        def dev_sign_in() -> RedirectResponse:
+            # FAKE_API=1 only: stands in for Google so the pages can be tried locally.
+            response = RedirectResponse("/chat", status_code=303)
+            response.set_cookie("meeting_session", DEMO_TOKEN, httponly=True, samesite="lax")
+            return response
+
+        return app
+    web = WebSettings(session_cookie=settings.session_cookie, public_origin=settings.public_origin)
     return create_app(
         HttpApiClient.for_url(
             settings.api_base_url, settings.api_key, settings.api_timeout_seconds
         ),
         HttpAgentClient.for_url(settings.agent_base_url, settings.api_timeout_seconds),
+        HttpAuthClient.for_url(settings.api_base_url),
+        web,
     )

@@ -6,6 +6,13 @@ delete everything they made. Run from product/:
 
     uv run --env-file .env pytest -m provider tests/test_live.py
 
+On macOS, set SSL_CERT_FILE to certifi's bundle first: uv's Python has no system CA
+certificates, and Team 4's package uses urllib, so Trello calls otherwise fail TLS:
+
+    export SSL_CERT_FILE="$(uv run python -c 'import certifi; print(certifi.where())')"
+
+The run of 2026-11-25 is recorded in TESTING.md.
+
 Each test needs only its own providers' settings, and is skipped with the missing
 names otherwise. Values are never read or printed here; the builders read them.
 

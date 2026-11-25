@@ -1,0 +1,125 @@
+name: Deploy storage service
+
+# A push to a deployed branch tests the service, builds its image once, points that
+# branch's container in the Portainer stack at the image, and runs the smoke check.
+# main serves https://ds.packapunch.xyz; any other branch serves
+# https://ds-<branch>.packapunch.xyz. To deploy another branch, add it below and
+# follow "Add a branch" in deploy/README.md.
+# A pull request only checks: tests, image build and the stack file. It never
+# receives deployment credentials.
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    paths:
+      - "src/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "Dockerfile"
+      - ".dockerignore"
+      - "deploy/**"
+      - ".github/workflows/deploy-storage.yml"
+
+# Every branch's deploy edits the same stack, so deploys run one at a time.
+concurrency:
+  group: ${{ github.event_name == 'push' && 'deploy-storage' || format('check-{0}', github.ref) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/faizaljnu/ospsd-team-6/storage
+  PUBLIC_URL: ${{ github.ref_name == 'main' && 'https://ds.packapunch.xyz' || format('https://ds-{0}.packapunch.xyz', github.ref_name) }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - run: uv sync --locked
+      - name: Fast tests (in-memory storage, no credentials)
+        run: uv run pytest
+
+  build:
+    needs: test
+    # The server is ARM64 (Ampere), so build natively on GitHub's ARM runner.
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Validate the stack file
+        run: |
+          IMAGE_TAG_MAIN=x IMAGE_TAG_DEV=x S3_ENDPOINT=x S3_REGION=x S3_BUCKET_MAIN=x \
+          S3_BUCKET_DEV=x S3_ACCESS_KEY=x S3_SECRET_KEY=x \
+            docker compose -f deploy/storage-stack.yml config --quiet
+
+      - uses: docker/setup-buildx-action@v3
+
+      - if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/arm64
+          push: ${{ github.event_name == 'push' }}
+          tags: |
+            ${{ env.IMAGE }}:sha-${{ github.sha }}
+            ${{ env.IMAGE }}:${{ github.event_name == 'push' && github.ref_name || 'pr' }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=storage
+          cache-to: type=gha,scope=storage,mode=max
+
+  deploy:
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment:
+      name: storage-${{ github.ref_name }}
+      url: ${{ github.ref_name == 'main' && 'https://ds.packapunch.xyz' || format('https://ds-{0}.packapunch.xyz', github.ref_name) }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Point this branch's container at the new image
+        env:
+          PORTAINER_URL: ${{ secrets.PORTAINER_URL }}
+          PORTAINER_TOKEN: ${{ secrets.PORTAINER_TOKEN }}
+          ENDPOINT_ID: ${{ secrets.PORTAINER_ENDPOINT_ID }}
+          STACK_ID: ${{ secrets.PORTAINER_STORAGE_STACK_ID }}
+          TAG: sha-${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # dev -> IMAGE_TAG_DEV, main -> IMAGE_TAG_MAIN, feat/x -> IMAGE_TAG_FEAT_X
+          var="IMAGE_TAG_$(tr '[:lower:]' '[:upper:]' <<<"$GITHUB_REF_NAME" | tr -c 'A-Z0-9\n' '_')"
+          api() { curl -fsS --retry 2 -H "X-API-Key: $PORTAINER_TOKEN" "$@"; }
+
+          stack=$(api "$PORTAINER_URL/api/stacks/$STACK_ID")
+          file=$(api "$PORTAINER_URL/api/stacks/$STACK_ID/file" | jq -r .StackFileContent)
+          grep -q "\${$var" <<<"$file" || { echo "::error::The stack has no service using \${$var}"; exit 1; }
+
+          # Send back the stack file and every variable exactly as Portainer has them,
+          # changing only this branch's tag. The new sha- tag is not on the server
+          # yet, so Compose pulls it and recreates only that container; the other
+          # branches keep running. pullImage stays false so nothing else restarts.
+          jq -n --arg file "$file" --arg var "$var" --arg tag "$TAG" --argjson stack "$stack" '{
+              stackFileContent: $file,
+              env: ([$stack.Env[]? | select(.name != $var)] + [{name: $var, value: $tag}]),
+              prune: false,
+              pullImage: false
+            }' |
+            api -X PUT -H "Content-Type: application/json" --data @- \
+              "$PORTAINER_URL/api/stacks/$STACK_ID?endpointId=$ENDPOINT_ID" > /dev/null
+          echo "$var=$TAG ($IMAGE:$TAG) deployed for $PUBLIC_URL"
+
+      - name: Smoke check against the real provider
+        run: bash deploy/smoke-check.sh "$PUBLIC_URL"

@@ -31,6 +31,10 @@ class AgentError(Exception):
 
 
 class AgentClient(Protocol):
+    def as_user(self, token: str) -> "AgentClient":
+        """The same client, acting for the signed-in person whose session this is."""
+        ...
+
     def start_conversation(self, time_zone: str) -> Conversation: ...
 
     def send_message(self, conversation_id: str, text: str) -> MessageReply: ...
@@ -43,8 +47,12 @@ class AgentClient(Protocol):
 
 
 class HttpAgentClient:
-    def __init__(self, http: httpx.Client) -> None:
+    def __init__(self, http: httpx.Client, token: str | None = None) -> None:
         self._http = http
+        self._token = token
+
+    def as_user(self, token: str) -> "HttpAgentClient":
+        return HttpAgentClient(self._http, token)
 
     @classmethod
     def for_url(cls, base_url: str, timeout_seconds: float = 120.0) -> "HttpAgentClient":
@@ -76,7 +84,8 @@ class HttpAgentClient:
         parse: Callable[[dict[str, Any]], T],
     ) -> T:
         try:
-            response = self._http.request(method, path, json=body)
+            headers = {} if self._token is None else {"Authorization": f"Bearer {self._token}"}
+            response = self._http.request(method, path, json=body, headers=headers)
         except httpx.HTTPError as error:
             raise AgentError(API_UNREACHABLE, "the agent could not be reached") from error
         try:

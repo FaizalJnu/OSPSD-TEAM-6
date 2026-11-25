@@ -1,9 +1,16 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from meeting_interface.app import create_app
+from meeting_interface.app import WebSettings, create_app
 from meeting_interface.fake_agent import FakeAgentClient
 from meeting_interface.fake_api import FakeApiClient
+from meeting_interface.fake_auth import FakeAuthClient
+
+ORIGIN = "http://testserver"
+# Tests run over plain HTTP, where browsers refuse __Host- cookies, so they use
+# the API's local-development name.
+SESSION_COOKIE = "meeting_session"
+TOKEN = "a" * 43
 
 
 @pytest.fixture
@@ -17,8 +24,28 @@ def fake_agent() -> FakeAgentClient:
 
 
 @pytest.fixture
-def client(fake_api: FakeApiClient, fake_agent: FakeAgentClient) -> TestClient:
-    return TestClient(create_app(fake_api, fake_agent))
+def fake_auth() -> FakeAuthClient:
+    return FakeAuthClient({TOKEN: "a@example.com"})
+
+
+@pytest.fixture
+def app(fake_api: FakeApiClient, fake_agent: FakeAgentClient, fake_auth: FakeAuthClient):
+    web = WebSettings(session_cookie=SESSION_COOKIE, public_origin=ORIGIN)
+    return create_app(fake_api, fake_agent, fake_auth, web)
+
+
+@pytest.fixture
+def client(app) -> TestClient:
+    """A browser signed in as a@example.com."""
+    browser = TestClient(app)
+    browser.cookies.set(SESSION_COOKIE, TOKEN)
+    return browser
+
+
+@pytest.fixture
+def anon(app) -> TestClient:
+    """A browser with no session."""
+    return TestClient(app)
 
 
 FORM = {

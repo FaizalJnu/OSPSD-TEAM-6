@@ -1955,6 +1955,24 @@ Found on the way:
 - Not yet run: against the deployed staging service (`smoke_check.py`, design §4.3),
   and the live trace for design §1.3 with Debasmith.
 
+## Review meetings: deterministic agent tests
+
+These run in the `product` CI job with the scripted model (`ScriptedModel`) and the fake
+API (`tests/fake_api.py`): no network and no live model. Each case from the team plan
+(Level 3) and the test that covers it, all under `product/tests/`:
+
+| Case | Tests |
+|---|---|
+| Malformed arguments | `test_agent_loop.py::test_malformed_arguments_are_reported_and_the_handler_never_runs`, `test_agent_tools.py::test_invalid_arguments_are_refused_before_the_handler_runs` |
+| Unknown tool | `test_agent_loop.py::test_unknown_tool_is_reported_to_the_model_and_counts_as_a_step` |
+| Clarification | `test_agent_deterministic.py::test_clarification_asks_first_and_proposes_only_after_the_answer` |
+| Provider error | `test_agent_deterministic.py::test_a_provider_error_through_a_tool_reaches_the_model_and_nothing_is_written`, `test_agent_tools.py::test_an_api_failure_is_a_tool_error_with_the_apis_code` |
+| Exhausted limits | `test_agent_loop.py::test_max_steps`, the `test_timeout_*` and `test_token_limit_*` tests; the shared token budget in `test_agent_containment.py` |
+| Cancellation | `test_agent_loop.py::test_cancelled_before_a_model_call`, `test_cancelled_before_a_tool_call`, `test_a_cancelled_task_stops_cleanly_with_a_result`. The agent service has no cancel endpoint yet, so cancellation is tested in the loop only |
+| Restart | `test_agent_app.py::test_a_pending_approval_survives_a_restart_and_is_never_executed_twice`, `test_agent_containment.py::test_after_a_restart_approval_still_checks_the_user_and_the_hash` |
+| Unapproved write | `test_agent_app.py::test_execute_without_an_approval_is_refused`, `test_agent_containment.py::test_a_planted_instruction_leads_at_most_to_a_proposal_and_nothing_executes` |
+| Another user's ID | `test_agent_app.py::test_user_b_cannot_read_or_act_on_user_as_conversation_or_proposal`, `test_agent_containment.py::test_another_users_id_in_model_arguments_is_refused` |
+
 ## Review meetings: security tests
 
 Each requirement from the team plan (Level 4.1) and the tests that cover it, all under

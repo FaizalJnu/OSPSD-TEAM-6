@@ -65,7 +65,7 @@ def test_invalid_input_is_logged_as_rejected_before_the_provider(fake, fake_clie
 
 
 def test_input_fastapi_rejects_is_logged_like_our_own(fake_client, caplog):
-    response = fake_client.post("/files/notes.txt")  # no file field
+    response = fake_client.post("/files", data={"path": "notes.txt"})  # no file field
 
     assert response.status_code == 400
     event = failure_log(caplog, response)
@@ -217,7 +217,8 @@ def test_a_path_with_no_route_is_route_not_found_not_a_missing_file(fake, fake_c
 @pytest.mark.parametrize(
     ("method", "path", "allowed"),
     [
-        ("POST", "/files", "DELETE, GET, PATCH"),
+        ("POST", "/health", "GET"),
+        ("OPTIONS", "/files", "DELETE, GET, PATCH, POST, PUT"),
         # Starlette's own Allow names only the first route that matches the path: POST.
         ("PATCH", "/files/notes.txt", "POST, PUT"),
     ],
@@ -262,12 +263,14 @@ UNREADABLE_BODIES: dict[str, tuple[dict[str, Any], str]] = {
 @pytest.mark.parametrize(
     ("method", "operation"), [("POST", "create_file"), ("PUT", "replace_file")]
 )
+# The deprecated /files/{key} routes log under the same operation names.
+@pytest.mark.parametrize("url", ["/files", "/files/notes.txt"])
 def test_a_multipart_body_that_cannot_be_read_is_invalid_input(
-    fake, fake_client, caplog, method, operation, body
+    fake, fake_client, caplog, method, operation, body, url
 ):
     request, message = UNREADABLE_BODIES[body]
 
-    response = fake_client.request(method, "/files/notes.txt", **request)
+    response = fake_client.request(method, url, **request)
 
     assert response.status_code == 400
     assert response.json() == {"error": {"code": "invalid_request", "message": f"file: {message}"}}
@@ -422,6 +425,8 @@ def test_openapi_lists_each_routes_errors_with_our_body_and_no_422(client):
     every_route = {"400", "403", "500", "502", "503"}
     expected = {
         ("GET", "/files"): every_route | {"404"},
+        ("POST", "/files"): every_route | {"409", "413"},
+        ("PUT", "/files"): every_route | {"404", "413"},
         ("POST", "/files/{key}"): every_route | {"409", "413"},
         ("PUT", "/files/{key}"): every_route | {"404", "413"},
         ("GET", "/files/download"): every_route | {"404"},

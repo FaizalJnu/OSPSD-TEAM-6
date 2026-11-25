@@ -3,6 +3,7 @@
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 from botocore.exceptions import EndpointConnectionError
@@ -114,13 +115,20 @@ def test_object_permission_denial_does_not_probe_the_bucket(stubbed_s3):
         storage.stat("hello.txt")
 
 
+# Create and Replace name their file in the form, not in the query string.
+UPLOAD_OF_MISSING: dict[str, Any] = {
+    "data": {"path": "missing.txt"},
+    "files": {"file": ("upload", b"hello")},
+}
+
+
 @pytest.mark.parametrize(
     ("method", "path"),
     [
         ("GET", "/files/metadata?path=missing.txt"),
         ("DELETE", "/files?path=missing.txt"),
-        ("PUT", "/files/missing.txt"),
-        ("POST", "/files/missing.txt"),
+        ("PUT", "/files"),
+        ("POST", "/files"),
     ],
 )
 def test_missing_bucket_returns_502_before_any_write(stubbed_s3, method, path):
@@ -133,9 +141,9 @@ def test_missing_bucket_returns_502_before_any_write(stubbed_s3, method, path):
         expected_params={"Bucket": "test-bucket"},
     )
     # Only HEAD calls are queued. An attempted put/delete would fail the test.
-    files = {"file": ("upload", b"hello")} if method in ("PUT", "POST") else None
+    upload = UPLOAD_OF_MISSING if method in ("PUT", "POST") else {}
     with TestClient(create_app(FileService(storage, max_upload_bytes=1024))) as client:
-        response = client.request(method, path, files=files)
+        response = client.request(method, path, **upload)
     assert response.status_code == 502
     assert response.json() == {
         "error": {
@@ -156,10 +164,10 @@ def test_nonexistent_real_bucket_is_a_provider_error():
         for method, path in (
             ("GET", "/files/metadata?path=missing.txt"),
             ("DELETE", "/files?path=missing.txt"),
-            ("PUT", "/files/missing.txt"),
+            ("PUT", "/files"),
         ):
-            files = {"file": ("upload", b"hello")} if method == "PUT" else None
-            response = client.request(method, path, files=files)
+            upload = UPLOAD_OF_MISSING if method == "PUT" else {}
+            response = client.request(method, path, **upload)
             assert response.status_code == 502
             assert response.json() == {
                 "error": {

@@ -460,7 +460,7 @@ def test_list_folder_on_the_real_provider(provider_client, provider_prefix):
     for name in names:
         response = send_file(provider_client, "POST", provider_prefix + name, name.encode())
         assert response.status_code == 201
-        created["/" + response.json()["key"]] = response.json()
+        created[response.json()["path"]] = response.json()
     folder = "/" + provider_prefix.removesuffix("/")
 
     entries = list_folder(provider_client, folder).json()

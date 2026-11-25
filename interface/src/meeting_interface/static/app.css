@@ -25,3 +25,20 @@ select, textarea { font: inherit; padding: 0.5rem; border: 1px solid var(--line)
 .ids dd { margin: 0; overflow-wrap: anywhere; }
 [data-status="ok"] .status { color: var(--ok); }
 [data-status="unknown"] .status { color: var(--warn); }
+nav { display: flex; gap: 1rem; max-width: 40rem; margin: 0 auto; padding: 1rem 1rem 0; }
+nav a { color: var(--fg); }
+.messages { display: grid; gap: 0.75rem; margin: 1rem 0; }
+.message { border: 1px solid var(--line); border-radius: 8px; padding: 0.5rem 0.75rem; }
+.message p { margin: 0.25rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.message.user { justify-self: end; max-width: 85%; }
+.message.agent { justify-self: start; max-width: 85%; }
+.who { font-size: 0.8rem; color: var(--muted); }
+.proposal { border: 1px solid var(--line); border-radius: 8px; padding: 0.75rem 1rem; }
+.proposal dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; }
+.proposal dd { margin: 0; overflow-wrap: anywhere; }
+.decision { display: flex; gap: 0.75rem; }
+.note { color: var(--muted); }
+.outcomes { padding-left: 1.25rem; }
+[data-outcome="succeeded"] .status { color: var(--ok); font-weight: 600; }
+[data-outcome="failed"] .status { color: var(--bad); font-weight: 600; }
+[data-outcome="uncertain"] .status { color: var(--warn); font-weight: 600; }

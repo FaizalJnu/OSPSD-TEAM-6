@@ -2,6 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from meeting_interface.app import create_app
+from meeting_interface.fake_agent import FakeAgentClient
 from meeting_interface.fake_api import FakeApiClient
 
 
@@ -11,8 +12,13 @@ def fake_api() -> FakeApiClient:
 
 
 @pytest.fixture
-def client(fake_api: FakeApiClient) -> TestClient:
-    return TestClient(create_app(fake_api))
+def fake_agent() -> FakeAgentClient:
+    return FakeAgentClient()
+
+
+@pytest.fixture
+def client(fake_api: FakeApiClient, fake_agent: FakeAgentClient) -> TestClient:
+    return TestClient(create_app(fake_api, fake_agent))
 
 
 FORM = {

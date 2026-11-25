@@ -47,3 +47,24 @@ def test_pages_have_no_inline_script_or_style_the_policy_would_block(client):
 def test_api_docs_are_not_served(client):
     assert client.get("/docs").status_code == 404
     assert client.get("/openapi.json").status_code == 404
+
+
+def test_model_reply_and_proposal_text_are_escaped(client, fake_agent):
+    from meeting_interface.agent_models import MessageReply
+    from meeting_interface.fake_agent import REVIEW, proposal
+
+    hostile = '<script>alert(1)</script><a href="javascript:x">go</a>'
+    action = type(REVIEW)(
+        REVIEW.kind, REVIEW.operation, {**REVIEW.arguments, "agenda": [hostile], "title": hostile}
+    )
+    fake_agent.next_reply = MessageReply(
+        hostile, "completed", "r", proposal(actions=[action]), None
+    )
+
+    page = client.post(
+        "/chat/messages", data={"conversation_id": "c-1", "time_zone": "UTC", "text": hostile}
+    ).text
+
+    assert "<script>alert(1)" not in page
+    assert 'href="javascript:' not in page
+    assert page.count("&lt;script&gt;") >= 3

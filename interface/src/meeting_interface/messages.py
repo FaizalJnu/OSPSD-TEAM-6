@@ -107,3 +107,72 @@ def status_label(status: StepStatus) -> str:
 
 def error_help(code: str) -> ErrorHelp:
     return ERROR_HELP.get(code, UNKNOWN_ERROR)
+
+
+# Why a run ended without a reply (agent service stop reasons, product/docs/agent.md).
+STOP_REASONS = {
+    "max_steps": "The agent took too many steps without finishing. Try a more specific request.",
+    "timeout": "The agent ran out of time. Try again, or ask for less at once.",
+    "token_limit": "The agent ran out of room for this request. Try a shorter request.",
+    "cancelled": "The request was stopped before the agent finished.",
+    "rate_limited": "The language model is busy. Wait a minute and send it again.",
+    "model_error": "The language model failed. Send it again in a minute.",
+}
+UNKNOWN_STOP = "The agent stopped without an answer. Send it again."
+
+# The agent service's error codes. Approving and rejecting are decided there,
+# never here: these only say what happened and what to do next.
+AGENT_HELP = {
+    "stale_proposal": ErrorHelp(
+        "This proposal changed since you saw it.",
+        "Review the newest proposal in the chat and approve that one.",
+    ),
+    "proposal_superseded": ErrorHelp(
+        "A newer proposal replaced this one.",
+        "Review the newer proposal in the chat and approve that one.",
+    ),
+    "proposal_rejected": ErrorHelp(
+        "This proposal was rejected.",
+        "Ask the agent for a new proposal if you still want the meeting.",
+    ),
+    "proposal_not_pending": ErrorHelp(
+        "This proposal is no longer waiting for a decision.",
+        "Reload the chat to see what happened to it.",
+    ),
+    "execution_failed": ErrorHelp(
+        "The approved changes could not be made.",
+        "Approve again to retry. Nothing that already exists is created twice.",
+    ),
+    "rate_limited": ErrorHelp(
+        "You sent several messages in a short time.",
+        "Wait, then send your message again.",
+    ),
+    "busy": ErrorHelp(
+        "The agent is busy with other requests.",
+        "Wait, then send your message again.",
+    ),
+    "payload_too_large": ErrorHelp(
+        "That message is too long.",
+        "Shorten it to under 4,000 characters and send it again.",
+    ),
+    "not_found": ErrorHelp(
+        "That conversation or proposal was not found.",
+        "Reload the chat and start again.",
+    ),
+    "unauthorized": ErrorHelp(
+        "You are not signed in.",
+        "Sign in, then send your message again.",
+    ),
+    "invalid_request": ErrorHelp(
+        "The agent could not read that request.",
+        "Reload the page and try again.",
+    ),
+}
+
+
+def stop_reason_text(reason: str) -> str:
+    return STOP_REASONS.get(reason, UNKNOWN_STOP)
+
+
+def agent_help(code: str) -> ErrorHelp:
+    return AGENT_HELP.get(code) or ERROR_HELP.get(code, UNKNOWN_ERROR)

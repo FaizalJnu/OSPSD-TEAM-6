@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Ask the meeting prep agent</h1>
+<p>Ask in your own words, for example "Prepare Friday's sprint review from our open issues".
+The agent reads your issues, calendar and documents, then proposes the exact changes.
+Nothing is created until you approve.</p>
+
+<section id="messages" class="messages" aria-live="polite"></section>
+
+<form id="chat-form" hx-post="/chat/messages" hx-target="#messages" hx-swap="beforeend"
+      hx-indicator="#thinking" hx-disabled-elt="find button">
+  <input type="hidden" id="conversation-id" name="conversation_id" value="">
+  <label>Time zone
+    <select name="time_zone">
+      {% for zone in time_zones %}
+      <option value="{{ zone }}"{% if zone == default_zone %} selected{% endif %}>{{ zone }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Message <textarea name="text" rows="3" maxlength="4000" required></textarea></label>
+  <button type="submit">Send</button>
+</form>
+
+<p id="thinking" class="htmx-indicator" role="status">
+  Working: the agent is reading your issues, calendar and documents. This can take up to a minute.
+</p>
+{% endblock %}

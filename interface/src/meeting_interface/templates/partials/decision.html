@@ -1,0 +1,13 @@
+<article class="proposal" id="proposal-{{ proposal_id }}" data-status="error">
+  <div class="error" role="alert">
+    <h2>{{ help.title }}</h2>
+    <p><strong>What to do:</strong> {{ help.next_step }}</p>
+    {% if error.may_have_applied %}<p>Part of it may have happened. Check the tracker and calendar.</p>{% endif %}
+  </div>
+  {% if error.code == "execution_failed" and proposal_hash %}
+  <form class="decision">
+    <input type="hidden" name="proposal_hash" value="{{ proposal_hash }}">
+    <button hx-post="/proposals/{{ proposal_id }}/approve" hx-target="closest article" hx-swap="outerHTML" hx-indicator="#thinking">Approve again</button>
+  </form>
+  {% endif %}
+</article>

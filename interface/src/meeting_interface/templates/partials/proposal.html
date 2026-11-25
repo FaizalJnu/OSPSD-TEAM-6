@@ -1,0 +1,41 @@
+<article class="proposal" id="proposal-{{ proposal.id }}" data-status="{{ proposal.status }}">
+  <h2>{% if proposal.status == "pending" %}Proposed changes{% elif proposal.status == "executed" %}What happened{% elif proposal.status == "rejected" %}Rejected{% elif proposal.status == "superseded" %}Replaced by a newer proposal{% else %}Approved{% endif %}</h2>
+  {% if proposal.supersedes %}<p class="note">This replaces the earlier proposal.</p>{% endif %}
+
+  {% for action in proposal.actions %}
+  <div class="action">
+    {% if action.kind == "create_review_meeting" %}
+    <p>Create a review meeting: a tracker issue, a calendar event, and the agenda document that links them.</p>
+    <dl>
+      <dt>Title</dt><dd>{{ action.arguments.title }}</dd>
+      <dt>When</dt><dd>{{ meeting_time(action.arguments.start, action.arguments.end) }}</dd>
+      <dt>Agenda</dt>
+      <dd>{% if action.arguments.agenda %}<ol>{% for item in action.arguments.agenda %}<li>{{ item }}</li>{% endfor %}</ol>{% else %}No agenda items.{% endif %}</dd>
+    </dl>
+    {% else %}
+    <dl>{% for key, value in action.arguments.items() %}<dt>{{ key }}</dt><dd>{{ value }}</dd>{% endfor %}</dl>
+    {% endif %}
+    {% if action.operation %}<p class="note">Runs <code>{{ action.operation }}</code></p>{% endif %}
+  </div>
+  {% endfor %}
+
+  {% if proposal.status == "pending" %}
+  <form class="decision">
+    <input type="hidden" name="proposal_hash" value="{{ proposal.proposal_hash }}">
+    <button hx-post="/proposals/{{ proposal.id }}/approve" hx-target="closest article" hx-swap="outerHTML" hx-indicator="#thinking">Approve</button>
+    <button hx-post="/proposals/{{ proposal.id }}/reject" hx-target="closest article" hx-swap="outerHTML">Reject</button>
+  </form>
+  {% endif %}
+
+  {% if proposal.outcomes %}
+  <ul class="outcomes">
+    {% for outcome in proposal.outcomes %}
+    <li data-outcome="{{ outcome.status.value }}">
+      <span class="status">{% if outcome.status.value == "succeeded" %}Done{% elif outcome.status.value == "failed" %}Failed{% else %}Not sure{% endif %}</span>
+      {% if outcome.status.value == "uncertain" %}<span class="detail">It may have happened. Check the tracker and calendar before asking again.</span>{% endif %}
+      {% if outcome.detail.run_id %}<span class="detail">Run {{ outcome.detail.run_id }}</span>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</article>

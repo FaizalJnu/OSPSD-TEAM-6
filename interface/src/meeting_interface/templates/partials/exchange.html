@@ -1,0 +1,22 @@
+{% if problem %}
+<p class="error" role="alert">{{ problem }}</p>
+{% else %}
+<input type="hidden" id="conversation-id" name="conversation_id" value="{{ conversation_id }}" hx-swap-oob="true">
+<div class="message user"><span class="who">You</span><p>{{ text }}</p></div>
+{% if error %}
+<div class="error" role="alert">
+  <h2>{{ help.title }}</h2>
+  <p><strong>What to do:</strong> {{ help.next_step }}</p>
+  {% if error.retry_after %}<p>Try again in about {{ error.retry_after }} seconds.</p>{% endif %}
+</div>
+{% elif reply.text %}
+<div class="message agent"><span class="who">Agent</span><p>{{ reply.text }}</p></div>
+{% else %}
+<div class="error" role="alert">
+  <h2>The agent stopped without an answer.</h2>
+  <p>{{ stop_reason_text(reply.stop_reason) }}</p>
+  {% if reply.retry_after %}<p>Try again in about {{ reply.retry_after }} seconds.</p>{% endif %}
+</div>
+{% endif %}
+{% if reply and reply.proposal %}{% with proposal = reply.proposal %}{% include "partials/proposal.html" %}{% endwith %}{% endif %}
+{% endif %}

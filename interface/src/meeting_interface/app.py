@@ -15,8 +15,11 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from meeting_interface.agent_client import AgentClient, HttpAgentClient
 from meeting_interface.api_client import ApiClient, ApiError, HttpApiClient
+from meeting_interface.chat import add_chat_routes
 from meeting_interface.config import load_settings
+from meeting_interface.fake_agent import FakeAgentClient
 from meeting_interface.fake_api import FakeApiClient
 from meeting_interface.form import DEFAULT_TIME_ZONE, TIME_ZONES, FormProblem, MeetingForm
 from meeting_interface.messages import error_help, status_label, step_label
@@ -34,7 +37,7 @@ SECURITY_HEADERS = {
 }
 
 
-def create_app(api: ApiClient) -> FastAPI:
+def create_app(api: ApiClient, agent: AgentClient) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     templates = Jinja2Templates(directory=HERE / "templates")
@@ -47,6 +50,8 @@ def create_app(api: ApiClient) -> FastAPI:
         response = await call_next(request)
         response.headers.update(SECURITY_HEADERS)
         return response
+
+    add_chat_routes(app, templates, agent)
 
     @app.get("/", response_class=HTMLResponse)
     def start(request: Request) -> HTMLResponse:
@@ -111,7 +116,10 @@ def _steps_after(error: ApiError) -> list[Step]:
 def app_from_env() -> FastAPI:
     settings = load_settings()
     if settings.fake_api:
-        return create_app(FakeApiClient())
+        return create_app(FakeApiClient(), FakeAgentClient())
     return create_app(
-        HttpApiClient.for_url(settings.api_base_url, settings.api_key, settings.api_timeout_seconds)
+        HttpApiClient.for_url(
+            settings.api_base_url, settings.api_key, settings.api_timeout_seconds
+        ),
+        HttpAgentClient.for_url(settings.agent_base_url, settings.api_timeout_seconds),
     )

@@ -1954,3 +1954,29 @@ Found on the way:
   `create_issue` with a retryable 502.
 - Not yet run: against the deployed staging service (`smoke_check.py`, design §4.3),
   and the live trace for design §1.3 with Debasmith.
+
+## Review meetings: security tests
+
+Each requirement from the team plan (Level 4.1) and the tests that cover it, all under
+`product/tests/`, in CI with no network. Every security test also sends a valid request
+as a control, so refusing everything cannot pass.
+
+| Requirement | Tests |
+|---|---|
+| Isolation | `test_user_api.py::test_reads_are_scoped_and_fail_closed_without_connections`, `test_execute_requires_current_approval_and_replays_saved_outcome`, `test_tagged_tracker_recovery_is_scoped_to_the_signed_in_user`; `test_agent_app.py::test_user_b_cannot_read_or_act_on_user_as_conversation_or_proposal`; `test_agent_containment.py::test_another_users_id_in_model_arguments_is_refused` |
+| Missing and invalid credentials | `test_security.py::test_invalid_credentials_are_401_on_both_services` (missing, `Basic`, malformed, never issued, empty Bearer), `test_a_garbage_session_cookie_is_401_on_both_services`; `test_agent_app.py::test_every_endpoint_is_401_without_a_signed_in_user` |
+| Expired credentials | `test_security.py::test_an_expired_session_is_401_on_both_services` (7 h 59 m works, 8 h 0 m 1 s is 401 on both services) |
+| Revoked credentials and replay after sign-out | `test_security.py::test_a_signed_out_session_cannot_be_replayed_anywhere`; `test_user_api.py::test_browser_sign_in_uses_one_time_state_and_revokes_server_side`, `test_resumable_execution_rechecks_session_and_approval` |
+| Sign-in integrity (OAuth state, PKCE, nonce, failed sign-in) | `test_security.py::test_a_failed_sign_in_creates_no_session`, `test_a_used_sign_in_state_cannot_start_a_second_session`; `test_user_api.py::test_browser_sign_in_uses_one_time_state_and_revokes_server_side`, `test_google_authorization_uses_s256_and_rejects_nonce_mismatch` |
+| Persistence across a restart | `test_security.py::test_sessions_survive_a_restart_of_both_services` (and a revoked session stays revoked); `test_agent_app.py::test_a_pending_approval_survives_a_restart_and_is_never_executed_twice` |
+| No secrets in logs or prompts | `test_security.py::test_no_session_token_or_oauth_code_in_logs_or_model_prompts` (service logs, every model message, the run record); `test_agent_app.py::test_a_failed_run_is_explained_by_its_record_and_holds_no_secrets`; `test_agent_loop.py::test_a_step_record_holds_no_secrets` |
+
+Gaps:
+
+* **Provider token refresh and disconnect** are not tested: the product has no
+  provider-connections endpoints yet.
+* **Access logs.** The tests capture the services' own log records. A server's access log
+  (Uvicorn's, by default) writes each request line with its query string, so the OAuth
+  `code` in `/v1/auth/callback?state=...&code=...` would reach it. The code is single
+  use and bound to the PKCE verifier, but the deployment should turn off or filter the
+  access log for that path.

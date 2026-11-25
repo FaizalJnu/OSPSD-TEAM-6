@@ -1907,3 +1907,50 @@ uvicorn.run(build_app(SharedDocumentStorage(service)), host="127.0.0.1", port=po
 * **Proposed rules.** 23 of the 55 tests check rules not agreed yet (marked
   `proposed`: download and metadata routes #8, move #5, route and method errors #4).
   They passed, but they can still change.
+
+## Review meetings: real-provider run (design §3.3)
+
+`product/tests/test_live.py` runs `POST /v1/review-meetings` in-process on the real
+registry entries and checks each provider with the smoke check's own checks
+(`product/scripts/smoke_check.py`, design §4.3), then deletes everything it made.
+
+```bash
+cd product
+# macOS only: uv's Python has no system CA certificates, and Team 4's Trello package
+# uses urllib, so point it at certifi's bundle. Linux images have system certificates.
+export SSL_CERT_FILE="$(uv run python -c 'import certifi; print(certifi.where())')"
+uv run --env-file .env pytest -m provider tests/test_live.py -v
+```
+
+#### Run by Prateek Saxena
+
+- Providers: OCI Object Storage (us-ashburn-1) through `team6-s3`; Trello through
+  `team4-trello` (tag `team-4-issue-tracker-trello-v1.0.0`), one test list; Google
+  Calendar through `team5-google` (tag `team5-calendar-v0.1.0`), a test user on the
+  team's Google Cloud project
+- Date: 2026-11-25
+- Commit: b75a43b
+- Request: `uv run --env-file .env pytest -m provider tests/test_live.py -v`
+- Expected: each run completes (201) with the agenda's exact bytes in OCI, a Trello card
+  whose title is exactly the one sent with its `[<run_id>]` marker (Team 4's T4-3), and
+  an event at the same instants; the same request replays (200, same IDs); after a
+  retryable calendar failure, the same request resumes with the same card and no second
+  one
+- Observed:
+  ```text
+  tests/test_live.py::test_full_run_on_oci_storage PASSED
+  tests/test_live.py::test_full_run_on_all_three_providers PASSED
+  tests/test_live.py::test_resume_after_a_calendar_failure_makes_one_card PASSED
+  3 passed in 8.82s
+  ```
+- Cleanup: the tests delete the event, the card, the agenda and the run record, and fail
+  if anything is left. Afterwards `list_issues` on the test list returned 0 cards.
+
+Found on the way:
+
+- Without `SSL_CERT_FILE` on macOS, every Trello call fails the TLS handshake
+  (`CERTIFICATE_VERIFY_FAILED`). Team 4's package reports that as `PROVIDER_ERROR` with
+  `may_have_applied: true`, although no request was sent, so the run stops at
+  `create_issue` with a retryable 502.
+- Not yet run: against the deployed staging service (`smoke_check.py`, design §4.3),
+  and the live trace for design §1.3 with Debasmith.

@@ -1901,11 +1901,23 @@ uvicorn.run(build_app(SharedDocumentStorage(service)), host="127.0.0.1", port=po
 - Cleanup: afterwards, `GET /files?path=/` on the bucket listed no `/conformance-*`
   folder.
 
+#### Run by Faizal Rahman
+
+- Date: 2026-11-25
+- Commits: Team 6 `dev` at c26b43b with the change for #133 (Create and Replace on
+  `POST` and `PUT /files`); shared suite at a8bd832, the same suite commit as the run
+  above.
+
+**Our service's routes, repeated.** Same commands as Run 1, on the in-memory backend.
+In the shared repository, run `uv sync --all-extras` first: its pytest settings add
+`--cov`, which needs `pytest-cov`.
+- Observed: `55 passed in 0.51s`. Run 1 had 49 failed and 6 passed; Create and
+  Replace (#133) and the health checks (#98) are now on the shared routes.
+
 ### Gaps
 
-* **Our routes are not conformance-checked yet.** Create, Replace, and the health
-  checks are now on the shared routes, so Run 1 can be repeated.
-* **The deployed service has not been run against**, and CI does not run the suite.
+* **Our routes were checked on the in-memory backend only**, not against OCI or the
+  deployed service, and CI does not run the suite.
 * **Proposed rules.** 23 of the 55 tests check rules not agreed yet (marked
   `proposed`: download and metadata routes #8, move #5, route and method errors #4).
   They passed, but they can still change.

@@ -2,13 +2,14 @@
 
 ``Service`` is the shorthand a route uses to ask for the FileService that
 ``main.create_app`` stored on the app. ``PathQuery`` is the shorthand for the
-``?path=`` query parameter that names a file.
+``?path=`` query parameter that names a file, and ``PathForm`` for the ``path`` form
+field that Create and Replace take instead.
 """
 
 from typing import Annotated
 
 from cloud_storage_api import DocumentStorage
-from fastapi import Depends, Query, Request
+from fastapi import Depends, Form, Query, Request
 
 from storage_service.service import MAX_PATH_BYTES, FileService
 
@@ -31,15 +32,22 @@ def get_document_storage(request: Request) -> DocumentStorage:
 
 SharedStorage = Annotated[DocumentStorage, Depends(get_document_storage)]
 
+_PATH_DESCRIPTION = (
+    "The file's path, with or without a leading '/', such as docs/report.pdf "
+    f"(at most {MAX_PATH_BYTES} UTF-8 bytes, counting the leading '/')."
+)
+
 # Shorthand for route signatures: a parameter named ``path`` of this type is read from
 # ``?path=``. The route passes it on as it arrived, and the service checks it.
 PathQuery = Annotated[
     str,
     Query(
         description=(
-            "The file's path, with or without a leading '/', such as docs/report.pdf "
-            f"(at most {MAX_PATH_BYTES} UTF-8 bytes, counting the leading '/'). "
-            "Percent-encode it: in a query string, '+' means a space."
+            f"{_PATH_DESCRIPTION} Percent-encode it: in a query string, '+' means a space."
         )
     ),
 ]
+
+# The same, read from the ``path`` field of a multipart form. A form field is not
+# percent-encoded. FastAPI treats an empty field as missing.
+PathForm = Annotated[str, Form(description=_PATH_DESCRIPTION)]

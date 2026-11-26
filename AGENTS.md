@@ -19,7 +19,7 @@ src/storage_service/
   storage/memory.py  In-memory backend for tests and local experiments
 tests/
   conftest.py              Shared fixtures: in-memory client, FakeStorage client, stubbed S3, real-provider client
-  test_upload.py           POST and PUT /files/{key} (create and replace)
+  test_upload.py           POST and PUT /files (create and replace), and the deprecated /files/{key}
   test_download.py         GET /files/download?path=
   test_metadata.py         GET /files/metadata?path=
   test_bucket_errors.py    Missing-bucket errors across metadata and existence checks

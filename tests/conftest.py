@@ -52,7 +52,13 @@ def fake_client(fake: FakeStorage) -> TestClient:
     return TestClient(create_app(FileService(fake, max_upload_bytes=MAX_UPLOAD_BYTES)))
 
 
-def send_file(client: TestClient, method: str, key: str, data: bytes):
+def send_file(client: TestClient, method: str, path: str, data: bytes):
+    """Create (``POST``) or Replace (``PUT``) the file at ``path`` through ``/files``."""
+    return client.request(method, "/files", data={"path": path}, files={"file": ("upload", data)})
+
+
+def send_file_by_key(client: TestClient, method: str, key: str, data: bytes):
+    """The same through the deprecated ``/files/{key}`` routes."""
     return client.request(method, f"/files/{key}", files={"file": ("upload", data)})
 
 

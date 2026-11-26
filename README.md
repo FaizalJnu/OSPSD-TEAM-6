@@ -95,15 +95,15 @@ B=http://127.0.0.1:8000
 printf 'not really a cat' > cat.jpg                         # sample files
 printf 'another cat' > other.jpg
 
-curl -F "file=@cat.jpg" $B/files/photos/cat.jpg             # create  -> 201
-curl -F "file=@cat.jpg" $B/files/photos/cat.jpg             # again   -> 409
-curl "$B/files/metadata?path=photos/cat.jpg"                             # info    -> 200
-curl -o back.jpg "$B/files/download?path=photos/cat.jpg"   # download
+curl -F "path=photos/cat.jpg" -F "file=@cat.jpg" $B/files            # create  -> 201
+curl -F "path=photos/cat.jpg" -F "file=@cat.jpg" $B/files            # again   -> 409
+curl "$B/files/metadata?path=photos/cat.jpg"                         # info    -> 200
+curl -o back.jpg "$B/files/download?path=photos/cat.jpg"             # download
 cmp cat.jpg back.jpg && echo "identical"
-curl "$B/files?path=/photos"                               # list    -> 200
-curl -X PUT -F "file=@other.jpg" $B/files/photos/cat.jpg    # replace -> 200
-curl -i -X DELETE "$B/files?path=photos/cat.jpg"            # delete  -> 204
-rm cat.jpg other.jpg back.jpg                               # clean up
+curl "$B/files?path=/photos"                                         # list    -> 200
+curl -X PUT -F "path=photos/cat.jpg" -F "file=@other.jpg" $B/files   # replace -> 200
+curl -i -X DELETE "$B/files?path=photos/cat.jpg"                     # delete  -> 204
+rm cat.jpg other.jpg back.jpg                                        # clean up
 ```
 
 The same steps in Windows `cmd.exe`:
@@ -113,15 +113,15 @@ set B=http://127.0.0.1:8000
 echo not really a cat> cat.jpg
 echo another cat> other.jpg
 
-curl.exe -F "file=@cat.jpg" %B%/files/photos/cat.jpg            & rem create: 201
-curl.exe -F "file=@cat.jpg" %B%/files/photos/cat.jpg            & rem again: 409
-curl.exe "%B%/files/metadata?path=photos/cat.jpg"                            & rem info: 200
-curl.exe -o back.jpg "%B%/files/download?path=photos/cat.jpg"  & rem download
-fc /b cat.jpg back.jpg                                          & rem "no differences"
-curl.exe "%B%/files?path=/photos"                               & rem list
-curl.exe -X PUT -F "file=@other.jpg" %B%/files/photos/cat.jpg   & rem replace: 200
-curl.exe -i -X DELETE "%B%/files?path=photos/cat.jpg"           & rem delete: 204
-del cat.jpg other.jpg back.jpg                                  & rem clean up
+curl.exe -F "path=photos/cat.jpg" -F "file=@cat.jpg" %B%/files            & rem create: 201
+curl.exe -F "path=photos/cat.jpg" -F "file=@cat.jpg" %B%/files            & rem again: 409
+curl.exe "%B%/files/metadata?path=photos/cat.jpg"                         & rem info: 200
+curl.exe -o back.jpg "%B%/files/download?path=photos/cat.jpg"             & rem download
+fc /b cat.jpg back.jpg                                                    & rem "no differences"
+curl.exe "%B%/files?path=/photos"                                         & rem list
+curl.exe -X PUT -F "path=photos/cat.jpg" -F "file=@other.jpg" %B%/files   & rem replace: 200
+curl.exe -i -X DELETE "%B%/files?path=photos/cat.jpg"                     & rem delete: 204
+del cat.jpg other.jpg back.jpg                                            & rem clean up
 ```
 
 Add `-i` to any command to show the status code and response headers.
@@ -130,15 +130,16 @@ Add `-i` to any command to show the status code and response headers.
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/files/{key}` | Create a file (form field `file`) |
-| `PUT` | `/files/{key}` | Replace an existing file |
+| `POST` | `/files` | Create a file (form fields `path` and `file`) |
+| `PUT` | `/files` | Replace an existing file (same form fields) |
 | `GET` | `/files/download?path=` | Download a file (streamed) |
 | `DELETE` | `/files?path=` | Delete a file, or a folder and everything under it |
 | `PATCH` | `/files?path=` | Move a file (JSON body `{"new_path": ...}`) |
 | `GET` | `/files/metadata?path=` | Get file info as JSON |
-| `GET` | `/files` | List files: `prefix`, `limit` (1 to 1000), `cursor` |
+| `GET` | `/files?path=` | List a folder's direct children |
 | `GET` | `/health` | Liveness: `{"status": "ok"}` with no provider call |
 | `GET` | `/health/provider` | Provider check: one HeadBucket on the configured bucket |
+| `POST`, `PUT` | `/files/{key}` | Deprecated Create and Replace by key: use `/files` |
 
 The key rules, response fields, statuses, and errors are in
 [docs/API.md](docs/API.md).

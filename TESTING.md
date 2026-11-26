@@ -45,7 +45,7 @@ delete their files afterwards.
 | File | What it covers |
 |---|---|
 | [tests/conftest.py](tests/conftest.py) | Shared fixtures (below) |
-| [tests/test_upload.py](tests/test_upload.py) | Create and Replace: `POST` and `PUT /files/{key}` |
+| [tests/test_upload.py](tests/test_upload.py) | Create and Replace: `POST` and `PUT /files`, and the deprecated `/files/{key}` routes |
 | [tests/test_download.py](tests/test_download.py) | Download: `GET /files/download?path=` |
 | [tests/test_metadata.py](tests/test_metadata.py) | Metadata: `GET /metadata/{key}` |
 | [tests/test_bucket_errors.py](tests/test_bucket_errors.py) | FIX-2: missing/denied buckets, probe failures, and HTTP checks before writes |
@@ -132,8 +132,10 @@ From [tests/conftest.py](tests/conftest.py):
 * **`fake` and `fake_client`:** a fresh [`FakeStorage`](#controlled-storage), and a
   `TestClient` for an app over it with the same upload limit as `client`. Configure
   failures on `fake` and read `fake.calls` to check which storage calls a request made.
-* **`send_file(client, method, key, data)`:** a helper, not a fixture. Sends `data` to
-  `/files/{key}` as the `file` form field, with `method` `"POST"` or `"PUT"`.
+* **`send_file(client, method, path, data)`:** a helper, not a fixture. Sends `path`
+  and `data` to `/files` as the `path` and `file` form fields, with `method` `"POST"`
+  (Create) or `"PUT"` (Replace). `send_file_by_key(client, method, key, data)` does the
+  same through the deprecated `/files/{key}` routes.
 * **`stubbed_s3`:** a `StubbedS3(storage, stubber)` pair. `storage` is a real
   `S3Storage` with dummy credentials and bucket `test-bucket`. `stubber` is botocore's
   `Stubber`, wrapped around that storage's boto3 client. Queue each expected provider
@@ -1899,11 +1901,23 @@ uvicorn.run(build_app(SharedDocumentStorage(service)), host="127.0.0.1", port=po
 - Cleanup: afterwards, `GET /files?path=/` on the bucket listed no `/conformance-*`
   folder.
 
+#### Run by Faizal Rahman
+
+- Date: 2026-11-25
+- Commits: Team 6 `dev` at c26b43b with the change for #133 (Create and Replace on
+  `POST` and `PUT /files`); shared suite at a8bd832, the same suite commit as the run
+  above.
+
+**Our service's routes, repeated.** Same commands as Run 1, on the in-memory backend.
+In the shared repository, run `uv sync --all-extras` first: its pytest settings add
+`--cov`, which needs `pytest-cov`.
+- Observed: `55 passed in 0.51s`. Run 1 had 49 failed and 6 passed; Create and
+  Replace (#133) and the health checks (#98) are now on the shared routes.
+
 ### Gaps
 
-* **Our routes are not conformance-checked yet.** Run 1 has to be repeated after
-  Create, Replace, and the health checks move to the shared routes.
-* **The deployed service has not been run against**, and CI does not run the suite.
+* **Our routes were checked on the in-memory backend only**, not against OCI or the
+  deployed service, and CI does not run the suite.
 * **Proposed rules.** 23 of the 55 tests check rules not agreed yet (marked
   `proposed`: download and metadata routes #8, move #5, route and method errors #4).
   They passed, but they can still change.

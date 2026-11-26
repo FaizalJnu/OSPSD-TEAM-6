@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from storage_service.errors import ProviderError, ProviderUnavailable
 from storage_service.main import create_app
 from storage_service.service import FileService
-from tests.conftest import MAX_UPLOAD_BYTES, send_file
+from tests.conftest import MAX_UPLOAD_BYTES, send_file, send_file_by_key
 from tests.fakes import FakeStorage
 
 
@@ -98,6 +98,9 @@ def test_the_app_serves_the_seven_operations_and_two_health_checks_and_nothing_e
     routes = {(method.upper(), path) for path, methods in paths.items() for method in methods}
     assert routes == {
         ("GET", "/files"),
+        ("POST", "/files"),
+        ("PUT", "/files"),
+        # The deprecated Create and Replace routes, kept for existing callers.
         ("POST", "/files/{key}"),
         ("PUT", "/files/{key}"),
         ("GET", "/files/download"),
@@ -113,6 +116,7 @@ def test_the_app_serves_the_seven_operations_and_two_health_checks_and_nothing_e
     key = "a/b/notes.txt"
     assert send_file(client, "POST", key, b"data").status_code == 201
     assert send_file(client, "PUT", key, b"more").status_code == 200
-    assert client.get("/files/download", params={"path": key}).content == b"more"
+    assert send_file_by_key(client, "PUT", key, b"again").status_code == 200
+    assert client.get("/files/download", params={"path": key}).content == b"again"
     assert client.get("/files/metadata", params={"path": key}).json()["path"] == "/" + key
     assert client.delete("/files", params={"path": key}).status_code == 204

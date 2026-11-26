@@ -19,8 +19,8 @@ B=http://127.0.0.1:8000
 
 | Operation | Method and path | Owner |
 |---|---|---|
-| [Create](#create-and-replace) | `POST /files/{key}` | Debasmith Mandal |
-| [Replace](#create-and-replace) | `PUT /files/{key}` | Debasmith Mandal |
+| [Create](#create-and-replace) | `POST /files` | Debasmith Mandal |
+| [Replace](#create-and-replace) | `PUT /files` | Debasmith Mandal |
 | [Download](#download) | `GET /files/download?path=` | Vikram Markali |
 | [Metadata](#metadata) | `GET /files/metadata?path=` | Darsh Shani |
 | [Delete](#delete) | `DELETE /files?path=` | Faizal Rahman |
@@ -47,17 +47,18 @@ A key must:
 An operation given a key that breaks a rule returns 400 `invalid_request` without
 contacting the provider.
 
-In a Create or Replace URL, the key is everything after `/files/`, slashes included.
-Percent-encode characters that cannot appear in a URL path. For example,
-`with spaces.txt` is sent as `/files/with%20spaces.txt`. The rules apply to the
-decoded key.
+Only the deprecated `POST` and `PUT /files/{key}` routes still take a key, in the URL
+(see [Create and Replace](#create-and-replace)). There the key is everything after
+`/files/`, slashes included. Percent-encode characters that cannot appear in a URL
+path. For example, `with spaces.txt` is sent as `/files/with%20spaces.txt`. The rules
+apply to the decoded key.
 
 ## Paths
 
-Download and Metadata name their file, Delete its file or folder, and Move its file,
-with a **path** in the `path` query parameter. Move's destination is a path too, in its
-JSON body. The other operations still take a [key](#keys) in the URL until they move to
-the shared routes.
+Every operation names its file with a **path**. Create and Replace send it in the
+`path` form field. Download and Metadata name their file, Delete its file or folder,
+and Move its file in the `path` query parameter. Move's destination is a path too, in
+its JSON body. Only the deprecated `/files/{key}` routes take a [key](#keys) instead.
 
 A path can be sent with or without its leading `/`: `docs/report.pdf` and
 `/docs/report.pdf` name the same file. Its canonical form always starts with `/`, and
@@ -78,11 +79,13 @@ An operation given a path that breaks a rule, or no `path` at all, returns 400
 
 Percent-encode the path in a query string. A `+` there means a space, so a literal `+`
 must be sent as `%2B`. `curl -G --data-urlencode "path=$P"` does the encoding for you.
+A form field is sent as it is, without percent-encoding.
 
 ## File info
 
-Create and Replace still return the legacy file info object below. Metadata, Move, and
-List return the shared model described in [Metadata](#metadata) and [List](#list).
+Only the deprecated `/files/{key}` routes of Create and Replace return the legacy file
+info object below. Create, Replace, Metadata, Move, and List return the shared model
+described in [Metadata](#metadata) and [List](#list).
 
 | Field | JSON type | Meaning |
 |---|---|---|
@@ -124,13 +127,13 @@ service:
 |---|---|---|---|
 | `invalid_request` | 400 | A key breaks a [key rule](#keys), a path breaks a [path rule](#paths), or Create or Replace is missing the `file` form field or sends a `multipart/form-data` body that cannot be read (for example, no boundary). | No. Change the input. |
 | `permission_denied` | 403 | The provider refused the service's credentials or permissions, for example a wrong secret key or a bucket policy that does not allow the operation. This is the service's configuration, not the caller's. | No, not until whoever runs the service fixes the credentials or permissions. |
-| `not_found` | 404 | No file exists under the key (Download, Metadata, Replace), no file or folder exists at the path (Delete), or nothing is stored under the folder (List). | Not until a file is created there. |
-| `conflict` | 409 | Create was called for a key that already has a file. | No. Use Replace, or Delete the file first. |
+| `not_found` | 404 | No file exists at the path (Download, Metadata, Replace), no file or folder exists at the path (Delete), or nothing is stored under the folder (List). | Not until a file is created there. |
+| `conflict` | 409 | Create was called for a path that already has a file. | No. Use Replace, or Delete the file first. |
 | `file_too_large` | 413 | The upload to Create or Replace is larger than `MAX_UPLOAD_BYTES` (default 1 GiB). | No, not with the same file. |
 | `provider_error` | 502 | The provider refused the request for another reason: a missing bucket, an unsupported request, and so on. Usually a configuration problem, but it can also be a provider-side failure, such as throttling or an internal error, that lasted through the client's own retries. | Usually not: fix the configuration first. If the configuration is correct, retrying later sometimes succeeds. |
 | `provider_unavailable` | 503 | The provider could not be reached: network failure, timeout, and so on. | Retrying later may help. |
 | `route_not_found` | 404 | The path matches no route, for example `GET /nothing`. Unlike `not_found`, it means the URL is wrong. | No. Fix the URL. |
-| `method_not_allowed` | 405 | The path exists, but not for this method, for example `POST /files`. The `Allow` header lists every method the path accepts, such as `POST, PUT` for `/files/{key}`. | No. Use an allowed method. |
+| `method_not_allowed` | 405 | The path exists, but not for this method, for example `POST /health`. The `Allow` header lists every method the path accepts, such as `POST, PUT` for `/files/{key}`. | No. Use an allowed method. |
 | `internal_error` | 500 | A bug in the service. `error.message` is always `the service failed unexpectedly`, whatever went wrong. | Not until it is fixed. After a failed Create, Replace, or Delete, check with Metadata first: the write may have happened. |
 
 `route_not_found` and `method_not_allowed` happen before any operation runs, and
@@ -236,56 +239,69 @@ above instead of repeating them.
 
 ## Create and Replace
 
-`POST /files/{key}` and `PUT /files/{key}`. Owner: **Debasmith Mandal**.
+`POST /files` and `PUT /files`. Owner: **Debasmith Mandal**.
+
+**Changed:** Create and Replace moved to the shared contract's routes. They used to take
+the key in the URL, as `POST /files/{key}` and `PUT /files/{key}`, and return the legacy
+[file info](#file-info). Those routes still work, with the same rules, and are marked
+deprecated in `/docs` and `/openapi.json`. To move off them, send the key as the `path`
+form field to `/files`, and read `path`, `name`, and `modified_at` from the response
+instead of `key` and `last_modified`. Stored files keep their names, so no data moves.
 
 ### Meaning
 
-Create stores a new file under a key that is not taken yet. Replace overwrites the
+Create stores a new file at a path that is not taken yet. Replace overwrites the
 contents of a file that already exists. Both change stored files.
 
 ### Request
 
-* `POST /files/{key}` (Create) or `PUT /files/{key}` (Replace). The key follows the
-  [key rules](#keys).
-* Body: `multipart/form-data` with one required form field named `file`, holding the
-  contents. Any size from 0 bytes up to `MAX_UPLOAD_BYTES` (default 1 GiB). Empty files
-  are allowed.
+* `POST /files` (Create) or `PUT /files` (Replace).
+* Body: `multipart/form-data` with two required form fields:
+  * `path`: the file's [path](#paths), sent as it is, without percent-encoding. An empty
+    field counts as missing.
+  * `file`: the contents. Any size from 0 bytes up to `MAX_UPLOAD_BYTES` (default
+    1 GiB). Empty files are allowed.
 * The filename and content type the client sends with the file are ignored.
 
 ### Success
 
 * Create returns `201 Created`. Replace returns `200 OK`.
-* The body is the stored file's [file info](#file-info): `key` is the key from the URL,
-  `size` is the number of bytes received, `content_type` is picked from the key's
-  extension, `etag` is the provider's fingerprint of the new contents, and
-  `last_modified` is when the provider stored them.
+* The body is the stored file's shared file info, the model [Metadata](#metadata)
+  returns: `path` is the canonical path, with its leading `/`, `name` is its last
+  segment, `size` is the number of bytes received, `content_type` is picked from the
+  path's extension, `etag` is the provider's fingerprint of the new contents, and
+  `modified_at` is when the provider stored them. `id` and `type` are `null`.
 * A Metadata request right afterwards returns the same file info.
 
 ### Side effects
 
-* Create: a file now exists under the key.
-* Replace: the old contents are gone. `size`, `etag`, and `last_modified` describe the
+* Create: a file now exists at the path.
+* Replace: the old contents are gone. `size`, `etag`, and `modified_at` describe the
   new contents.
-* Local validation failures change nothing. A provider failure can leave an uncertain write even when access is denied. After a 400 or 413, the key is
-  as it was before. After a 409, the existing file is unchanged. After a failed Replace,
-  the old contents are still there.
+* Local validation failures change nothing. A provider failure can leave an uncertain
+  write even when access is denied. After a 400 or 413, the path is as it was before.
+  After a 409, the existing file is unchanged. After a failed Replace, the old contents
+  are still there.
 
 ### Errors
 
 | Status | `error` | When |
 |---|---|---|
-| 400 | `invalid_request` | The key breaks a [key rule](#keys), the `file` form field is missing, or the `multipart/form-data` body cannot be read: no boundary, more than 1000 files, or a text field over 1 MB. |
+| 400 | `invalid_request` | The `path` form field is missing, empty, or breaks a [path rule](#paths), the `file` form field is missing, or the `multipart/form-data` body cannot be read: no boundary, more than 1000 files, or a text field over 1 MB. |
 | 403 | `permission_denied` | The provider denied the service's credentials or permissions. |
-| 404 | `not_found` | Replace only: no file exists under the key. |
-| 409 | `conflict` | Create only: a file already exists under the key. |
+| 404 | `not_found` | Replace only: no file exists at the path. |
+| 409 | `conflict` | Create only: a file already exists at the path. |
 | 413 | `file_too_large` | The upload is larger than `MAX_UPLOAD_BYTES`. |
 | 502 | `provider_error` | The provider refused the write, usually because of configuration. |
 | 503 | `provider_unavailable` | The provider could not be reached. |
 
+The deprecated `/files/{key}` routes fail the same way, except that a 400 comes from a
+[key rule](#keys) instead of a path rule.
+
 ### Retry
 
 * After a success, repeating Create returns 409. Repeating Replace with the same
-  contents is safe: the contents and `etag` stay the same, and `last_modified` moves
+  contents is safe: the contents and `etag` stay the same, and `modified_at` moves
   to the time of the latest write (OCI stores it to the second).
 * After a 400, 404, 409, or 413, change the request first. Repeating it unchanged fails
   the same way.
@@ -294,12 +310,12 @@ contents of a file that already exists. Both change stored files.
 
 ### Assumptions
 
-* The server picks `content_type` from the key's extension (`application/octet-stream`
+* The server picks `content_type` from the path's extension (`application/octet-stream`
   when the extension is unknown) and ignores what the client claims.
 * The size limit is checked after the whole upload has arrived in a temp file on the
   server, so an oversized upload uses bandwidth and temp space before it is rejected.
-* Create and Replace check whether the key exists and then write, in two separate
-  provider calls. Two clients racing on the same key can both pass the check, and the
+* Create and Replace check whether the file exists and then write, in two separate
+  provider calls. Two clients racing on the same path can both pass the check, and the
   last write wins.
 * With S3-compatible providers that return generic HEAD 404s, every successful Create
   makes an extra `head_bucket` call: its existence check must miss. A small upload
@@ -313,22 +329,22 @@ contents of a file that already exists. Both change stored files.
 
 ### Example
 
-Use a key under a prefix of your own, such as `demo/<your-name>/`, so cleanup is easy.
+Use a path under a folder of your own, such as `demo/<your-name>/`, so cleanup is easy.
 
 ```bash
 B=http://127.0.0.1:8000
 printf 'hello' > hello.txt
-curl -s -F "file=@hello.txt" $B/files/demo/me/hello.txt           # 201
-curl -s -F "file=@hello.txt" $B/files/demo/me/hello.txt           # 409 conflict
+curl -s -F "path=demo/me/hello.txt" -F "file=@hello.txt" $B/files           # 201
+curl -s -F "path=demo/me/hello.txt" -F "file=@hello.txt" $B/files           # 409 conflict
 printf 'hello again' > hello2.txt
-curl -s -X PUT -F "file=@hello2.txt" $B/files/demo/me/hello.txt   # 200, size 11, new etag
-curl -s -X DELETE "$B/files?path=demo/me/hello.txt"               # clean up: 204
+curl -s -X PUT -F "path=demo/me/hello.txt" -F "file=@hello2.txt" $B/files   # 200, size 11, new etag
+curl -s -X DELETE "$B/files?path=demo/me/hello.txt"                         # clean up: 204
 ```
 
-The Create response looks like this (`etag` and `last_modified` will differ):
+The Create response looks like this (`etag` and `modified_at` will differ):
 
 ```json
-{"key": "demo/me/hello.txt", "size": 5, "content_type": "text/plain", "etag": "5d41402abc4b2a76b9719d911017c592", "last_modified": "2026-10-14T18:00:00Z"}
+{"id": null, "name": "hello.txt", "path": "/demo/me/hello.txt", "size": 5, "modified_at": "2026-10-14T18:00:00Z", "etag": "5d41402abc4b2a76b9719d911017c592", "type": null, "content_type": "text/plain"}
 ```
 
 ## Download
@@ -338,8 +354,8 @@ The Create response looks like this (`etag` and `last_modified` will differ):
 **Changed:** `GET /files/{key}` no longer exists. It was replaced by
 `GET /files/download?path=`, the route the shared contract uses, so send the key as
 `?path=` instead. A `GET` on the old URL now returns 405 `method_not_allowed`, because
-`/files/{key}` still accepts Create and Replace. Stored files keep their names, so no
-data moves.
+the deprecated `/files/{key}` routes still accept Create and Replace. Stored files keep
+their names, so no data moves.
 
 ### Meaning
 

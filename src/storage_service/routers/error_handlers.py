@@ -99,8 +99,8 @@ def http_error_handler(request: Request, exc: Exception) -> JSONResponse:
     """Give the errors Starlette raises itself our format.
 
     * 400: the request body cannot be read, for example a multipart body without a
-      boundary. The only body this service reads is the ``file`` form field of Create
-      and Replace, so this is ``InvalidInput`` for ``file``.
+      boundary. The only multipart body this service reads is the upload form of
+      Create and Replace, so this is ``InvalidInput`` for ``file``.
     * 404: the path matches no route. ``RouteNotFound`` keeps a wrong URL apart from
       a missing file (``FileNotFound``).
     * 405: the path exists, but not for this method.

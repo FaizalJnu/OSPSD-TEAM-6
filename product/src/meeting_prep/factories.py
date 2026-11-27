@@ -57,13 +57,27 @@ def _team6_s3(env: Mapping[str, str]) -> DocumentStorage:
 def _team4_trello(env: Mapping[str, str]) -> IssueProvider:
     """Team 4's Trello provider. Settings: TRELLO_API_KEY, TRELLO_TOKEN, TRELLO_LIST_ID.
 
-    The provider takes no arguments and reads these from the process environment
-    on every call (tag team-4-issue-tracker-trello-v1.0.0). Checking them here
-    stops startup, instead of failing the first request.
+    The fixed workflow's single test account. Passing the settings in, rather than
+    letting the provider read the process environment on every call, means the
+    account cannot change under a running service. Checking them here stops
+    startup, instead of failing the first request.
     """
-    for name in ("TRELLO_API_KEY", "TRELLO_TOKEN", "TRELLO_LIST_ID"):
-        require(env, name)
-    return TrelloIssueProvider()
+    return build_user_tracker(
+        require(env, "TRELLO_API_KEY"),
+        require(env, "TRELLO_TOKEN"),
+        require(env, "TRELLO_LIST_ID"),
+    )
+
+
+def build_user_tracker(api_key: str, token: str, list_id: str) -> IssueProvider:
+    """Team 4's Trello provider for one account and one list.
+
+    ``api_key`` identifies our Trello app; ``token`` is the account's own
+    authorization. Since team-4-issue-tracker-trello-v1.1.0 the provider takes them
+    as arguments, so each signed-in user gets a provider built from their own
+    connection, and nothing falls back to the environment's test account.
+    """
+    return TrelloIssueProvider(api_key=api_key, token=token, list_id=list_id)
 
 
 def _team5_google(env: Mapping[str, str]) -> CalendarService:
